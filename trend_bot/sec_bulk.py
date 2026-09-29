@@ -27,6 +27,10 @@ from trend_bot import insiders
 from trend_bot.db import get_meta, set_meta
 
 BULK_URL = "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/{year}q{q}_form345.zip"
+# The page that lists every published quarter. Its links are the source of truth,
+# since the SEC has changed file names/locations before.
+BULK_INDEX_URL = "https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets"
+BULK_LINK = re.compile(r"""href=["']([^"']*?(\d{4})[_-]?q([1-4])[^"'/]*\.zip)["']""", re.I)
 DAILY_INDEX_URL = "https://www.sec.gov/Archives/edgar/daily-index/{year}/QTR{q}/form.{ymd}.idx"
 FILING_URL = "https://www.sec.gov/Archives/{path}"
 
@@ -119,12 +123,29 @@ def _insert(con: sqlite3.Connection, rows: list[tuple]) -> None:
     con.executemany("INSERT OR REPLACE INTO insider_trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
 
+def bulk_links(html: str) -> dict[tuple[int, int], str]:
+    """{(year, quarter): absolute zip URL} from the SEC's data set listing page."""
+    out = {}
+    for href, year, q in BULK_LINK.findall(html):
+        if href.startswith("//"):
+            href = "https:" + href
+        elif href.startswith("/"):
+            href = "https://www.sec.gov" + href
+        out.setdefault((int(year), int(q)), href)
+    return out
+
+
 def load_quarters(con: sqlite3.Connection, since_year: int = 2006, today: dt.date | None = None,
                   fetch: Callable[[str], bytes] | None = None, log: Log = print) -> int:
     """Load every published quarter not loaded yet. Returns the number of quarters added."""
     fetch = fetch or insiders._get
     today = today or dt.date.today()
     done = set(json.loads(get_meta(con, "insider_quarters", "[]")))
+    try:
+        links = bulk_links(fetch(BULK_INDEX_URL).decode("utf-8", "replace"))
+    except Exception as e:  # fall back to the usual file name pattern
+        log(f"[insiders] couldn't read the SEC data set page ({e}); guessing file names")
+        links = {}
     mapping = _cik_to_ticker(con)
     added = 0
     year, q = since_year, 1
@@ -132,7 +153,7 @@ def load_quarters(con: sqlite3.Connection, since_year: int = 2006, today: dt.dat
         key = f"{year}q{q}"
         if key not in done:
             try:
-                data = fetch(BULK_URL.format(year=year, q=q))
+                data = fetch(links.get((year, q)) or BULK_URL.format(year=year, q=q))
             except requests.HTTPError as e:
                 if e.response is None or e.response.status_code != 404:
                     raise

@@ -255,3 +255,29 @@ def test_missing_old_quarter_is_skipped(con):
     n = sec_bulk.load_quarters(con, since_year=2025, today=dt.date(2026, 10, 20), fetch=fetch, log=logs.append)
     assert n == 5  # 2025 q1, q3, q4, 2026 q1, q2 - q2 2025 skipped, 2026q3 not out yet
     assert any("2025q2 not available" in m for m in logs) and any("2026q3 not published" in m for m in logs)
+
+
+def test_bulk_links_from_listing_page(con):
+    html = """<table>
+      <a href="/files/structureddata/data/insider-transactions-data-sets/2026q1_form345.zip">2026 Q1</a>
+      <a href='https://www.sec.gov/files/new-place/2026-q2-form345.zip'>2026 Q2</a>
+      <a href="/about.html">About</a></table>"""
+    links = sec_bulk.bulk_links(html)
+    assert links[(2026, 1)].startswith("https://www.sec.gov/files/structureddata/")
+    assert links[(2026, 2)] == "https://www.sec.gov/files/new-place/2026-q2-form345.zip"
+
+    fetched = []
+
+    def fetch(url):
+        fetched.append(url)
+        if url == sec_bulk.BULK_INDEX_URL:
+            return html.encode()
+        if url.endswith(".zip") and ("2026q1" in url or "2026-q2" in url):
+            return bulk_zip([("z-" + str(len(fetched)), 1, "A", "P", "2026-02-10")])
+        import requests
+        err = requests.HTTPError("404")
+        err.response = type("R", (), {"status_code": 404})()
+        raise err
+
+    n = sec_bulk.load_quarters(con, since_year=2026, today=dt.date(2026, 9, 29), fetch=fetch, log=lambda *_: None)
+    assert n == 2 and "https://www.sec.gov/files/new-place/2026-q2-form345.zip" in fetched
