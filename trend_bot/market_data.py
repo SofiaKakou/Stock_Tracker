@@ -23,8 +23,9 @@ Downloader = Callable[..., dict[str, pd.DataFrame]]
 # Suffixes the SEC list uses for things that aren't common shares.
 NON_STOCK_SUFFIXES = ("WT", "WS", "W", "U", "UN", "R", "RT", "RI", "RW")
 # Nasdaq 5th-letter codes for non-common securities: convertible bonds (G/H/I), preferreds
-# (M/N/O/P), rights (R), with-warrants (T), units (U), warrants (W), and misc (L/Z).
-NASDAQ_NON_STOCK = set("GHILMNOPRTUWZ")
+# (M/N/O/P), rights (R), with-warrants (T), units (U), warrants (W), and misc (Z).
+# Not L: real share classes use it too (GOOGL).
+NASDAQ_NON_STOCK = set("GHIMNOPRTUWZ")
 
 
 def is_common_stock(ticker: str) -> bool:
