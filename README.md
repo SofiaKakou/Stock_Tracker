@@ -142,7 +142,7 @@ python -m trend_bot study trend               # 50/200 golden crosses across the
 python -m trend_bot study both --since 2015-01-01
 ```
 
-For every past event, the study buys the day after the signal became public. It reports the average and median return 1, 3, 6 and 12 months later, how often the trade made money, and how it did against SPY over the same days. Insider clusters are also split by whether the price trend was up or down at the time, which tests the "trend + insiders" combination directly.
+For every past event, the study buys the day after the signal became public. It reports the average and median return 1, 3, 6 and 12 months later, how often the trade made money, and how it did against a benchmark over the same days (`--benchmark`, default SPY; use `IWM` for small companies, which is where most insider buying happens). Insider clusters are also split by whether the price trend was up or down at the time, which tests the "trend + insiders" combination directly.
 
 Two caveats:
 - **Survivorship bias:** Yahoo only has companies that still exist today, and delisted companies are missing. Results come out somewhat better than reality.

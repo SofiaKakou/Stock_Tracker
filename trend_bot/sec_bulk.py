@@ -226,16 +226,20 @@ def load_recent_days(con: sqlite3.Connection, max_days: int = 30, today: dt.date
     fetch = fetch or insiders._get
     today = today or dt.date.today()
     log("[insiders] reading recent Form 4 filings one by one (about 1,500 a day, ~4 minutes per day)")
-    # Continue after whatever is already covered (by the daily feed or a bulk quarter),
-    # but never reach back further than max_days.
-    covered = [d for d in (get_meta(con, "insider_daily_through"), get_meta(con, "insider_bulk_through")) if d]
+    # Every day in the window that no bulk quarter covers and that hasn't been read yet.
+    # (Days are tracked one by one, so a gap left by an earlier short run gets filled.)
     start = today - dt.timedelta(days=max_days)
-    if covered:
-        start = max(start, dt.date.fromisoformat(max(covered)) + dt.timedelta(days=1))
+    bulk_through = get_meta(con, "insider_bulk_through")
+    if bulk_through:
+        start = max(start, dt.date.fromisoformat(bulk_through) + dt.timedelta(days=1))
+    done = set(json.loads(get_meta(con, "insider_days_done", "[]")))
     mapping = _cik_to_ticker(con)
     total = 0
     day = start
     while day < today:  # today's index isn't complete until the evening
+        if day.isoformat() in done:
+            day += dt.timedelta(days=1)
+            continue
         if day.weekday() < 5:
             year, q = _quarter(day)
             try:
@@ -257,7 +261,9 @@ def load_recent_days(con: sqlite3.Connection, max_days: int = 30, today: dt.date
                     continue
                 _insert(con, rows)
                 total += 1
-        set_meta(con, "insider_daily_through", day.isoformat())
+        done.add(day.isoformat())
+        keep_from = (today - dt.timedelta(days=400)).isoformat()
+        set_meta(con, "insider_days_done", json.dumps(sorted(d for d in done if d >= keep_from)))
         con.commit()
         day += dt.timedelta(days=1)
     return total

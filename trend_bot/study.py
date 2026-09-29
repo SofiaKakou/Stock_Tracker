@@ -107,5 +107,5 @@ def summarize(events: pd.DataFrame, horizons: dict[str, int] = HORIZONS, min_pri
     for name in horizons:
         r, x = ev[name].dropna(), ev[f"{name}_excess"].dropna()
         rows.append({"horizon": name, "events": len(r), "avg_return": r.mean(), "median_return": r.median(),
-                     "win_rate": (r > 0).mean(), "avg_vs_spy": x.mean(), "beat_spy_rate": (x > 0).mean()})
+                     "win_rate": (r > 0).mean(), "avg_vs_bench": x.mean(), "beat_bench_rate": (x > 0).mean()})
     return pd.DataFrame(rows).set_index("horizon")

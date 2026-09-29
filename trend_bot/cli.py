@@ -441,13 +441,14 @@ def cmd_study(args: argparse.Namespace) -> int:
     strategy = build_strategy(args)
     with closing(db.connect(args.db)) as con:
         pct = lambda df: df.to_string(formatters={
-            c: "{:+.1%}".format for c in ("avg_return", "median_return", "avg_vs_spy")} | {
-            c: "{:.0%}".format for c in ("win_rate", "beat_spy_rate")})
+            c: "{:+.1%}".format for c in ("avg_return", "median_return", "avg_vs_bench")} | {
+            c: "{:.0%}".format for c in ("win_rate", "beat_bench_rate")})
+        print(f"Benchmark: {args.benchmark} (bought and sold on the same days as each stock)\n")
         if args.signal in ("insiders", "both"):
             events = study.cluster_events(con, window_days=args.cluster_days, min_buyers=args.cluster_min,
                                           since=args.since)
             print(f"Insider cluster buys since {args.since}: {len(events):,} events")
-            ev = study.add_returns(con, events, strategy=strategy)
+            ev = study.add_returns(con, events, strategy=strategy, benchmark=args.benchmark)
             if not ev.empty:
                 print("\nAll clusters (buy the day after the filing is public):\n" + pct(study.summarize(ev, min_price=args.min_price)))
                 for trend in ("UP", "DOWN"):
@@ -461,7 +462,7 @@ def cmd_study(args: argparse.Namespace) -> int:
             events = study.trend_flip_events(con, strategy, tickers, since=args.since)
             print(f"\nTrend BUY flips ({strategy.label}) in {len(tickers):,} stocks since {args.since}: "
                   f"{len(events):,} events")
-            ev = study.add_returns(con, events)
+            ev = study.add_returns(con, events, benchmark=args.benchmark)
             if not ev.empty:
                 print(pct(study.summarize(ev, min_price=args.min_price)))
     print("\nNote: only companies still listed today are included (survivorship bias), "
@@ -579,6 +580,8 @@ def make_parser() -> argparse.ArgumentParser:
     st.add_argument("signal", choices=["insiders", "trend", "both"])
     st.add_argument("--since", default="2006-01-01", help="first event date")
     st.add_argument("--max-tickers", type=int, help="trend study: limit the number of stocks (faster)")
+    st.add_argument("--benchmark", default="SPY",
+                    help="compare against this ticker (default SPY; IWM = small companies, QQQ = Nasdaq-100)")
     st.set_defaults(func=cmd_study)
 
     ins = sub.add_parser("insiders", parents=[watch], help="insider buys and sells from SEC Form 4 filings")

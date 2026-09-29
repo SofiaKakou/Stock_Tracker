@@ -158,7 +158,7 @@ Form Type   Company Name                                                  CIK   
     assert n == 1  # the Form 4 listed twice is fetched once; 3 and 4/A ignored
     daily = con.execute("SELECT ticker, insider, code, filed FROM insider_trades WHERE accession LIKE '0000000001-%'").fetchall()
     assert ("FLIP", "Doe Jane", "P", "2026-04-06") in daily
-    assert db.get_meta(con, "insider_daily_through") == "2026-04-07"
+    assert "2026-04-07" in json.loads(db.get_meta(con, "insider_days_done"))
     # Running again doesn't refetch finished days.
     assert sec_bulk.load_recent_days(con, max_days=30, today=today, fetch=fake_fetch, log=lambda *_: None) == 0
 
@@ -281,3 +281,21 @@ def test_bulk_links_from_listing_page(con):
 
     n = sec_bulk.load_quarters(con, since_year=2026, today=dt.date(2026, 9, 29), fetch=fetch, log=lambda *_: None)
     assert n == 2 and "https://www.sec.gov/files/new-place/2026-q2-form345.zip" in fetched
+
+
+def test_daily_feed_fills_gaps_left_by_short_runs(con):
+    fetched = []
+
+    def fetch(url):
+        fetched.append(url)
+        return b""  # empty index: no filings that day
+
+    today = dt.date(2026, 9, 30)  # a Wednesday
+    # A quick test run only covered the last few days...
+    sec_bulk.load_recent_days(con, max_days=3, today=today, fetch=fetch, log=lambda *_: None)
+    assert [u[-12:-4] for u in fetched] == ["20260928", "20260929"]
+    # ...a later full run must still read the older days, but not those two again.
+    fetched.clear()
+    sec_bulk.load_recent_days(con, max_days=10, today=today, fetch=fetch, log=lambda *_: None)
+    days = [u[-12:-4] for u in fetched]
+    assert days == ["20260921", "20260922", "20260923", "20260924", "20260925"]
