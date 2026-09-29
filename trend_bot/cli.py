@@ -383,6 +383,11 @@ def cmd_db(args: argparse.Namespace) -> int:
             print(f"Price rows:     {s['price_rows']:,}  ({s['price_first']} -> {s['price_last']})")
             print(f"Insider trades: {s['insider_trades']:,}  ({s['insider_buys']:,} open-market buys, "
                   f"filed {s['insider_first']} -> {s['insider_last']})")
+            quarters, days = s["insider_quarters"], s["insider_days"]
+            if quarters:
+                print(f"  quarterly SEC files: {len(quarters)} loaded, {quarters[0]} -> {quarters[-1]}")
+            if days:
+                print(f"  recent days read one by one: {len(days)} ({days[0]} -> {days[-1]})")
             return 0
 
         everything = not (args.universe_only or args.prices_only or args.insiders_only)

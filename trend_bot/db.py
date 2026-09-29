@@ -12,6 +12,7 @@ meta           key/value bookkeeping (which SEC quarters/days are loaded)
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -133,4 +134,6 @@ def status(con: sqlite3.Connection) -> dict:
         "price_rows": n_rows, "price_first": first, "price_last": last,
         "insider_trades": n_trades, "insider_buys": n_buys, "insider_first": ins_first, "insider_last": ins_last,
         "failed_tickers": one("SELECT COUNT(*) FROM tickers WHERE fail_count >= 3")[0],
+        "insider_quarters": json.loads(get_meta(con, "insider_quarters", "[]")),
+        "insider_days": json.loads(get_meta(con, "insider_days_done", "[]")),
     }
