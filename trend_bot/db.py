@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS company_fates (
     checked_at  TEXT
 );
 
+-- Stocks the bot flagged, with the price that day, for tracking how picks do afterwards.
+CREATE TABLE IF NOT EXISTS picks (
+    date        TEXT NOT NULL,   -- trading day of the signal
+    ticker      TEXT NOT NULL,
+    signal      TEXT NOT NULL,   -- uptrend, downtrend, insider_cluster, strong_insider
+    price       REAL,            -- adjusted close on that day
+    detail      TEXT,
+    PRIMARY KEY (date, ticker, signal)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -79,7 +89,23 @@ def connect(path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.executescript(SCHEMA)
+    _migrate(con)
     return con
+
+
+# Columns added after the first release; ALTER TABLE adds them to older databases.
+EXTRA_COLUMNS = {
+    "tickers": {"sic": "INTEGER", "sic_desc": "TEXT", "info_checked_at": "TEXT"},
+}
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    for table, cols in EXTRA_COLUMNS.items():
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        for col, kind in cols.items():
+            if col not in have:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
+    con.commit()
 
 
 def get_meta(con: sqlite3.Connection, key: str, default: str | None = None) -> str | None:

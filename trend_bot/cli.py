@@ -364,10 +364,13 @@ def _market_embeds(args: argparse.Namespace, strategy: Strategy) -> list[dict]:
     if not Path(args.db).exists():
         print(f"[market] {args.db} not found - run 'python -m trend_bot db update' first", file=sys.stderr)
         return []
+    from trend_bot.track import record_picks
+
     with closing(db.connect(args.db)) as con:
         flips, clusters = screen(con, strategy, days=1, min_price=args.min_price, min_dollar_vol=args.min_volume,
                                  cluster_days=args.cluster_days, min_buyers=args.cluster_min)
-    return [alerts.market_embed(flips, clusters, strategy.label, limit=args.market_limit)]
+        new = set() if args.dry_run else record_picks(con, flips, clusters)
+    return [alerts.market_embed(flips, clusters, strategy.label, limit=args.market_limit, new=new)]
 
 
 def cmd_db(args: argparse.Namespace) -> int:
@@ -388,6 +391,14 @@ def cmd_db(args: argparse.Namespace) -> int:
                 print(f"  quarterly SEC files: {len(quarters)} loaded, {quarters[0]} -> {quarters[-1]}")
             if days:
                 print(f"  recent days read one by one: {len(days)} ({days[0]} -> {days[-1]})")
+            from trend_bot.company_info import fund_tickers
+
+            checked = con.execute("SELECT COUNT(DISTINCT cik) FROM tickers WHERE info_checked_at IS NOT NULL").fetchone()[0]
+            print(f"Industry codes: {checked:,} companies looked up; {len(fund_tickers(con)):,} tickers are funds/ETFs "
+                  f"(left out of the screen)")
+            picks = con.execute("SELECT COUNT(*), MIN(date) FROM picks").fetchone()
+            if picks[0]:
+                print(f"Tracked picks:  {picks[0]:,} since {picks[1]}")
             if s["fates"]:
                 f = s["fates"]
                 print(f"Delisted companies checked: {sum(f.values()):,} ({f.get('bankrupt', 0):,} bankrupt, "
@@ -416,6 +427,9 @@ def cmd_db(args: argparse.Namespace) -> int:
                 found = fates.update_fates(con)
                 if found:
                     print("[fates] " + ", ".join(f"{k} {v:,}" for k, v in sorted(found.items())))
+                from trend_bot import company_info
+
+                company_info.update_company_info(con)
             except RuntimeError as e:
                 print(f"[insiders] stopped: {e}", file=sys.stderr)
                 return 1
@@ -433,7 +447,12 @@ def cmd_screen(args: argparse.Namespace) -> int:
     with closing(db.connect(args.db)) as con:
         flips, clusters = screen(con, strategy, days=args.days, min_price=args.min_price,
                                  min_dollar_vol=args.min_volume, cluster_days=args.cluster_days,
-                                 min_buyers=args.cluster_min)
+                                 min_buyers=args.cluster_min, include_funds=args.include_funds)
+        if args.record:
+            from trend_bot.track import record_picks
+
+            new = record_picks(con, flips, clusters)
+            print(f"Recorded {len(new)} new pick(s) for tracking.")
     print(f"Strategy: {strategy.label}  |  price >= ${args.min_price:g}, "
           f"avg daily volume >= ${args.min_volume:,.0f}")
 
@@ -443,6 +462,8 @@ def cmd_screen(args: argparse.Namespace) -> int:
         df["buy_value"] = df["buy_value"].map(lambda v: f"${v:,.0f}" if v else "")
         df["buyers"] = df["buyers"].map(lambda v: v or "")
         df["cluster"] = df["cluster"].map(lambda v: "YES" if v else "")
+        if "strong" in df:
+            df["strong"] = df["strong"].map(lambda v: "🔔" if v else "")
         return df.head(args.limit).to_string()
 
     if args.signal != "all" and not flips.empty:
@@ -519,6 +540,29 @@ def cmd_study(args: argparse.Namespace) -> int:
                 print(pct(study.summarize(ev, min_price=args.min_price)))
     print("\nNote: companies without price data only count where their SEC filings show a bankruptcy or buyout;\n"
           "the rest are left out, so results may still be a little optimistic.")
+    return 0
+
+
+def cmd_track(args: argparse.Namespace) -> int:
+    from trend_bot import db, track
+
+    with closing(db.connect(args.db)) as con:
+        perf = track.performance(con, benchmark=args.benchmark, signal=args.signal)
+    if perf.empty:
+        print("No picks recorded yet. The nightly 'alert --market' run records them (or: screen --record).")
+        return 0
+    print(f"Track record of {len(perf):,} picks since {perf['date'].min()}  (vs {args.benchmark})\n")
+    s = track.summary(perf)
+    print(s.to_string(formatters={
+        "avg_days": "{:.0f}".format, "avg_return": "{:+.1%}".format, "median_return": "{:+.1%}".format,
+        "win_rate": "{:.0%}".format, "avg_vs_bench": "{:+.1%}".format, "beat_bench_rate": "{:.0%}".format}))
+    print("\n(For 'New downtrend' a negative return means the warning was right.)")
+    recent = perf.sort_values("date", ascending=False).head(args.limit).copy()
+    recent["signal"] = recent["signal"].map(lambda s: track.SIGNALS.get(s, s))
+    for col in ("return", "vs_bench"):
+        recent[col] = recent[col].map(lambda v: f"{v:+.1%}" if pd.notna(v) else "–")
+    print(f"\nMost recent {len(recent)} picks:\n" + recent[["date", "ticker", "signal", "entry", "now", "return",
+                                                            "vs_bench", "detail"]].to_string(index=False))
     return 0
 
 
@@ -628,6 +672,8 @@ def make_parser() -> argparse.ArgumentParser:
     sc.add_argument("--days", type=int, default=1, help="flips within this many trading days (default 1)")
     sc.add_argument("--signal", choices=["buy", "sell", "all"], default="all")
     sc.add_argument("--limit", type=int, default=40, help="rows to show per section")
+    sc.add_argument("--include-funds", action="store_true", help="also show closed-end funds and ETFs")
+    sc.add_argument("--record", action="store_true", help="save today's picks for 'track' (alert --market does this)")
     sc.set_defaults(func=cmd_screen)
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
@@ -642,6 +688,13 @@ def make_parser() -> argparse.ArgumentParser:
     st.add_argument("--benchmark", default="SPY",
                     help="compare against this ticker (default SPY; IWM = small companies, QQQ = Nasdaq-100)")
     st.set_defaults(func=cmd_study)
+
+    tr = sub.add_parser("track", help="how the stocks the bot flagged have done since")
+    tr.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    tr.add_argument("--benchmark", default="SPY", help="compare against this ticker (default SPY)")
+    tr.add_argument("--signal", choices=["strong_insider", "insider_cluster", "uptrend", "downtrend"])
+    tr.add_argument("--limit", type=int, default=20, help="recent picks to list")
+    tr.set_defaults(func=cmd_track)
 
     ins = sub.add_parser("insiders", parents=[watch], help="insider buys and sells from SEC Form 4 filings")
     ins.add_argument("--days", type=int, default=90, help="look back this many days (default 90)")

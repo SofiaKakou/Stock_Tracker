@@ -167,9 +167,19 @@ def send(webhook: str, payload: dict, timeout: float = 15) -> None:
         raise RuntimeError(f"Discord returned {resp.status_code}: {resp.text[:200]}")
 
 
-def market_embed(flips, clusters, strategy_label: str, limit: int = 10) -> dict:
-    """Top whole-market BUY flips (insider clusters first) plus the biggest insider clusters."""
+def market_embed(flips, clusters, strategy_label: str, limit: int = 10,
+                 new: set[tuple[str, str]] | None = None) -> dict:
+    """Strong insider picks first, then new uptrends, then the biggest insider clusters."""
+    new = new or set()
     lines = []
+    strong = clusters[clusters["strong"]] if len(clusters) and "strong" in clusters else clusters.iloc[0:0]
+    if len(strong):
+        lines.append(f"**🔔 Strong insider buying in an uptrend** ({len(strong)})")
+        for t, r in strong.head(limit).iterrows():
+            tag = " **NEW**" if (t, "strong_insider") in new else ""
+            lines.append(f"`{t:<6}` {int(r['buyers'])} insiders bought ${r['buy_value']:,.0f}, "
+                         f"price {r['close']:,.2f}{tag}")
+        lines.append("")
     buys = flips[flips["signal"] == "BUY"] if len(flips) else flips
     if len(buys):
         lines.append(f"**New uptrends today** ({len(buys)} stocks)")
@@ -179,15 +189,17 @@ def market_embed(flips, clusters, strategy_label: str, limit: int = 10) -> dict:
     sells = flips[flips["signal"] == "SELL"] if len(flips) else flips
     if len(sells):
         lines.append(f"\n**New downtrends today:** {len(sells)} stocks")
-    if len(clusters):
-        lines.append(f"\n**Insider buying clusters** ({len(clusters)} stocks, top by $)")
-        for t, r in clusters.head(limit).iterrows():
-            lines.append(f"`{t:<6}` {int(r['buyers'])} insiders  ${r['buy_value']:,.0f}  trend {r['trend']}")
+    others = clusters[~clusters["strong"]] if len(clusters) and "strong" in clusters else clusters
+    if len(others):
+        lines.append(f"\n**Other insider buying clusters** ({len(others)} stocks, top by $)")
+        for t, r in others.head(limit).iterrows():
+            tag = " NEW" if (t, "insider_cluster") in new else ""
+            lines.append(f"`{t:<6}` {int(r['buyers'])} insiders  ${r['buy_value']:,.0f}  trend {r['trend']}{tag}")
     if not lines:
         lines.append("No new trend flips or insider clusters today.")
     text = "\n".join(lines)
     return {
         "title": "🌎 Market screen",
         "description": (f"{strategy_label}\n\n" + text)[:4000],
-        "color": GRAY,
+        "color": GOLD if len(strong) else GRAY,
     }

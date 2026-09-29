@@ -401,3 +401,59 @@ def test_fates_fill_in_delisted_companies(full_db):
     assert gone.loc["BOUGHT", "1m_excess"] == 0.0
     assert gone.loc["OLDCO", "status"] == "unknown" and gone.loc["OLDCO", "12m"] != gone.loc["OLDCO", "12m"]
     assert gone.loc["GONE", "entry_price"] == 12.0
+
+
+def test_fund_detection_and_company_info(full_db):
+    from trend_bot import company_info
+    from trend_bot.screen import liquid_tickers
+
+    assert company_info.is_fund("Nuveen Select Tax Free Income Portfolio", None, "NYSE")
+    assert company_info.is_fund("Some Trust", 6726, "NYSE")
+    assert company_info.is_fund("iShares Russell 2000", None, "ETF")
+    assert not company_info.is_fund("Realty Income Corp", 6798, "NYSE")
+    assert not company_info.is_fund("Flip Corp", None, "Nasdaq")
+    # Once the SEC code says "company", a fund-sounding name doesn't matter.
+    assert not company_info.is_fund("Mutual Fund Services Inc", 7374, "NYSE")
+
+    docs = {1: {"sic": "3674", "sicDescription": "Semiconductors"}, 2: {"sic": "6726", "sicDescription": "Funds"},
+            3: {"sic": "", "sicDescription": ""}, 4: {"sic": "1000", "sicDescription": "Mining"}}
+    n = company_info.update_company_info(full_db, fetch=lambda u: json.dumps(docs[int(u.split("CIK")[1][:10])]).encode(),
+                                         log=lambda *_: None)
+    assert n == 4
+    assert full_db.execute("SELECT sic FROM tickers WHERE ticker = 'FLIP'").fetchone()[0] == 3674
+    assert "UPPY" in company_info.fund_tickers(full_db)  # SIC 6726
+    assert "UPPY" not in liquid_tickers(full_db) and "UPPY" in liquid_tickers(full_db, include_funds=True)
+    assert company_info.update_company_info(full_db, fetch=lambda u: 1 / 0, log=lambda *_: None) == 0  # done once
+
+
+def test_strong_rule_tracking_and_alert(full_db, tmp_path, monkeypatch, capsys):
+    from trend_bot import alerts, track
+
+    # A third FLIP insider: 3 buyers, $15k... too small for the $250k rule at first.
+    recent = (DATES[-1] - pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+    sec_bulk._insert(full_db, [("r3", 0, 1, "FLIP", "C", "CEO", "P", recent, recent, 100, 50, None, 0)])
+    flips, clusters = screen(full_db, MACrossover(fast=10, slow=50))
+    assert clusters.loc["FLIP", "buyers"] == 3 and not clusters.loc["FLIP", "strong"]
+    flips, clusters = screen(full_db, MACrossover(fast=10, slow=50), strong_min_value=10_000)
+    assert clusters.loc["FLIP", "strong"]
+
+    new = track.record_picks(full_db, flips, clusters)
+    assert new == {("FLIP", "uptrend"), ("FLIP", "insider_cluster"), ("FLIP", "strong_insider")}
+    # The same cluster the next days isn't a new pick; the same-day rerun changes nothing either.
+    assert track.record_picks(full_db, flips, clusters) == set()
+    later = clusters.copy()
+    later["date"] = (DATES[-1] + pd.Timedelta(days=5)).date()
+    assert track.record_picks(full_db, flips.iloc[0:0], later) == set()
+
+    perf = track.performance(full_db, benchmark="SPY")
+    assert set(perf["signal"]) == {"uptrend", "insider_cluster", "strong_insider"}
+    assert (perf["return"] == 0).all()  # recorded on the latest day
+    assert list(track.summary(perf).index)[0].startswith("🔔")
+
+    embed = alerts.market_embed(flips, clusters, "rule", new=new)
+    assert embed["description"].index("Strong insider") < embed["description"].index("New uptrends")
+    assert "**NEW**" in embed["description"] and embed["color"] == alerts.GOLD
+
+    assert main(["track", "--db", str(tmp_path / "market.db")]) == 0
+    out = capsys.readouterr().out
+    assert "Track record of 3 picks" in out and "FLIP" in out

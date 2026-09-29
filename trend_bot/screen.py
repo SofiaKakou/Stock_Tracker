@@ -7,13 +7,14 @@ import sqlite3
 
 import pandas as pd
 
+from trend_bot.company_info import fund_tickers
 from trend_bot.db import load_many
 from trend_bot.strategy import Strategy
 
 
 def liquid_tickers(con: sqlite3.Connection, min_price: float = 5, min_dollar_vol: float = 1e6,
-                   stale_days: int = 7) -> list[str]:
-    """Tickers with recent prices that aren't penny stocks or barely traded."""
+                   stale_days: int = 7, include_funds: bool = False) -> list[str]:
+    """Tickers with recent prices that aren't penny stocks, barely traded, or (by default) funds."""
     latest = con.execute("SELECT MAX(last_date) FROM tickers").fetchone()[0]
     if latest is None:
         return []
@@ -22,7 +23,11 @@ def liquid_tickers(con: sqlite3.Connection, min_price: float = 5, min_dollar_vol
         "SELECT ticker FROM tickers WHERE last_date >= ? AND last_close >= ? AND dollar_vol >= ? ORDER BY ticker",
         (fresh, min_price, min_dollar_vol),
     )
-    return [r[0] for r in rows]
+    tickers = [r[0] for r in rows]
+    if not include_funds:
+        funds = fund_tickers(con)
+        tickers = [t for t in tickers if t not in funds]
+    return tickers
 
 
 def insider_buying(con: sqlite3.Connection, since: dt.date, min_buyers: int = 2) -> pd.DataFrame:
@@ -46,12 +51,15 @@ def _chg(close: pd.Series, n: int) -> float:
 
 def screen(con: sqlite3.Connection, strategy: Strategy, days: int = 1, min_price: float = 5,
            min_dollar_vol: float = 1e6, cluster_days: int = 30, min_buyers: int = 2,
-           lookback_bars: int = 400, chunk: int = 300) -> tuple[pd.DataFrame, pd.DataFrame]:
+           lookback_bars: int = 400, chunk: int = 300, include_funds: bool = False,
+           strong_min_buyers: int = 3, strong_min_value: float = 250_000) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Trend flips in the last `days` bars across the liquid universe, plus insider clusters.
 
-    Returns (flips, clusters). Both include current trend and insider columns.
+    Returns (flips, clusters). Both include current trend and insider columns, and
+    `strong`: the best rule from the studies - at least `strong_min_buyers` insiders
+    buying `strong_min_value`+ in total, in a stock that's trending up.
     """
-    tickers = liquid_tickers(con, min_price, min_dollar_vol)
+    tickers = liquid_tickers(con, min_price, min_dollar_vol, include_funds=include_funds)
     latest = con.execute("SELECT MAX(last_date) FROM tickers").fetchone()[0]
     if not tickers or latest is None:
         empty = pd.DataFrame()
@@ -89,11 +97,13 @@ def screen(con: sqlite3.Connection, strategy: Strategy, days: int = 1, min_price
         df["buyers"] = df["buyers"].fillna(0).astype(int)
         df["buy_value"] = df["buy_value"].fillna(0.0)
         df["cluster"] = df["cluster"].fillna(False).astype(bool)
+        df["strong"] = (df["buyers"] >= strong_min_buyers) & (df["buy_value"] >= strong_min_value) & (df["trend"] == "UP")
         return df
 
     flips = with_insiders(pd.DataFrame(flip_rows))
     if not flips.empty:
         flips = flips.sort_values(["cluster", "signal", "buyers", "chg_20d"], ascending=[False, True, False, False])
     states = with_insiders(pd.DataFrame(state_rows))
-    clusters = states[states["cluster"]].sort_values("buy_value", ascending=False) if not states.empty else states
+    clusters = (states[states["cluster"]].sort_values(["strong", "buy_value"], ascending=False)
+                if not states.empty else states)
     return flips, clusters
