@@ -46,9 +46,13 @@ SPY     2026-09-28  ...    +1.1%     55.0 UP         HOLD
 python -m trend_bot backtest AAPL
 python -m trend_bot backtest AAPL --period max --show-trades
 python -m trend_bot backtest my_prices.csv   # CSV with Date,Open,High,Low,Close,Volume
+python -m trend_bot backtest SPY --period max --cash-rate 4 --plot
 ```
 
-The backtest compares the strategy with buy-and-hold on total return, max drawdown, CAGR, Sharpe ratio, time in market, and win rate.
+The backtest shows the strategy and buy-and-hold side by side: total return, yearly growth (CAGR), max drawdown, Sharpe ratio, and time in market. It also reports the number of trades and the win rate.
+
+- `--cash-rate 4` pays 4% a year on money held in cash, as a money-market fund would. The same rate is used as the risk-free rate in the Sharpe ratio. The default is 0%.
+- `--plot` saves a chart to `charts/` and opens it. The top panel shows the price, the strategy's lines, buy (▲) and sell (▼) markers, and shading while in the market. The bottom panel shows the strategy's portfolio value against buy-and-hold. Add `--no-open` to save the chart without opening it.
 
 ## Strategies
 
@@ -67,6 +71,7 @@ python -m trend_bot scan --strategy breakout --entry 20 --exit 10
 - Long or flat only: the bot holds 100% of the stock or 100% cash.
 - A signal from day *t*'s close is traded at that close and starts earning on day *t+1*, so the backtest never uses future data.
 - Each position change costs `--cost-bps` basis points (default 5) to cover commission and slippage.
+- While out of the market, cash earns `--cash-rate`% a year (default 0).
 
 ## Project layout
 
@@ -76,6 +81,7 @@ trend_bot/
   indicators.py  SMA, EMA, RSI, MACD, slope
   strategy.py    strategies -> a 0/1 `position` column
   backtest.py    long/flat backtester and stats
+  plot.py        backtest charts (matplotlib)
   cli.py         `scan` and `backtest` commands
 tests/           offline tests on synthetic prices (run: pytest)
 ```
@@ -85,7 +91,6 @@ To add a strategy, subclass `Strategy` in `strategy.py`, implement `generate()` 
 ## Ideas for next steps
 
 - **Alerts**: run `scan` on a schedule (cron or Task Scheduler) and send BUY/SELL changes to email, Discord, or Telegram.
-- **Charts**: plot price, moving averages, and trade markers with matplotlib or plotly.
 - **Portfolio backtest**: spread money across the whole watchlist, with position sizing and risk limits such as ATR-based stops.
 - **Parameter sweeps**: find which MA windows would have worked, then check them on data the sweep didn't use (walk-forward) to avoid overfitting.
 - **More signals**: MACD, trend strength (ADX), volume confirmation, relative strength against SPY.

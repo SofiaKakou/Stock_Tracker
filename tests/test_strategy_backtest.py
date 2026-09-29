@@ -63,3 +63,28 @@ def test_cli_backtest_csv(up_then_down, tmp_path, capsys):
     assert main(["backtest", str(path), "--fast", "10", "--slow", "50", "--show-trades"]) == 0
     out = capsys.readouterr().out
     assert "Total return" in out and "Buy & hold" in out
+
+
+def test_cash_rate_adds_interest_while_flat(up_then_down):
+    flat = up_then_down.assign(position=0)
+    res = run_backtest(flat, cost_bps=0, cash_rate=4)
+    years = len(flat) / 252
+    assert res.stats["total_return"] == pytest.approx(1.04 ** years - 1, rel=1e-6)
+    assert run_backtest(flat, cost_bps=0).stats["total_return"] == 0
+
+
+def test_buy_hold_stats_present(up_then_down):
+    sig = MACrossover(fast=10, slow=50).generate(up_then_down)
+    s = run_backtest(sig).stats
+    assert {"buy_hold_cagr", "buy_hold_sharpe"} <= s.keys()
+
+
+def test_cli_plot_saves_chart(up_then_down, tmp_path, capsys):
+    path = tmp_path / "prices.csv"
+    up_then_down.to_csv(path)
+    charts = tmp_path / "charts"
+    args = ["backtest", str(path), "--fast", "10", "--slow", "50", "--plot", "--chart-dir", str(charts), "--no-open"]
+    assert main(args) == 0
+    png = charts / "PRICES_ma_cross.png"
+    assert png.exists() and png.stat().st_size > 10_000
+    assert "Chart saved" in capsys.readouterr().out

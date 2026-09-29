@@ -21,6 +21,11 @@ from trend_bot import indicators as ind
 class Strategy:
     name = "base"
 
+    @property
+    def label(self) -> str:
+        """Short human-readable description, e.g. for chart titles."""
+        return self.name
+
     def generate(self, prices: pd.DataFrame) -> pd.DataFrame:
         raise NotImplementedError
 
@@ -38,6 +43,12 @@ class MACrossover(Strategy):
     use_ema: bool = False
     rsi_max: float | None = None
     name = "ma_cross"
+
+    @property
+    def label(self) -> str:
+        kind = "EMA" if self.use_ema else "SMA"
+        rsi = f", no entry above RSI {self.rsi_max:g}" if self.rsi_max is not None else ""
+        return f"{self.fast}/{self.slow}-day {kind} crossover{rsi}"
 
     def generate(self, prices: pd.DataFrame) -> pd.DataFrame:
         if self.fast >= self.slow:
@@ -78,6 +89,10 @@ class Breakout(Strategy):
     entry: int = 55
     exit: int = 20
     name = "breakout"
+
+    @property
+    def label(self) -> str:
+        return f"{self.entry}-day high breakout, {self.exit}-day low exit"
 
     def generate(self, prices: pd.DataFrame) -> pd.DataFrame:
         df = prices.copy()

@@ -30,11 +30,12 @@ def _cagr(equity: pd.Series) -> float:
     return float((equity.iloc[-1] / equity.iloc[0]) ** (1 / years) - 1)
 
 
-def _sharpe(returns: pd.Series) -> float:
-    std = returns.std()
+def _sharpe(returns: pd.Series, risk_free_daily: float = 0.0) -> float:
+    excess = returns - risk_free_daily
+    std = excess.std()
     if not std or np.isnan(std):
         return 0.0
-    return float(returns.mean() / std * np.sqrt(TRADING_DAYS))
+    return float(excess.mean() / std * np.sqrt(TRADING_DAYS))
 
 
 def _extract_trades(signals: pd.DataFrame, held: pd.Series) -> pd.DataFrame:
@@ -59,17 +60,21 @@ def run_backtest(
     signals: pd.DataFrame,
     capital: float = 10_000.0,
     cost_bps: float = 5.0,
+    cash_rate: float = 0.0,
 ) -> BacktestResult:
     """Backtest a DataFrame with Close and position columns.
 
     The position decided at day t's close is held through day t+1, so trades
     effectively execute at the close of the signal day. `cost_bps` is charged
-    on every change in position (commission + slippage).
+    on every change in position (commission + slippage). `cash_rate` is the
+    annual interest (in %, e.g. 4 for 4%) earned on days spent in cash; it's
+    also used as the risk-free rate in the Sharpe ratio.
     """
     daily_ret = signals["Close"].pct_change().fillna(0.0)
+    cash_daily = (1 + cash_rate / 100) ** (1 / TRADING_DAYS) - 1
     held = signals["position"].shift(1).fillna(0).astype(int)
     turnover = held.diff().abs().fillna(held.iloc[0])
-    strat_ret = held * daily_ret - turnover * cost_bps / 10_000
+    strat_ret = held * daily_ret + (1 - held) * cash_daily - turnover * cost_bps / 10_000
 
     equity = capital * (1 + strat_ret).cumprod()
     buy_hold = capital * (1 + daily_ret).cumprod()
@@ -80,7 +85,9 @@ def run_backtest(
         "total_return": float(equity.iloc[-1] / capital - 1),
         "buy_hold_return": float(buy_hold.iloc[-1] / capital - 1),
         "cagr": _cagr(equity),
-        "sharpe": _sharpe(strat_ret),
+        "buy_hold_cagr": _cagr(buy_hold),
+        "sharpe": _sharpe(strat_ret, cash_daily),
+        "buy_hold_sharpe": _sharpe(daily_ret, cash_daily),
         "max_drawdown": _max_drawdown(equity),
         "buy_hold_max_drawdown": _max_drawdown(buy_hold),
         "exposure": float(held.mean()),

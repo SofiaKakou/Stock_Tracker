@@ -3,12 +3,16 @@
     python -m trend_bot scan                 # today's signals for the watchlist
     python -m trend_bot backtest AAPL        # historical performance of the strategy
     python -m trend_bot backtest prices.csv  # same, from a local CSV
+    python -m trend_bot backtest SPY --plot  # also save a chart to charts/
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -59,7 +63,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     table = pd.DataFrame(rows).set_index("ticker")
     order = {"BUY": 0, "SELL": 1, "HOLD": 2, "WAIT": 3}
     table = table.sort_values("action", key=lambda s: s.map(order))
-    print(f"Strategy: {strategy}\n")
+    print(f"Strategy: {strategy.label}\n")
     print(table.to_string())
     return 0
 
@@ -68,17 +72,21 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     strategy = build_strategy(args)
     prices = load_prices(args.source, period=args.period or "5y", use_cache=not args.no_cache)
     signals = strategy.generate(prices)
-    result = run_backtest(signals, capital=args.capital, cost_bps=args.cost_bps)
+    result = run_backtest(signals, capital=args.capital, cost_bps=args.cost_bps, cash_rate=args.cash_rate)
     s = result.stats
 
     print(f"{args.source}  {prices.index[0].date()} -> {prices.index[-1].date()}  ({len(prices)} bars)")
-    print(f"Strategy: {strategy}\n")
-    print(f"{'':22}{'Strategy':>12}{'Buy & hold':>12}")
+    print(f"Strategy: {strategy.label}")
+    if args.cash_rate:
+        print(f"Cash earns {args.cash_rate:g}% a year while out of the market")
+    print(f"\n{'':22}{'Strategy':>12}{'Buy & hold':>12}")
     print(f"{'Total return':22}{s['total_return']:>12.1%}{s['buy_hold_return']:>12.1%}")
+    print(f"{'Yearly growth (CAGR)':22}{s['cagr']:>12.1%}{s['buy_hold_cagr']:>12.1%}")
     print(f"{'Max drawdown':22}{s['max_drawdown']:>12.1%}{s['buy_hold_max_drawdown']:>12.1%}")
+    print(f"{'Sharpe ratio':22}{s['sharpe']:>12.2f}{s['buy_hold_sharpe']:>12.2f}")
+    print(f"{'Time in market':22}{s['exposure']:>12.0%}{1:>12.0%}")
     print(f"{'Final equity':22}{result.equity.iloc[-1]:>12,.0f}{result.buy_hold.iloc[-1]:>12,.0f}")
-    print(f"\nCAGR {s['cagr']:.1%} | Sharpe {s['sharpe']:.2f} | "
-          f"time in market {s['exposure']:.0%} | trades {int(s['trades'])} | win rate {s['win_rate']:.0%}")
+    print(f"\nTrades {int(s['trades'])} | win rate {s['win_rate']:.0%} (closed trades)")
 
     if args.show_trades and not result.trades.empty:
         t = result.trades.copy()
@@ -86,7 +94,27 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         t["exit"] = t["exit"].dt.date
         t["return"] = t["return"].map("{:+.1%}".format)
         print("\n" + t.to_string(index=False, float_format="{:.2f}".format))
+
+    if args.plot:
+        from trend_bot.plot import plot_backtest  # matplotlib is only needed for charts
+
+        name = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(args.source).stem).upper()
+        chart = plot_backtest(signals, result, f"{name} · {strategy.label}", Path(args.chart_dir) / f"{name}_{strategy.name}.png")
+        print(f"\nChart saved to {chart.resolve()}")
+        if not args.no_open and sys.stdout.isatty():
+            open_file(chart)
     return 0
+
+
+def open_file(path: Path) -> None:
+    """Open a file with the system's default viewer (best effort)."""
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            os.system(f'open "{path}"')
+    except OSError:
+        pass
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -116,7 +144,12 @@ def make_parser() -> argparse.ArgumentParser:
     bt.add_argument("source", help="ticker symbol or path to a CSV file")
     bt.add_argument("--capital", type=float, default=10_000)
     bt.add_argument("--cost-bps", type=float, default=5.0, help="cost per trade in basis points")
+    bt.add_argument("--cash-rate", type=float, default=0.0,
+                    help="annual %% interest earned while in cash, e.g. 4 (default 0)")
     bt.add_argument("--show-trades", action="store_true")
+    bt.add_argument("--plot", action="store_true", help="save a chart of prices, trades and equity")
+    bt.add_argument("--chart-dir", default="charts", help="folder for charts (default: charts)")
+    bt.add_argument("--no-open", action="store_true", help="don't open the chart after saving it")
     bt.set_defaults(func=cmd_backtest)
     return p
 
