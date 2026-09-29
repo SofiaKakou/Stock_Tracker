@@ -6,3 +6,6 @@ venv/
 data_cache/
 *.egg-info/
 charts/
+.env
+alert_state.json
+alerts.log

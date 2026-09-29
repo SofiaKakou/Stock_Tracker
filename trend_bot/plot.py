@@ -12,6 +12,7 @@ import pandas as pd
 from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
 from trend_bot.backtest import BacktestResult
+from trend_bot.portfolio import PortfolioResult
 
 INK = "#0b0b0b"
 INK_2 = "#52514e"
@@ -24,6 +25,9 @@ NEUTRAL = "#8d8c86"
 BUY = "#0ca30c"
 SELL = "#d03b3b"
 IN_MARKET = "#2a78d6"
+# Fixed categorical order for tickers; more than 8 fold into "Other".
+CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+OTHER = "#b5b4ae"
 
 # Indicator columns each strategy adds, with their legend label and color.
 OVERLAYS = {
@@ -108,6 +112,49 @@ def plot_backtest(signals: pd.DataFrame, result: BacktestResult, title: str, pat
     ax_e.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"${v:,.0f}"))
     ax_e.set_ylabel("Portfolio value", color=INK_2, fontsize=10)
     _legend(ax_e, ncol=2)
+
+    fig.suptitle(title, x=0.07, y=0.95, ha="left", fontsize=13, color=INK, fontweight="bold")
+    fig.savefig(path, dpi=130, bbox_inches="tight", facecolor=SURFACE)
+    plt.close(fig)
+    return path
+
+
+def plot_portfolio(result: PortfolioResult, title: str, path: str | Path) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, (ax_e, ax_w) = plt.subplots(
+        2, 1, figsize=(12, 8), sharex=True, gridspec_kw={"height_ratios": [3, 2], "hspace": 0.22},
+    )
+    fig.patch.set_facecolor(SURFACE)
+    for ax in (ax_e, ax_w):
+        _style(ax)
+
+    # --- Portfolio value ---------------------------------------------------
+    s = result.stats
+    ax_e.plot(result.benchmark.index, result.benchmark, color=NEUTRAL, linewidth=1.6,
+              label=f"Equal-weight buy & hold  {s['benchmark_return']:+.0%}  "
+                    f"(max drawdown {s['benchmark_max_drawdown']:.0%})")
+    ax_e.plot(result.equity.index, result.equity, color=INK, linewidth=2,
+              label=f"Strategy portfolio  {s['total_return']:+.0%}  (max drawdown {s['max_drawdown']:.0%})")
+    if _use_log(pd.concat([result.equity, result.benchmark])):
+        _set_log(ax_e)
+    ax_e.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"${v:,.0f}"))
+    ax_e.set_ylabel("Portfolio value", color=INK_2, fontsize=10)
+    _legend(ax_e, ncol=2)
+
+    # --- What it held: stacked share of the portfolio per ticker ------------
+    w = result.weights
+    if w.shape[1] > len(CATEGORICAL):
+        keep = w.mean().sort_values(ascending=False).index[: len(CATEGORICAL) - 1]
+        w = w[keep].assign(Other=w.drop(columns=keep).sum(axis=1))
+    colors = [OTHER if c == "Other" else CATEGORICAL[i] for i, c in enumerate(w.columns)]
+    ax_w.stackplot(w.index, w.T.values, labels=w.columns, colors=colors, step="post",
+                   edgecolor=SURFACE, linewidth=0.3)
+    ax_w.set_ylim(0, 1)
+    ax_w.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0%}"))
+    ax_w.set_ylabel("Invested in (rest is cash)", color=INK_2, fontsize=10)
+    _legend(ax_w, ncol=min(len(w.columns), 8))
 
     fig.suptitle(title, x=0.07, y=0.95, ha="left", fontsize=13, color=INK, fontweight="bold")
     fig.savefig(path, dpi=130, bbox_inches="tight", facecolor=SURFACE)
