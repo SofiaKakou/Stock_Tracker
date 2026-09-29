@@ -388,6 +388,11 @@ def cmd_db(args: argparse.Namespace) -> int:
                 print(f"  quarterly SEC files: {len(quarters)} loaded, {quarters[0]} -> {quarters[-1]}")
             if days:
                 print(f"  recent days read one by one: {len(days)} ({days[0]} -> {days[-1]})")
+            if s["fates"]:
+                f = s["fates"]
+                print(f"Delisted companies checked: {sum(f.values()):,} ({f.get('bankrupt', 0):,} bankrupt, "
+                      f"{f.get('acquired', 0):,} bought out, {f.get('delisted', 0):,} delisted, "
+                      f"{f.get('unknown', 0):,} unclear)")
             return 0
 
         everything = not (args.universe_only or args.prices_only or args.insiders_only)
@@ -406,6 +411,11 @@ def cmd_db(args: argparse.Namespace) -> int:
                 filings = sec_bulk.load_recent_days(con, max_days=args.insider_days,
                                                     all_companies=args.insiders_all_companies)
                 print(f"[insiders] {filings:,} recent filing(s) loaded")
+                from trend_bot import fates
+
+                found = fates.update_fates(con)
+                if found:
+                    print("[fates] " + ", ".join(f"{k} {v:,}" for k, v in sorted(found.items())))
             except RuntimeError as e:
                 print(f"[insiders] stopped: {e}", file=sys.stderr)
                 return 1
@@ -444,6 +454,26 @@ def cmd_screen(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_fates(con, study, events: pd.DataFrame, ev: pd.DataFrame, args: argparse.Namespace, pct) -> None:
+    """Results again with delisted companies put back (survivorship-bias correction)."""
+    gone = study.add_fates(con, events, ev, benchmark=args.benchmark)
+    if gone.empty:
+        return
+    n = gone["status"].value_counts()
+    print(f"\n== Putting back companies that no longer exist: {len(gone):,} events had no price data ==")
+    print(f"   bankrupt {n.get('bankrupt', 0):,}, bought out {n.get('acquired', 0):,}, "
+          f"delisted for other reasons {n.get('delisted', 0):,}, unclear {n.get('unknown', 0):,}, "
+          f"not checked yet {n.get('unchecked', 0):,}")
+    if n.get("unchecked", 0):
+        print("   (run 'python -m trend_bot db update --insiders-only' to check the rest - it also runs nightly)")
+    print("   Bankruptcies count as -100%, buyouts as matching the benchmark; the rest stay out.")
+    both = pd.concat([ev, gone])
+    print("\nAll clusters, bankruptcies included:\n" + pct(study.summarize(both, min_price=args.min_price)))
+    worst = pd.concat([ev[ev["trend"] == "UP"], gone[gone["status"] == "bankrupt"]])
+    print("\nTrend UP, WORST CASE (as if every bankruptcy above had been in an uptrend):\n"
+          + pct(study.summarize(worst, min_price=args.min_price)))
+
+
 def cmd_study(args: argparse.Namespace) -> int:
     from trend_bot import db, study
     from trend_bot.screen import liquid_tickers
@@ -474,6 +504,7 @@ def cmd_study(args: argparse.Namespace) -> int:
                     part = ev[ev["trend"] == trend]
                     print(f"\n...when the price trend was {trend} ({strategy.label}):\n"
                           + pct(study.summarize(part, min_price=args.min_price)))
+                _print_fates(con, study, events, ev, args, pct)
         if args.signal in ("trend", "both"):
             tickers = liquid_tickers(con, args.min_price, args.min_volume)
             if args.max_tickers:
@@ -486,8 +517,8 @@ def cmd_study(args: argparse.Namespace) -> int:
             ev = study.add_returns(con, events, benchmark=args.benchmark)
             if not ev.empty:
                 print(pct(study.summarize(ev, min_price=args.min_price)))
-    print("\nNote: only companies still listed today are included (survivorship bias), "
-          "so real-world results would be somewhat worse.")
+    print("\nNote: companies without price data only count where their SEC filings show a bankruptcy or buyout;\n"
+          "the rest are left out, so results may still be a little optimistic.")
     return 0
 
 

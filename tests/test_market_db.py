@@ -213,7 +213,7 @@ def test_cli_db_screen_study(full_db, tmp_path, capsys):
     assert "FLIP" in out and "YES" in out and "Trend flips" in out
     assert main(["study", "both", "--db", path, "--fast", "10", "--slow", "50", "--since", "2000-01-01"]) == 0
     out = capsys.readouterr().out
-    assert "Insider cluster buys" in out and "survivorship" in out and "median_vs_bench" in out
+    assert "Insider cluster buys" in out and "bankruptcy or buyout" in out and "median_vs_bench" in out
     assert main(["study", "insiders", "--db", path, "--since", "2000-01-01", "--until", "2001-01-01"]) == 0
     assert "0 events" in capsys.readouterr().out
     assert main(["backtest", "UPPY", "--from-db", "--db", path, "--fast", "10", "--slow", "50", "--period", "max"]) == 0
@@ -342,3 +342,62 @@ def test_daily_feed_skips_unscreenable_companies(full_db):
     full_db.execute("DELETE FROM meta WHERE key = 'insider_days_done'")
     sec_bulk.load_recent_days(full_db, max_days=1, today=today, fetch=fetch, log=lambda *_: None, all_companies=True)
     assert len([u for u in fetched if u.endswith(".txt")]) == 2
+
+
+def submissions(*filings):
+    forms, dates, items = zip(*filings) if filings else ((), (), ())
+    return {"name": "Gone Inc", "filings": {"recent": {"form": list(forms), "filingDate": list(dates),
+                                                       "items": list(items)}}}
+
+
+def test_classify_company_fate():
+    from trend_bot.fates import classify
+
+    assert classify(submissions(("10-Q", "2015-05-01", ""), ("8-K", "2015-09-01", "1.03,7.01"),
+                                ("15-12G", "2016-01-10", ""))) == ("bankrupt", "2015-09-01")
+    assert classify(submissions(("DEFM14A", "2019-02-01", ""), ("8-K", "2019-04-01", "2.01,3.01,5.01"),
+                                ("25-NSE", "2019-04-01", ""), ("15-12B", "2019-04-12", ""))) == ("acquired", "2019-04-01")
+    assert classify(submissions(("10-K", "2012-03-01", ""), ("15-12G", "2012-06-01", ""))) == ("delisted", "2012-06-01")
+    assert classify(submissions(("10-K", "2026-03-01", ""))) == ("unknown", None)
+    # Merger paperwork years before a later deregistration doesn't count.
+    assert classify(submissions(("DEFM14A", "2010-01-01", ""), ("15-12G", "2014-01-01", "")))[0] == "delisted"
+
+
+def test_fates_fill_in_delisted_companies(full_db):
+    from trend_bot import fates
+
+    # GONE (CIK 77) had a 3-insider cluster, no prices, and went bankrupt 2 months later.
+    day = DATES[400]
+    trades = [(f"g{i}", 0, 77, "GONE", name, "Director", "P", day.strftime("%Y-%m-%d"), day.strftime("%Y-%m-%d"),
+               1000, 12.0, None, 0) for i, name in enumerate(["A", "B", "C"])]
+    # BOUGHT (CIK 88) was acquired within a month; OLDCO (CIK 99) is unclear.
+    trades += [(f"b{i}", 0, 88, "BOUGHT", name, "Director", "P", day.strftime("%Y-%m-%d"),
+                day.strftime("%Y-%m-%d"), 1000, 20.0, None, 0) for i, name in enumerate(["A", "B"])]
+    trades += [(f"o{i}", 0, 99, "OLDCO", name, "Director", "P", day.strftime("%Y-%m-%d"),
+                day.strftime("%Y-%m-%d"), 1000, 20.0, None, 0) for i, name in enumerate(["A", "B"])]
+    sec_bulk._insert(full_db, trades)
+    bankrupt_on = (day + pd.Timedelta(days=60)).strftime("%Y-%m-%d")
+    bought_on = (day + pd.Timedelta(days=20)).strftime("%Y-%m-%d")
+    docs = {77: submissions(("8-K", bankrupt_on, "1.03")),
+            88: submissions(("SC 14D9", bought_on, ""), ("15-12B", bought_on, "")),
+            99: submissions(("10-K", "2020-01-01", ""))}
+    asked = []
+
+    def fetch(url):
+        cik = int(url.split("CIK")[1][:10])
+        asked.append(cik)
+        return json.dumps(docs[cik]).encode()
+
+    assert fates.companies_to_check(full_db) == [77, 88, 99]  # FLIP/UPPY have prices
+    counts = fates.update_fates(full_db, fetch=fetch, log=lambda *_: None)
+    assert counts == {"bankrupt": 1, "acquired": 1, "unknown": 1}
+    assert fates.companies_to_check(full_db) == []  # nothing re-checked right away
+
+    events = study.cluster_events(full_db, since="2000-01-01")
+    priced = study.add_returns(full_db, events, strategy=MACrossover(fast=10, slow=50), benchmark="SPY")
+    gone = study.add_fates(full_db, events, priced, benchmark="SPY").set_index("ticker")
+    assert gone.loc["GONE", "1m"] != gone.loc["GONE", "1m"]  # bankrupt after 1 month: unknown then
+    assert gone.loc["GONE", "3m"] == -1.0 and gone.loc["GONE", "12m"] == -1.0
+    assert gone.loc["BOUGHT", "1m_excess"] == 0.0
+    assert gone.loc["OLDCO", "status"] == "unknown" and gone.loc["OLDCO", "12m"] != gone.loc["OLDCO", "12m"]
+    assert gone.loc["GONE", "entry_price"] == 12.0

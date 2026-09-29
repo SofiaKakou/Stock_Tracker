@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS insider_trades (
 CREATE INDEX IF NOT EXISTS insider_ticker ON insider_trades(ticker, filed);
 CREATE INDEX IF NOT EXISTS insider_code ON insider_trades(code, filed);
 
+-- What happened to companies that no longer have prices (from their SEC filings).
+CREATE TABLE IF NOT EXISTS company_fates (
+    cik         INTEGER PRIMARY KEY,
+    name        TEXT,
+    status      TEXT,            -- bankrupt, acquired, delisted, unknown (still filing / no sign)
+    fate_date   TEXT,
+    checked_at  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -134,6 +143,7 @@ def status(con: sqlite3.Connection) -> dict:
         "price_rows": n_rows, "price_first": first, "price_last": last,
         "insider_trades": n_trades, "insider_buys": n_buys, "insider_first": ins_first, "insider_last": ins_last,
         "failed_tickers": one("SELECT COUNT(*) FROM tickers WHERE fail_count >= 3")[0],
+        "fates": dict(con.execute("SELECT status, COUNT(*) FROM company_fates GROUP BY status").fetchall()),
         "insider_quarters": json.loads(get_meta(con, "insider_quarters", "[]")),
         "insider_days": json.loads(get_meta(con, "insider_days_done", "[]")),
     }

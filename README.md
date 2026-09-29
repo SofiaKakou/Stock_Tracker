@@ -149,7 +149,7 @@ Refine the insider test with `--cluster-min 3` (more insiders), `--min-value 250
 **Avoid fooling yourself.** If you try enough combinations, one will look good by luck. Choose your rule on one period (`--until 2015-12-31`), then check it on a period it hasn't seen (`--since 2016-01-01`). Only trust a rule that holds up in both.
 
 Two caveats:
-- **Survivorship bias:** Yahoo only has companies that still exist today, and delisted companies are missing. Results come out somewhat better than reality.
+- **Survivorship bias:** Yahoo only has prices for companies that still exist today. To correct for this, `db update` checks the SEC filings of every company that had insider buying but no longer has prices (about 15–30 minutes the first time, then only new ones). It flags **bankruptcies** (8-K Item 1.03) and **buyouts** (deregistration after merger paperwork). The insider study then adds a second set of results where bankruptcies count as −100% and buyouts as matching the benchmark. It also shows a worst case for the trend-UP group. Companies whose fate is unclear are still left out.
 - **Overlapping events:** events that overlap in time aren't independent, so treat small differences between results as noise.
 
 Backtests can read from the database too: `python -m trend_bot backtest NVDA --from-db --period max`.
@@ -226,6 +226,7 @@ trend_bot/
   sec_bulk.py    SEC insider data sets (quarterly bulk + daily feed)
   screen.py      whole-market screen
   study.py       event studies: did a signal come before better returns?
+  fates.py       what happened to delisted companies (bankrupt / bought out)
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs
