@@ -236,3 +236,22 @@ def test_non_stocks_filtered():
     drop = ["AACPW", "AAC-WT", "AACOW", "SPACU", "ABCDR", "BAC-PL", "PSA-P", "XYZ-UN", "XYZ-RT", "XYZ-WS"]
     assert all(market_data.is_common_stock(t) for t in keep)
     assert not any(market_data.is_common_stock(t) for t in drop)
+
+
+def test_missing_old_quarter_is_skipped(con):
+    import requests
+
+    loaded = []
+
+    def fetch(url):
+        if "2025q2" in url or "2026q3" in url:
+            err = requests.HTTPError("404")
+            err.response = type("R", (), {"status_code": 404})()
+            raise err
+        loaded.append(url)
+        return bulk_zip([("x-" + url[-16:-12], 1, "A", "P", "2025-01-10")])
+
+    logs = []
+    n = sec_bulk.load_quarters(con, since_year=2025, today=dt.date(2026, 10, 20), fetch=fetch, log=logs.append)
+    assert n == 5  # 2025 q1, q3, q4, 2026 q1, q2 - q2 2025 skipped, 2026q3 not out yet
+    assert any("2025q2 not available" in m for m in logs) and any("2026q3 not published" in m for m in logs)

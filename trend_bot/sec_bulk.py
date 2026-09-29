@@ -134,10 +134,15 @@ def load_quarters(con: sqlite3.Connection, since_year: int = 2006, today: dt.dat
             try:
                 data = fetch(BULK_URL.format(year=year, q=q))
             except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code == 404:
+                if e.response is None or e.response.status_code != 404:
+                    raise
+                if today - _quarter_bounds(year, q)[1] < dt.timedelta(days=180):
                     log(f"[insiders] {key} not published yet")
                     break
-                raise
+                # An old quarter that's missing on the SEC site: skip it, keep going.
+                log(f"[insiders] {key} not available on the SEC site, skipped")
+                year, q = (year + 1, 1) if q == 4 else (year, q + 1)
+                continue
             rows = parse_bulk_zip(data, mapping)
             start, end = _quarter_bounds(year, q)
             # Replace anything loaded for this period from the daily feed.
