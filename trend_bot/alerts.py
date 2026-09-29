@@ -165,3 +165,29 @@ def send(webhook: str, payload: dict, timeout: float = 15) -> None:
     resp = requests.post(webhook, json=payload, timeout=timeout)
     if resp.status_code >= 400:
         raise RuntimeError(f"Discord returned {resp.status_code}: {resp.text[:200]}")
+
+
+def market_embed(flips, clusters, strategy_label: str, limit: int = 10) -> dict:
+    """Top whole-market BUY flips (insider clusters first) plus the biggest insider clusters."""
+    lines = []
+    buys = flips[flips["signal"] == "BUY"] if len(flips) else flips
+    if len(buys):
+        lines.append(f"**New uptrends today** ({len(buys)} stocks)")
+        for t, r in buys.head(limit).iterrows():
+            star = " 🔔" if r["cluster"] else ""
+            lines.append(f"`{t:<6}` {r['close']:>9,.2f}  {r['chg_20d']:+.1%} 20d{star}")
+    sells = flips[flips["signal"] == "SELL"] if len(flips) else flips
+    if len(sells):
+        lines.append(f"\n**New downtrends today:** {len(sells)} stocks")
+    if len(clusters):
+        lines.append(f"\n**Insider buying clusters** ({len(clusters)} stocks, top by $)")
+        for t, r in clusters.head(limit).iterrows():
+            lines.append(f"`{t:<6}` {int(r['buyers'])} insiders  ${r['buy_value']:,.0f}  trend {r['trend']}")
+    if not lines:
+        lines.append("No new trend flips or insider clusters today.")
+    text = "\n".join(lines)
+    return {
+        "title": "🌎 Market screen",
+        "description": (f"{strategy_label}\n\n" + text)[:4000],
+        "color": GRAY,
+    }

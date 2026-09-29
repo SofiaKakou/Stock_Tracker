@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pandas as pd
@@ -60,12 +61,34 @@ def tickers_from(args: argparse.Namespace) -> list[str]:
     return [t if t.lower().endswith(".csv") else t.upper() for t in args.tickers]
 
 
-def generate_all(tickers: list[str], strategy: Strategy, period: str, use_cache: bool) -> dict[str, pd.DataFrame]:
+def _period_start(period: str) -> str | None:
+    """'5y' / '6mo' / '30d' -> an ISO start date; 'max' -> None."""
+    m = re.fullmatch(r"(\d+)(y|mo|d)", period or "")
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    days = n * {"y": 365.25, "mo": 30.5, "d": 1}[unit]
+    return (pd.Timestamp.today() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def get_prices(source: str, args: argparse.Namespace, default_period: str) -> pd.DataFrame:
+    """Prices from the local database (--from-db) or Yahoo/CSV."""
+    period = args.period or default_period
+    if getattr(args, "from_db", False) and not source.lower().endswith(".csv"):
+        from trend_bot import db
+
+        with closing(db.connect(args.db)) as con:
+            return db.load_prices(con, source, start=_period_start(period))
+    return load_prices(source, period=period, use_cache=not args.no_cache)
+
+
+def generate_all(tickers: list[str], strategy: Strategy, args: argparse.Namespace,
+                 default_period: str) -> dict[str, pd.DataFrame]:
     """Run the strategy on every ticker, skipping (and reporting) any that fail."""
     out = {}
     for t in tickers:
         try:
-            out[t] = strategy.generate(load_prices(t, period=period, use_cache=use_cache))
+            out[t] = strategy.generate(get_prices(t, args, default_period))
         except Exception as e:  # keep going with the rest of the list
             print(f"[skip] {t}: {e}", file=sys.stderr)
     return out
@@ -92,7 +115,7 @@ def _finish_chart(chart: Path, args: argparse.Namespace) -> None:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     strategy = build_strategy(args)
-    signals = generate_all(tickers_from(args), strategy, args.period or "2y", not args.no_cache)
+    signals = generate_all(tickers_from(args), strategy, args, "2y")
     rows = [describe_today(t, s) for t, s in signals.items()]
     if not rows:
         print("No results.")
@@ -124,7 +147,7 @@ def _insider_short(insiders, ticker: str) -> str:
 
 def cmd_backtest(args: argparse.Namespace) -> int:
     strategy = build_strategy(args)
-    prices = load_prices(args.source, period=args.period or "5y", use_cache=not args.no_cache)
+    prices = get_prices(args.source, args, "5y")
     signals = strategy.generate(prices)
     result = run_backtest(signals, capital=args.capital, cost_bps=args.cost_bps, cash_rate=args.cash_rate)
     s = result.stats
@@ -163,7 +186,7 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     from trend_bot.portfolio import run_portfolio_backtest
 
     strategy = build_strategy(args)
-    signals = generate_all(tickers_from(args), strategy, args.period or "5y", not args.no_cache)
+    signals = generate_all(tickers_from(args), strategy, args, "5y")
     if not signals:
         print("No results.")
         return 1
@@ -216,7 +239,7 @@ def cmd_alert(args: argparse.Namespace) -> int:
         return 0
 
     strategy = build_strategy(args)
-    signals = generate_all(tickers_from(args), strategy, args.period or "2y", not args.no_cache)
+    signals = generate_all(tickers_from(args), strategy, args, "2y")
     rows = sorted((describe_today(t, s) for t, s in signals.items()), key=lambda r: ACTION_ORDER[r["action"]])
     if not rows:
         print("No results.", file=sys.stderr)
@@ -260,6 +283,8 @@ def cmd_alert(args: argparse.Namespace) -> int:
             alerts.mark_cluster(ticker, cluster, new_state)
             clusters.append(ticker)
 
+    if args.market:
+        embeds.extend(_market_embeds(args, strategy))
     if args.summary:
         embeds.append(alerts.summary_embed(rows, strategy.label))
 
@@ -332,6 +357,118 @@ def cmd_insiders(args: argparse.Namespace) -> int:
     return 0
 
 
+def _market_embeds(args: argparse.Namespace, strategy: Strategy) -> list[dict]:
+    from trend_bot import alerts, db
+    from trend_bot.screen import screen
+
+    if not Path(args.db).exists():
+        print(f"[market] {args.db} not found - run 'python -m trend_bot db update' first", file=sys.stderr)
+        return []
+    with closing(db.connect(args.db)) as con:
+        flips, clusters = screen(con, strategy, days=1, min_price=args.min_price, min_dollar_vol=args.min_volume,
+                                 cluster_days=args.cluster_days, min_buyers=args.cluster_min)
+    return [alerts.market_embed(flips, clusters, strategy.label, limit=args.market_limit)]
+
+
+def cmd_db(args: argparse.Namespace) -> int:
+    from trend_bot import db, market_data, sec_bulk
+
+    with closing(db.connect(args.db)) as con:
+        if args.action == "status":
+            s = db.status(con)
+            size = Path(args.db).stat().st_size / 1e6 if Path(args.db).exists() else 0
+            print(f"Database: {Path(args.db).resolve()}  ({size:,.0f} MB)")
+            print(f"Tickers:        {s['tickers']:,} ({s['tickers_with_prices']:,} with prices, "
+                  f"{s['failed_tickers']:,} failing)")
+            print(f"Price rows:     {s['price_rows']:,}  ({s['price_first']} -> {s['price_last']})")
+            print(f"Insider trades: {s['insider_trades']:,}  ({s['insider_buys']:,} open-market buys, "
+                  f"filed {s['insider_first']} -> {s['insider_last']})")
+            return 0
+
+        everything = not (args.universe_only or args.prices_only or args.insiders_only)
+        if everything or args.universe_only or args.prices_only:
+            n = market_data.update_universe(con, include_otc=args.include_otc)
+            print(f"[universe] {n:,} tickers")
+        if everything or args.prices_only:
+            counts = market_data.update_prices(con, period=args.period, batch_size=args.batch, pause=args.pause,
+                                               retry_failed=args.retry_failed, limit=args.limit)
+            print(f"[prices] new {counts['new']:,}, updated {counts['updated']:,}, "
+                  f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}")
+        if everything or args.insiders_only:
+            added = sec_bulk.load_quarters(con, since_year=args.insider_since)
+            print(f"[insiders] {added} quarterly file(s) loaded")
+            filings = sec_bulk.load_recent_days(con, max_days=args.insider_days)
+            print(f"[insiders] {filings:,} recent filing(s) loaded")
+    return 0
+
+
+def cmd_screen(args: argparse.Namespace) -> int:
+    from trend_bot import db
+    from trend_bot.screen import screen
+
+    if not Path(args.db).exists():
+        print(f"{args.db} not found. Build it first:  python -m trend_bot db update", file=sys.stderr)
+        return 1
+    strategy = build_strategy(args)
+    with closing(db.connect(args.db)) as con:
+        flips, clusters = screen(con, strategy, days=args.days, min_price=args.min_price,
+                                 min_dollar_vol=args.min_volume, cluster_days=args.cluster_days,
+                                 min_buyers=args.cluster_min)
+    print(f"Strategy: {strategy.label}  |  price >= ${args.min_price:g}, "
+          f"avg daily volume >= ${args.min_volume:,.0f}")
+
+    def show(df: pd.DataFrame) -> str:
+        df = df.copy()
+        df["chg_20d"] = df["chg_20d"].map("{:+.1%}".format)
+        df["buy_value"] = df["buy_value"].map(lambda v: f"${v:,.0f}" if v else "")
+        df["buyers"] = df["buyers"].map(lambda v: v or "")
+        df["cluster"] = df["cluster"].map(lambda v: "YES" if v else "")
+        return df.head(args.limit).to_string()
+
+    if args.signal != "all" and not flips.empty:
+        flips = flips[flips["signal"] == args.signal.upper()]
+    print(f"\n== Trend flips in the last {args.days} trading day(s): {len(flips)} ==")
+    print(show(flips) if not flips.empty else "None.")
+    print(f"\n== Insider buying clusters (2+ insiders within {args.cluster_days} days): {len(clusters)} ==")
+    print(show(clusters.drop(columns=["name"])) if not clusters.empty else "None.")
+    return 0
+
+
+def cmd_study(args: argparse.Namespace) -> int:
+    from trend_bot import db, study
+    from trend_bot.screen import liquid_tickers
+
+    strategy = build_strategy(args)
+    with closing(db.connect(args.db)) as con:
+        pct = lambda df: df.to_string(formatters={
+            c: "{:+.1%}".format for c in ("avg_return", "median_return", "avg_vs_spy")} | {
+            c: "{:.0%}".format for c in ("win_rate", "beat_spy_rate")})
+        if args.signal in ("insiders", "both"):
+            events = study.cluster_events(con, window_days=args.cluster_days, min_buyers=args.cluster_min,
+                                          since=args.since)
+            print(f"Insider cluster buys since {args.since}: {len(events):,} events")
+            ev = study.add_returns(con, events, strategy=strategy)
+            if not ev.empty:
+                print("\nAll clusters (buy the day after the filing is public):\n" + pct(study.summarize(ev, min_price=args.min_price)))
+                for trend in ("UP", "DOWN"):
+                    part = ev[ev["trend"] == trend]
+                    print(f"\n...when the price trend was {trend} ({strategy.label}):\n"
+                          + pct(study.summarize(part, min_price=args.min_price)))
+        if args.signal in ("trend", "both"):
+            tickers = liquid_tickers(con, args.min_price, args.min_volume)
+            if args.max_tickers:
+                tickers = tickers[: args.max_tickers]
+            events = study.trend_flip_events(con, strategy, tickers, since=args.since)
+            print(f"\nTrend BUY flips ({strategy.label}) in {len(tickers):,} stocks since {args.since}: "
+                  f"{len(events):,} events")
+            ev = study.add_returns(con, events)
+            if not ev.empty:
+                print(pct(study.summarize(ev, min_price=args.min_price)))
+    print("\nNote: only companies still listed today are included (survivorship bias), "
+          "so real-world results would be somewhat worse.")
+    return 0
+
+
 # --- argument parsing ---------------------------------------------------------
 
 def make_parser() -> argparse.ArgumentParser:
@@ -349,6 +486,8 @@ def make_parser() -> argparse.ArgumentParser:
     common.add_argument("--period", default=None,
                         help="history to download: 1y, 2y, 5y, max, ... (default: 2y scan/alert, 5y backtests)")
     common.add_argument("--no-cache", action="store_true", help="always re-download prices")
+    common.add_argument("--db", default="market.db", help="market database file (default: market.db)")
+    common.add_argument("--from-db", action="store_true", help="read prices from the market database")
 
     watch = argparse.ArgumentParser(add_help=False)
     watch.add_argument("tickers", nargs="*", help="tickers (default: the watchlist)")
@@ -391,6 +530,10 @@ def make_parser() -> argparse.ArgumentParser:
     al.add_argument("--no-news", action="store_true", help="don't add earnings dates and headlines")
     al.add_argument("--state", default="alert_state.json", help="file that remembers the last trends")
     al.add_argument("--no-insiders", action="store_true", help="don't check SEC insider trades")
+    al.add_argument("--market", action="store_true", help="add the whole-market screen (needs the database)")
+    al.add_argument("--market-limit", type=int, default=10, help="stocks listed in the market screen")
+    al.add_argument("--min-price", type=float, default=5, help="market screen: minimum share price")
+    al.add_argument("--min-volume", type=float, default=1e6, help="market screen: minimum average daily $ volume")
     al.add_argument("--cluster-days", type=int, default=30, help="window for an insider buying cluster")
     al.add_argument("--cluster-min", type=int, default=2, help="different insiders needed for a cluster")
     al.set_defaults(func=cmd_alert)
@@ -398,6 +541,43 @@ def make_parser() -> argparse.ArgumentParser:
     nw = sub.add_parser("news", parents=[watch], help="next earnings date and recent headlines")
     nw.add_argument("--limit", type=int, default=5, help="headlines per ticker")
     nw.set_defaults(func=cmd_news)
+
+    dbp = sub.add_parser("db", help="build/update the local market database, or show its status")
+    dbp.add_argument("action", choices=["update", "status"])
+    dbp.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    dbp.add_argument("--period", default="max", help="history for newly added tickers (default: max)")
+    dbp.add_argument("--batch", type=int, default=100, help="tickers per Yahoo request")
+    dbp.add_argument("--pause", type=float, default=1.0, help="seconds between Yahoo requests")
+    dbp.add_argument("--limit", type=int, help="only process this many tickers (for a quick test)")
+    dbp.add_argument("--include-otc", action="store_true", help="also track OTC (over-the-counter) stocks")
+    dbp.add_argument("--retry-failed", action="store_true", help="retry tickers that returned no data 3 times")
+    dbp.add_argument("--insider-since", type=int, default=2006, help="first year of SEC insider data")
+    dbp.add_argument("--insider-days", type=int, default=30,
+                     help="max days of recent filings to fetch one by one (default 30)")
+    only = dbp.add_mutually_exclusive_group()
+    only.add_argument("--universe-only", action="store_true")
+    only.add_argument("--prices-only", action="store_true")
+    only.add_argument("--insiders-only", action="store_true")
+    dbp.set_defaults(func=cmd_db)
+
+    market = argparse.ArgumentParser(add_help=False)
+    market.add_argument("--min-price", type=float, default=5, help="skip stocks below this price (default 5)")
+    market.add_argument("--min-volume", type=float, default=1e6,
+                        help="skip stocks trading less than this many $ a day on average (default 1M)")
+    market.add_argument("--cluster-days", type=int, default=30, help="window for an insider buying cluster")
+    market.add_argument("--cluster-min", type=int, default=2, help="different insiders needed for a cluster")
+
+    sc = sub.add_parser("screen", parents=[common, market], help="scan the whole market in the database")
+    sc.add_argument("--days", type=int, default=1, help="flips within this many trading days (default 1)")
+    sc.add_argument("--signal", choices=["buy", "sell", "all"], default="all")
+    sc.add_argument("--limit", type=int, default=40, help="rows to show per section")
+    sc.set_defaults(func=cmd_screen)
+
+    st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
+    st.add_argument("signal", choices=["insiders", "trend", "both"])
+    st.add_argument("--since", default="2006-01-01", help="first event date")
+    st.add_argument("--max-tickers", type=int, help="trend study: limit the number of stocks (faster)")
+    st.set_defaults(func=cmd_study)
 
     ins = sub.add_parser("insiders", parents=[watch], help="insider buys and sells from SEC Form 4 filings")
     ins.add_argument("--days", type=int, default=90, help="look back this many days (default 90)")

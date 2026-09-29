@@ -101,6 +101,55 @@ SEC_USER_AGENT=Your Name your.email@example.com
 
 Filings are cached in `data_cache/sec/`, so only the first run for a ticker is slow.
 
+## Whole-market database
+
+Put every US stock (NYSE, Nasdaq and Cboe, roughly 6,000) and all SEC insider trades since 2006 into one local SQLite file, `market.db`. Then you can scan the whole market daily and test signals on thousands of stocks.
+
+```bash
+python -m trend_bot db update --limit 50   # quick test with 50 tickers first
+python -m trend_bot db update              # the full build (leave it running)
+python -m trend_bot db status              # what's in the database
+```
+
+**The first build takes a while:** roughly 1–3 hours for prices and about 1–2 hours for insider data, and the result is about 2 GB. It saves after every batch, so you can stop it (Ctrl+C) at any time and run it again to continue. After that, a daily `db update` only fetches what's new (about 10–15 minutes). `run_alerts.bat` does this automatically once `market.db` exists.
+
+What `db update` does:
+
+| Step | Source | Notes |
+|---|---|---|
+| Stock list | SEC `company_tickers_exchange.json` | NYSE, Nasdaq, Cboe, plus SPY/QQQ/IWM as benchmarks. Add `--include-otc` for over-the-counter stocks. |
+| Prices | Yahoo Finance, 100 tickers per request | Full history for new tickers (`--period`, default `max`), then only new days. When a dividend or split changes past prices, that ticker is reloaded in full. |
+| Insider trades | SEC quarterly bulk files (2006 onwards) | Complete and fast. Each quarter is published a few weeks after it ends. Only open-market buys and sales are stored. |
+| Recent insider trades | SEC daily filing index | Fills the weeks since the last published quarter, one filing at a time (`--insider-days`, default 30). |
+
+Useful flags: `--prices-only`, `--insiders-only`, `--insider-since 2015`, `--retry-failed` (retry tickers that returned no data), and `--pause 2` (go slower if Yahoo starts refusing).
+
+### Screen the whole market
+
+```bash
+python -m trend_bot screen                    # today's trend flips + insider buying clusters
+python -m trend_bot screen --days 5 --signal buy
+python -m trend_bot screen --min-price 10 --min-volume 5000000
+```
+
+Stocks under $5, or averaging under $1M of trading a day, are skipped by default. Flips that also have an insider buying cluster are listed first. `alert --market` adds a 🌎 **Market screen** message with the top results to your Discord alert.
+
+### Test a signal on history
+
+```bash
+python -m trend_bot study insiders            # insider cluster buys since 2006
+python -m trend_bot study trend               # 50/200 golden crosses across the market
+python -m trend_bot study both --since 2015-01-01
+```
+
+For every past event, the study buys the day after the signal became public. It reports the average and median return 1, 3, 6 and 12 months later, how often the trade made money, and how it did against SPY over the same days. Insider clusters are also split by whether the price trend was up or down at the time, which tests the "trend + insiders" combination directly.
+
+Two caveats:
+- **Survivorship bias:** Yahoo only has companies that still exist today, and delisted companies are missing. Results come out somewhat better than reality.
+- **Overlapping events:** events that overlap in time aren't independent, so treat small differences between results as noise.
+
+Backtests can read from the database too: `python -m trend_bot backtest NVDA --from-db --period max`.
+
 ## Discord alerts
 
 The bot can post to a Discord channel whenever a stock's trend flips. Each alert shows the price, the 20-day change, RSI, the next earnings date, and a few recent headlines.
@@ -127,7 +176,7 @@ If `SEC_USER_AGENT` is set, alerts also check insider trades. A trend alert incl
 
 The bot remembers each ticker's last trend in `alert_state.json`. The next run reports every change since then, even if the computer was off for a few days. On the very first run it only alerts for flips that happened that day.
 
-**4. Run it every weekday (Windows).** `run_alerts.bat` runs `alert --summary` and appends the output to `alerts.log`. Schedule it after the US market closes (4pm New York time, plus about an hour for the data to settle). Set `/ST` to that time in *your* time zone. `23:30` below is for Central/Eastern Europe:
+**4. Run it every weekday (Windows).** `run_alerts.bat` runs `alert --summary` and appends the output to `alerts.log`. Once `market.db` exists, it also runs `db update` first and adds the market screen. Schedule it after the US market closes (4pm New York time, plus about an hour for the data to settle). Set `/ST` to that time in *your* time zone. `23:30` below is for Central/Eastern Europe:
 
 ```powershell
 schtasks /Create /TN "TrendBot Alerts" /TR "$env:USERPROFILE\Stock_Tracker\run_alerts.bat" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 23:30
@@ -168,6 +217,11 @@ trend_bot/
   plot.py        backtest charts (matplotlib)
   news.py        earnings dates and headlines (Yahoo Finance)
   insiders.py    insider trades from SEC Form 4 filings
+  db.py          the SQLite market database (schema + readers)
+  market_data.py stock list and price downloads into the database
+  sec_bulk.py    SEC insider data sets (quarterly bulk + daily feed)
+  screen.py      whole-market screen
+  study.py       event studies: did a signal come before better returns?
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs
