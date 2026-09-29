@@ -199,6 +199,7 @@ def load_recent_days(con: sqlite3.Connection, max_days: int = 30, today: dt.date
     """Fill the gap after the last bulk quarter from daily filing indexes. Returns filings loaded."""
     fetch = fetch or insiders._get
     today = today or dt.date.today()
+    log("[insiders] reading recent Form 4 filings one by one (about 1,500 a day, ~4 minutes per day)")
     # Continue after whatever is already covered (by the daily feed or a bulk quarter),
     # but never reach back further than max_days.
     covered = [d for d in (get_meta(con, "insider_daily_through"), get_meta(con, "insider_bulk_through")) if d]
@@ -220,7 +221,9 @@ def load_recent_days(con: sqlite3.Connection, max_days: int = 30, today: dt.date
             filings = parse_daily_index(text)
             if filings:
                 log(f"[insiders] {day}: {len(filings)} Form 4 filings")
-            for path, filed in filings:
+            for n, (path, filed) in enumerate(filings, 1):
+                if n % 250 == 0:
+                    log(f"[insiders] {day}: {n}/{len(filings)} filings read")
                 accession = path.rsplit("/", 1)[-1].removesuffix(".txt")
                 try:
                     rows = parse_filing_txt(fetch(FILING_URL.format(path=path)).decode("latin-1"), filed, accession, mapping)

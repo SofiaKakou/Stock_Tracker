@@ -387,7 +387,7 @@ def cmd_db(args: argparse.Namespace) -> int:
 
         everything = not (args.universe_only or args.prices_only or args.insiders_only)
         if everything or args.universe_only or args.prices_only:
-            n = market_data.update_universe(con, include_otc=args.include_otc)
+            n = market_data.update_universe(con, include_otc=args.include_otc, all_securities=args.all_securities)
             print(f"[universe] {n:,} tickers")
         if everything or args.prices_only:
             counts = market_data.update_prices(con, period=args.period, batch_size=args.batch, pause=args.pause,
@@ -550,6 +550,8 @@ def make_parser() -> argparse.ArgumentParser:
     dbp.add_argument("--pause", type=float, default=1.0, help="seconds between Yahoo requests")
     dbp.add_argument("--limit", type=int, help="only process this many tickers (for a quick test)")
     dbp.add_argument("--include-otc", action="store_true", help="also track OTC (over-the-counter) stocks")
+    dbp.add_argument("--all-securities", action="store_true",
+                     help="also track warrants, units, rights and preferred shares")
     dbp.add_argument("--retry-failed", action="store_true", help="retry tickers that returned no data 3 times")
     dbp.add_argument("--insider-since", type=int, default=2006, help="first year of SEC insider data")
     dbp.add_argument("--insider-days", type=int, default=30,

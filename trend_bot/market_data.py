@@ -20,11 +20,31 @@ BENCHMARKS = {"SPY": "SPDR S&P 500 ETF", "QQQ": "Invesco QQQ (Nasdaq-100)", "IWM
 
 Downloader = Callable[..., dict[str, pd.DataFrame]]
 
+# Suffixes the SEC list uses for things that aren't common shares.
+NON_STOCK_SUFFIXES = ("WT", "WS", "W", "U", "UN", "R", "RT", "RI")
+
+
+def is_common_stock(ticker: str) -> bool:
+    """False for warrants, units, rights and preferred shares (e.g. AACPW, AAC-WT, BAC-PL).
+
+    Class shares like BRK-B stay in.
+    """
+    t = ticker.upper()
+    if "-" in t:
+        suffix = t.rsplit("-", 1)[1]
+        return not (suffix in NON_STOCK_SUFFIXES or suffix.startswith("P"))
+    # Nasdaq 5-letter codes: 5th letter W = warrant, U = unit, R = rights, Z = other.
+    return not (len(t) == 5 and t[-1] in "WURZ")
+
+
 
 # --- Universe ------------------------------------------------------------------
 
-def update_universe(con: sqlite3.Connection, include_otc: bool = False) -> int:
-    """Refresh the ticker list from the SEC. Returns the number of tickers tracked."""
+def update_universe(con: sqlite3.Connection, include_otc: bool = False, all_securities: bool = False) -> int:
+    """Refresh the ticker list from the SEC. Returns the number of tickers tracked.
+
+    Warrants, units, rights and preferred shares are left out unless all_securities is set.
+    """
     raw = insiders._cached(insiders.CACHE_DIR / "company_tickers_exchange.json", UNIVERSE_URL, max_age_hours=24)
     doc = json.loads(raw)
     fields = doc["fields"]
@@ -34,9 +54,16 @@ def update_universe(con: sqlite3.Connection, include_otc: bool = False) -> int:
         exchange = r.get("exchange") or ""
         if not r.get("ticker") or (exchange not in MAIN_EXCHANGES and not (include_otc and exchange == "OTC")):
             continue
+        if not all_securities and not is_common_stock(r["ticker"]):
+            continue
         rows.append((r["ticker"].upper(), int(r["cik"]), r.get("name"), exchange))
     for t, name in BENCHMARKS.items():
         rows.append((t, None, name, "ETF"))
+    if not all_securities:
+        # Drop non-stocks added by earlier versions (and their prices).
+        junk = [(tk,) for (tk,) in con.execute("SELECT ticker FROM tickers") if not is_common_stock(tk)]
+        con.executemany("DELETE FROM prices WHERE ticker = ?", junk)
+        con.executemany("DELETE FROM tickers WHERE ticker = ?", junk)
     con.executemany(
         """INSERT INTO tickers(ticker, cik, name, exchange) VALUES (?, ?, ?, ?)
            ON CONFLICT(ticker) DO UPDATE SET

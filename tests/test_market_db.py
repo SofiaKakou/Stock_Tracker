@@ -229,3 +229,10 @@ def test_alert_market_embed(full_db, tmp_path, monkeypatch):
     assert main(args) == 0
     market = [e for p in sent for e in p["embeds"] if e["title"] == "🌎 Market screen"][0]
     assert "FLIP" in market["description"] and "🔔" in market["description"]
+
+
+def test_non_stocks_filtered():
+    keep = ["AAPL", "BRK-B", "BF-A", "GOOGL", "SNOW", "ASMLF"]
+    drop = ["AACPW", "AAC-WT", "AACOW", "SPACU", "ABCDR", "BAC-PL", "PSA-P", "XYZ-UN", "XYZ-RT", "XYZ-WS"]
+    assert all(market_data.is_common_stock(t) for t in keep)
+    assert not any(market_data.is_common_stock(t) for t in drop)
