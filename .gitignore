@@ -11,3 +11,4 @@ alert_state.json
 alerts.log
 market.db
 market.db-*
+reports/

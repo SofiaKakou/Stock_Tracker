@@ -52,10 +52,12 @@ def _chg(close: pd.Series, n: int) -> float:
 def screen(con: sqlite3.Connection, strategy: Strategy, days: int = 1, min_price: float = 5,
            min_dollar_vol: float = 1e6, cluster_days: int = 30, min_buyers: int = 2,
            lookback_bars: int = 400, chunk: int = 300, include_funds: bool = False,
-           strong_min_buyers: int = 3, strong_min_value: float = 250_000) -> tuple[pd.DataFrame, pd.DataFrame]:
+           strong_min_buyers: int = 3, strong_min_value: float = 250_000,
+           with_states: bool = False) -> tuple[pd.DataFrame, ...]:
     """Trend flips in the last `days` bars across the liquid universe, plus insider clusters.
 
-    Returns (flips, clusters). Both include current trend and insider columns, and
+    Returns (flips, clusters), or (flips, clusters, states) with with_states=True, where
+    states has every screened stock's current trend. All include insider columns, and
     `strong`: the best rule from the studies - at least `strong_min_buyers` insiders
     buying `strong_min_value`+ in total, in a stock that's trending up.
     """
@@ -63,7 +65,7 @@ def screen(con: sqlite3.Connection, strategy: Strategy, days: int = 1, min_price
     latest = con.execute("SELECT MAX(last_date) FROM tickers").fetchone()[0]
     if not tickers or latest is None:
         empty = pd.DataFrame()
-        return empty, empty
+        return (empty, empty, empty) if with_states else (empty, empty)
     start = (dt.date.fromisoformat(latest) - dt.timedelta(days=int(lookback_bars * 1.5))).isoformat()
     names = dict(con.execute("SELECT ticker, name FROM tickers"))
     ins = insider_buying(con, dt.date.fromisoformat(latest) - dt.timedelta(days=cluster_days), min_buyers)
@@ -106,4 +108,4 @@ def screen(con: sqlite3.Connection, strategy: Strategy, days: int = 1, min_price
     states = with_insiders(pd.DataFrame(state_rows))
     clusters = (states[states["cluster"]].sort_values(["strong", "buy_value"], ascending=False)
                 if not states.empty else states)
-    return flips, clusters
+    return (flips, clusters, states) if with_states else (flips, clusters)

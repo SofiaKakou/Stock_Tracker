@@ -566,6 +566,31 @@ def cmd_track(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    from trend_bot import db
+    from trend_bot.report import build_report
+
+    if not Path(args.db).exists():
+        print(f"{args.db} not found. Build it first:  python -m trend_bot db update", file=sys.stderr)
+        return 1
+    strategy = build_strategy(args)
+    with closing(db.connect(args.db)) as con:
+        latest = con.execute("SELECT MAX(last_date) FROM tickers").fetchone()[0]
+        new = {(t, s) for t, s in con.execute("SELECT ticker, signal FROM picks WHERE date = ?", (latest,))}
+        page = build_report(con, strategy, benchmark=args.benchmark, new=new, min_price=args.min_price,
+                            min_dollar_vol=args.min_volume, cluster_days=args.cluster_days,
+                            min_buyers=args.cluster_min)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    dated = out / f"report-{latest}.html"
+    for path in (dated, out / "latest.html"):
+        path.write_text(page, encoding="utf-8")
+    print(f"Report saved to {dated.resolve()}")
+    if args.open and sys.stdout.isatty():
+        open_file(dated)
+    return 0
+
+
 # --- argument parsing ---------------------------------------------------------
 
 def make_parser() -> argparse.ArgumentParser:
@@ -688,6 +713,12 @@ def make_parser() -> argparse.ArgumentParser:
     st.add_argument("--benchmark", default="SPY",
                     help="compare against this ticker (default SPY; IWM = small companies, QQQ = Nasdaq-100)")
     st.set_defaults(func=cmd_study)
+
+    rp = sub.add_parser("report", parents=[common, market], help="write today's market report as a web page")
+    rp.add_argument("--out", default="reports", help="folder for the report (default: reports)")
+    rp.add_argument("--benchmark", default="SPY", help="benchmark for the track record (default SPY)")
+    rp.add_argument("--open", action="store_true", help="open the report in your browser")
+    rp.set_defaults(func=cmd_report)
 
     tr = sub.add_parser("track", help="how the stocks the bot flagged have done since")
     tr.add_argument("--db", default="market.db", help="database file (default: market.db)")

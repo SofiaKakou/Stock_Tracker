@@ -457,3 +457,18 @@ def test_strong_rule_tracking_and_alert(full_db, tmp_path, monkeypatch, capsys):
     assert main(["track", "--db", str(tmp_path / "market.db")]) == 0
     out = capsys.readouterr().out
     assert "Track record of 3 picks" in out and "FLIP" in out
+
+
+def test_report_page(full_db, tmp_path):
+    from trend_bot import track
+
+    flips, clusters = screen(full_db, MACrossover(fast=10, slow=50))
+    track.record_picks(full_db, flips, clusters)
+    full_db.commit()
+    out = tmp_path / "reports"
+    assert main(["report", "--db", str(tmp_path / "market.db"), "--fast", "10", "--slow", "50",
+                 "--out", str(out)]) == 0
+    page = (out / "latest.html").read_text(encoding="utf-8")
+    assert page.startswith("<!doctype html>") and "prefers-color-scheme: dark" in page
+    assert "FLIP" in page and "<svg" in page and "Track record" in page and "New uptrends (1)" in page
+    assert len(list(out.glob("report-*.html"))) == 1
