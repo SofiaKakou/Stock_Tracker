@@ -181,9 +181,14 @@ def load_quarters(con: sqlite3.Connection, since_year: int = 2006, today: dt.dat
 
 # --- Daily feed for the current quarter ------------------------------------------------
 
-def parse_daily_index(text: str) -> list[tuple[str, str]]:
-    """(filing path, date filed) for every Form 4 in a daily form.idx, deduplicated."""
-    out, seen = [], set()
+def parse_daily_index(text: str) -> list[tuple[str, str, frozenset[int]]]:
+    """(filing path, date filed, CIKs named) for every Form 4 in a daily form.idx.
+
+    Each filing is listed once per party (the company and each insider), so the
+    CIKs of all its lines are collected and the filing is returned once.
+    """
+    order: list[str] = []
+    info: dict[str, tuple[str, set[int]]] = {}
     body = False
     for line in text.splitlines():
         if line.startswith("---"):
@@ -194,12 +199,14 @@ def parse_daily_index(text: str) -> list[tuple[str, str]]:
         parts = re.split(r"\s{2,}", line.strip())
         if len(parts) < 5:
             continue
-        date, path = parts[-2], parts[-1]
-        if path not in seen:
-            seen.add(path)
+        cik, date, path = parts[-3], parts[-2], parts[-1]
+        if path not in info:
             filed = f"{date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else date
-            out.append((path, filed))
-    return out
+            info[path] = (filed, set())
+            order.append(path)
+        if cik.isdigit():
+            info[path][1].add(int(cik))
+    return [(path, info[path][0], frozenset(info[path][1])) for path in order]
 
 
 def parse_filing_txt(text: str, filed: str, accession: str, cik_to_ticker: dict[int, str]) -> list[tuple]:
@@ -220,12 +227,24 @@ def parse_filing_txt(text: str, filed: str, accession: str, cik_to_ticker: dict[
     ]
 
 
+def screenable_ciks(con: sqlite3.Connection, min_price: float = 5, min_dollar_vol: float = 1e6) -> set[int]:
+    """CIKs of companies the market screen can show (not penny stocks, not barely traded)."""
+    rows = con.execute("SELECT cik FROM tickers WHERE cik IS NOT NULL AND last_close >= ? AND dollar_vol >= ?",
+                       (min_price, min_dollar_vol))
+    return {r[0] for r in rows}
+
+
 def load_recent_days(con: sqlite3.Connection, max_days: int = 30, today: dt.date | None = None,
-                     fetch: Callable[[str], bytes] | None = None, log: Log = print) -> int:
-    """Fill the gap after the last bulk quarter from daily filing indexes. Returns filings loaded."""
+                     fetch: Callable[[str], bytes] | None = None, log: Log = print,
+                     all_companies: bool = False) -> int:
+    """Fill the gap after the last bulk quarter from daily filing indexes. Returns filings loaded.
+
+    Unless all_companies is set, only filings for companies the screen can show are
+    downloaded (roughly half of them); the quarterly bulk files still cover everyone.
+    """
     fetch = fetch or insiders._get
     today = today or dt.date.today()
-    log("[insiders] reading recent Form 4 filings one by one (about 1,500 a day, ~4 minutes per day)")
+    log("[insiders] reading recent Form 4 filings one by one (a few minutes per day of filings)")
     # Every day in the window that no bulk quarter covers and that hasn't been read yet.
     # (Days are tracked one by one, so a gap left by an earlier short run gets filled.)
     start = today - dt.timedelta(days=max_days)
@@ -234,6 +253,7 @@ def load_recent_days(con: sqlite3.Connection, max_days: int = 30, today: dt.date
         start = max(start, dt.date.fromisoformat(bulk_through) + dt.timedelta(days=1))
     done = set(json.loads(get_meta(con, "insider_days_done", "[]")))
     mapping = _cik_to_ticker(con)
+    wanted = set() if all_companies else screenable_ciks(con)  # empty = no filter (e.g. no prices yet)
     total = 0
     day = start
     while day < today:  # today's index isn't complete until the evening
@@ -248,10 +268,11 @@ def load_recent_days(con: sqlite3.Connection, max_days: int = 30, today: dt.date
                 if e.response is None or e.response.status_code not in (403, 404):
                     raise
                 text = ""  # holiday: no index
-            filings = parse_daily_index(text)
-            if filings:
-                log(f"[insiders] {day}: {len(filings)} Form 4 filings")
-            for n, (path, filed) in enumerate(filings, 1):
+            listed = parse_daily_index(text)
+            filings = [f for f in listed if not wanted or f[2] & wanted]
+            if listed:
+                log(f"[insiders] {day}: {len(filings)} of {len(listed)} Form 4 filings are for screenable companies")
+            for n, (path, filed, _) in enumerate(filings, 1):
                 if n % 250 == 0:
                     log(f"[insiders] {day}: {n}/{len(filings)} filings read")
                 accession = path.rsplit("/", 1)[-1].removesuffix(".txt")

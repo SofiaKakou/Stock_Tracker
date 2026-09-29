@@ -120,7 +120,7 @@ What `db update` does:
 | Stock list | SEC `company_tickers_exchange.json` | NYSE, Nasdaq, Cboe, plus SPY/QQQ/IWM as benchmarks. Add `--include-otc` for over-the-counter stocks. |
 | Prices | Yahoo Finance, 100 tickers per request | Full history for new tickers (`--period`, default `max`), then only new days. When a dividend or split changes past prices, that ticker is reloaded in full. |
 | Insider trades | SEC quarterly bulk files (2006 onwards) | Complete and fast. Each quarter is published a few weeks after it ends. Only open-market buys and sales are stored. |
-| Recent insider trades | SEC daily filing index | Fills the weeks since the last published quarter, one filing at a time (`--insider-days`, default 30). |
+| Recent insider trades | SEC daily filing index | Fills the weeks since the last published quarter, one filing at a time (`--insider-days`, default 30). Only filings for companies the screen can show are downloaded; add `--insiders-all-companies` for everyone. |
 
 Useful flags: `--prices-only`, `--insiders-only`, `--insider-since 2015`, `--retry-failed` (retry tickers that returned no data), and `--pause 2` (go slower if Yahoo starts refusing).
 

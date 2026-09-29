@@ -403,7 +403,8 @@ def cmd_db(args: argparse.Namespace) -> int:
             try:
                 added = sec_bulk.load_quarters(con, since_year=args.insider_since)
                 print(f"[insiders] {added} quarterly file(s) loaded")
-                filings = sec_bulk.load_recent_days(con, max_days=args.insider_days)
+                filings = sec_bulk.load_recent_days(con, max_days=args.insider_days,
+                                                    all_companies=args.insiders_all_companies)
                 print(f"[insiders] {filings:,} recent filing(s) loaded")
             except RuntimeError as e:
                 print(f"[insiders] stopped: {e}", file=sys.stderr)
@@ -577,6 +578,8 @@ def make_parser() -> argparse.ArgumentParser:
     dbp.add_argument("--insider-since", type=int, default=2006, help="first year of SEC insider data")
     dbp.add_argument("--insider-days", type=int, default=30,
                      help="max days of recent filings to fetch one by one (default 30)")
+    dbp.add_argument("--insiders-all-companies", action="store_true",
+                     help="read recent filings for every company, not just ones the screen can show")
     only = dbp.add_mutually_exclusive_group()
     only.add_argument("--universe-only", action="store_true")
     only.add_argument("--prices-only", action="store_true")

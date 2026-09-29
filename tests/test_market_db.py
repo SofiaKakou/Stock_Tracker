@@ -316,3 +316,29 @@ def test_cluster_filters(full_db):
     assert len(all_ev) == 3
     assert list(big["value"]) == [10_000_000.0]
     assert len(execs) == 1 and execs.iloc[0]["buyers"] == 2  # only the CEO + CFO cluster
+
+
+def test_daily_feed_skips_unscreenable_companies(full_db):
+    idx = """Form Type   Company Name      CIK         Date Filed  File Name
+-----------------------------------------------------------------------------------
+4           FLIP CORP         1           20260928    edgar/data/1/aaa.txt
+4           SOME INSIDER      777         20260928    edgar/data/1/aaa.txt
+4           PENNY CO          3           20260928    edgar/data/3/bbb.txt
+4           OTHER INSIDER     888         20260928    edgar/data/3/bbb.txt
+"""
+    listed = sec_bulk.parse_daily_index(idx)
+    assert [(p, c) for p, _, c in listed] == [("edgar/data/1/aaa.txt", {1, 777}), ("edgar/data/3/bbb.txt", {3, 888})]
+
+    fetched = []
+
+    def fetch(url):
+        fetched.append(url)
+        return idx.encode() if url.endswith(".idx") else b"<XML></XML>"
+
+    today = dt.date(2026, 9, 29)
+    sec_bulk.load_recent_days(full_db, max_days=1, today=today, fetch=fetch, log=lambda *_: None)
+    assert [u for u in fetched if u.endswith(".txt")] == ["https://www.sec.gov/Archives/edgar/data/1/aaa.txt"]
+    fetched.clear()
+    full_db.execute("DELETE FROM meta WHERE key = 'insider_days_done'")
+    sec_bulk.load_recent_days(full_db, max_days=1, today=today, fetch=fetch, log=lambda *_: None, all_companies=True)
+    assert len([u for u in fetched if u.endswith(".txt")]) == 2
