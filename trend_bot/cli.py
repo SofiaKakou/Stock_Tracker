@@ -395,10 +395,14 @@ def cmd_db(args: argparse.Namespace) -> int:
             print(f"[prices] new {counts['new']:,}, updated {counts['updated']:,}, "
                   f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}")
         if everything or args.insiders_only:
-            added = sec_bulk.load_quarters(con, since_year=args.insider_since)
-            print(f"[insiders] {added} quarterly file(s) loaded")
-            filings = sec_bulk.load_recent_days(con, max_days=args.insider_days)
-            print(f"[insiders] {filings:,} recent filing(s) loaded")
+            try:
+                added = sec_bulk.load_quarters(con, since_year=args.insider_since)
+                print(f"[insiders] {added} quarterly file(s) loaded")
+                filings = sec_bulk.load_recent_days(con, max_days=args.insider_days)
+                print(f"[insiders] {filings:,} recent filing(s) loaded")
+            except RuntimeError as e:
+                print(f"[insiders] stopped: {e}", file=sys.stderr)
+                return 1
     return 0
 
 
@@ -446,8 +450,14 @@ def cmd_study(args: argparse.Namespace) -> int:
         print(f"Benchmark: {args.benchmark} (bought and sold on the same days as each stock)\n")
         if args.signal in ("insiders", "both"):
             events = study.cluster_events(con, window_days=args.cluster_days, min_buyers=args.cluster_min,
-                                          since=args.since)
-            print(f"Insider cluster buys since {args.since}: {len(events):,} events")
+                                          since=args.since, min_value=args.min_value,
+                                          officers_only=args.officers_only)
+            rules = [f"{args.cluster_min}+ insiders within {args.cluster_days} days"]
+            if args.min_value:
+                rules.append(f"at least ${args.min_value:,.0f} bought")
+            if args.officers_only:
+                rules.append("executives only")
+            print(f"Insider cluster buys since {args.since} ({', '.join(rules)}): {len(events):,} events")
             ev = study.add_returns(con, events, strategy=strategy, benchmark=args.benchmark)
             if not ev.empty:
                 print("\nAll clusters (buy the day after the filing is public):\n" + pct(study.summarize(ev, min_price=args.min_price)))
@@ -580,6 +590,10 @@ def make_parser() -> argparse.ArgumentParser:
     st.add_argument("signal", choices=["insiders", "trend", "both"])
     st.add_argument("--since", default="2006-01-01", help="first event date")
     st.add_argument("--max-tickers", type=int, help="trend study: limit the number of stocks (faster)")
+    st.add_argument("--min-value", type=float, default=0,
+                    help="insiders study: only clusters where insiders bought at least this many $ in total")
+    st.add_argument("--officers-only", action="store_true",
+                    help="insiders study: only count buys by executives (CEO, CFO, president...)")
     st.add_argument("--benchmark", default="SPY",
                     help="compare against this ticker (default SPY; IWM = small companies, QQQ = Nasdaq-100)")
     st.set_defaults(func=cmd_study)

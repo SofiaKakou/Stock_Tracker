@@ -299,3 +299,18 @@ def test_daily_feed_fills_gaps_left_by_short_runs(con):
     sec_bulk.load_recent_days(con, max_days=10, today=today, fetch=fetch, log=lambda *_: None)
     days = [u[-12:-4] for u in fetched]
     assert days == ["20260921", "20260922", "20260923", "20260924", "20260925"]
+
+
+def test_cluster_filters(full_db):
+    sec_bulk._insert(full_db, [
+        ("x1", 0, 2, "UPPY", "Big Ceo", "Chief Executive Officer", "P", DATES[500].strftime("%Y-%m-%d"),
+         DATES[500].strftime("%Y-%m-%d"), 100_000, 50, None, 0),
+        ("x2", 0, 2, "UPPY", "Big Cfo", "CFO, Director", "P", DATES[505].strftime("%Y-%m-%d"),
+         DATES[505].strftime("%Y-%m-%d"), 100_000, 50, None, 0),
+    ])
+    all_ev = study.cluster_events(full_db, since="2000-01-01")
+    big = study.cluster_events(full_db, since="2000-01-01", min_value=1_000_000)
+    execs = study.cluster_events(full_db, since="2000-01-01", officers_only=True)
+    assert len(all_ev) == 3
+    assert list(big["value"]) == [10_000_000.0]
+    assert len(execs) == 1 and execs.iloc[0]["buyers"] == 2  # only the CEO + CFO cluster

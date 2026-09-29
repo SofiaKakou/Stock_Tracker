@@ -172,3 +172,32 @@ def test_cli_alert_sends_insider_cluster_once(fake_sec, tmp_path, monkeypatch, u
     sent.clear()
     assert main(args) == 0
     assert sent == []  # same cluster isn't announced twice
+
+
+def test_sec_rate_limit_waits_then_continues(monkeypatch):
+    import requests as rq
+
+    monkeypatch.setenv("SEC_USER_AGENT", "Test test@example.com")
+    monkeypatch.setattr(insiders, "REQUEST_GAP", 0)
+    sleeps = []
+    monkeypatch.setattr(insiders.time, "sleep", lambda s: sleeps.append(s))
+    codes = iter([200, 403, 403, 200])
+
+    class Resp:
+        def __init__(self, code):
+            self.status_code, self.content = code, b"ok"
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(insiders.requests, "get", lambda *a, **k: Resp(next(codes)))
+    monkeypatch.setattr(insiders, "_ok_requests", 0)
+    assert insiders._get("u1") == b"ok"
+    assert insiders._get("u2") == b"ok"  # two refusals, then success
+    assert sleeps == [60, 180]
+
+    # Refused on the very first request: a User-Agent problem, reported right away.
+    monkeypatch.setattr(insiders, "_ok_requests", 0)
+    monkeypatch.setattr(insiders.requests, "get", lambda *a, **k: Resp(403))
+    with pytest.raises(RuntimeError, match="SEC_USER_AGENT"):
+        insiders._get("u3")

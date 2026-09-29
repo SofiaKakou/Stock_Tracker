@@ -23,14 +23,25 @@ from trend_bot.strategy import Strategy
 HORIZONS = {"1m": 21, "3m": 63, "6m": 126, "12m": 252}
 
 
+OFFICER_WORDS = ("chief", "ceo", "cfo", "coo", "president", "officer")
+
+
 def cluster_events(con: sqlite3.Connection, window_days: int = 30, min_buyers: int = 2,
-                   since: str = "2006-01-01") -> pd.DataFrame:
-    """One event per insider buying cluster: the day it became public (the filing that completed it)."""
+                   since: str = "2006-01-01", min_value: float = 0, officers_only: bool = False) -> pd.DataFrame:
+    """One event per insider buying cluster: the day it became public (the filing that completed it).
+
+    min_value: only count clusters whose buys total at least this many dollars.
+    officers_only: only count buys by executives (CEO, CFO, president, ...), not
+    directors or 10% owners.
+    """
     df = pd.read_sql_query(
-        """SELECT ticker, insider, filed, shares * COALESCE(price, 0) AS value FROM insider_trades
+        """SELECT ticker, insider, role, filed, shares * COALESCE(price, 0) AS value FROM insider_trades
            WHERE code = 'P' AND ticker IS NOT NULL AND filed >= ? ORDER BY ticker, filed""",
         con, params=[since], parse_dates=["filed"],
     )
+    if officers_only:
+        role = df["role"].fillna("").str.lower()
+        df = df[role.apply(lambda r: any(w in r for w in OFFICER_WORDS))]
     events = []
     window = pd.Timedelta(days=window_days)
     for ticker, g in df.groupby("ticker", sort=False):
@@ -41,10 +52,11 @@ def cluster_events(con: sqlite3.Connection, window_days: int = 30, min_buyers: i
             while filed[hi] - filed[lo] > window:
                 lo += 1
             buyers = set(insider[lo : hi + 1])
-            if len(buyers) >= min_buyers and (last_event is None or filed[hi] - last_event > window):
+            total = float(sum(value[lo : hi + 1]))
+            if (len(buyers) >= min_buyers and total >= min_value
+                    and (last_event is None or filed[hi] - last_event > window)):
                 last_event = filed[hi]
-                events.append({"ticker": ticker, "date": filed[hi], "buyers": len(buyers),
-                               "value": float(sum(value[lo : hi + 1]))})
+                events.append({"ticker": ticker, "date": filed[hi], "buyers": len(buyers), "value": total})
     return pd.DataFrame(events, columns=["ticker", "date", "buyers", "value"])
 
 

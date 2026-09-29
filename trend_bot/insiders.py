@@ -32,7 +32,7 @@ CACHE_DIR = Path("data_cache") / "sec"
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
-REQUEST_GAP = 0.15  # seconds between requests; SEC allows at most 10 per second
+REQUEST_GAP = 0.2  # seconds between requests; SEC allows at most 10 per second, we stay well below
 
 CODE_NAMES = {
     "P": "BUY", "S": "SELL", "A": "AWARD", "M": "OPTION EXERCISE", "F": "TAX WITHHOLDING",
@@ -85,17 +85,31 @@ def user_agent(env_file: str | Path = ".env") -> str:
     return ua
 
 
+_ok_requests = 0
+RATE_LIMIT_WAITS = (60, 180, 600)  # seconds to back off when the SEC starts refusing
+
+
 def _get(url: str) -> bytes:
-    global _last_request
-    wait = REQUEST_GAP - (time.time() - _last_request)
-    if wait > 0:
-        time.sleep(wait)
-    resp = requests.get(url, headers={"User-Agent": user_agent(), "Accept-Encoding": "gzip, deflate"}, timeout=20)
-    _last_request = time.time()
-    if resp.status_code == 403:
-        raise RuntimeError("SEC refused the request (403). Check SEC_USER_AGENT in .env has a name and an email.")
-    resp.raise_for_status()
-    return resp.content
+    """GET from the SEC, paced, and waiting it out if the SEC rate-limits us."""
+    global _last_request, _ok_requests
+    for attempt in range(len(RATE_LIMIT_WAITS) + 1):
+        wait = REQUEST_GAP - (time.time() - _last_request)
+        if wait > 0:
+            time.sleep(wait)
+        resp = requests.get(url, headers={"User-Agent": user_agent(), "Accept-Encoding": "gzip, deflate"}, timeout=20)
+        _last_request = time.time()
+        if resp.status_code not in (403, 429):
+            resp.raise_for_status()
+            _ok_requests += 1
+            return resp.content
+        if resp.status_code == 403 and _ok_requests == 0:
+            # Refused from the very first request: almost always a missing/bad User-Agent.
+            raise RuntimeError("SEC refused the request (403). Check SEC_USER_AGENT in .env has a name and an email.")
+        if attempt < len(RATE_LIMIT_WAITS):
+            pause = RATE_LIMIT_WAITS[attempt]
+            print(f"[sec] the SEC is limiting requests; waiting {pause // 60} min before continuing...")
+            time.sleep(pause)
+    raise RuntimeError("The SEC is still limiting requests. Progress is saved - run the same command again later.")
 
 
 def _cached(path: Path, url: str, max_age_hours: float | None) -> bytes:
