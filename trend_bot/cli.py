@@ -495,6 +495,36 @@ def _print_fates(con, study, events: pd.DataFrame, ev: pd.DataFrame, args: argpa
           + pct(study.summarize(worst, min_price=args.min_price)))
 
 
+def _study_momentum(con, args: argparse.Namespace) -> None:
+    from trend_bot import momentum
+
+    print("Loading month-end prices for every stock (takes a minute)...")
+    closes, dollar_vol = momentum.monthly_panel(con)
+    monthly = momentum.backtest(closes, dollar_vol, lookback=args.lookback, skip=1, top=args.top,
+                                min_price=args.min_price, min_dollar_vol=args.min_volume)
+    monthly = monthly[monthly.index >= pd.Timestamp(args.since)]
+    if args.until:
+        monthly = monthly[monthly.index <= pd.Timestamp(args.until)]
+    if monthly.empty:
+        print("Not enough data.")
+        return
+    monthly = momentum.add_benchmark(con, monthly, args.benchmark)
+    top_label, bottom_label = f"Top {args.top:.0%} (winners)", f"Bottom {args.top:.0%} (losers)"
+    monthly = monthly.rename(columns={"top": top_label, "bottom": bottom_label, "all": "All stocks (equal)"})
+    cols = [top_label, "All stocks (equal)", bottom_label, args.benchmark]
+    print(f"\nMomentum: rank by the {args.lookback}-month return (skipping the latest month), "
+          f"rebalance monthly, 0.1% cost per trade")
+    print(f"{monthly.index[0]:%Y-%m} to {monthly.index[-1]:%Y-%m}, on average "
+          f"{monthly['stocks'].mean():,.0f} eligible stocks a month\n")
+    table = momentum.stats(monthly, cols, base="All stocks (equal)")
+    table["beat_all_months"] = table["beat_all_months"].map(lambda v: "–" if pd.isna(v) else f"{v:.0%}")
+    print(table.to_string(formatters={"cagr": "{:+.1%}".format, "volatility": "{:.0%}".format,
+                                      "max_drawdown": "{:.0%}".format, "total": "{:+.0%}".format}))
+    print("\ncagr = yearly growth, beat_all_months = share of months it beat the all-stocks average")
+    print("\nYear by year:\n" + momentum.yearly(monthly, cols).to_string(
+        float_format=lambda v: f"{v:+.0%}"))
+
+
 def cmd_study(args: argparse.Namespace) -> int:
     from trend_bot import db, study
     from trend_bot.screen import liquid_tickers
@@ -526,6 +556,9 @@ def cmd_study(args: argparse.Namespace) -> int:
                     print(f"\n...when the price trend was {trend} ({strategy.label}):\n"
                           + pct(study.summarize(part, min_price=args.min_price)))
                 _print_fates(con, study, events, ev, args, pct)
+        if args.signal == "momentum":
+            _study_momentum(con, args)
+            return 0
         if args.signal in ("trend", "both"):
             tickers = liquid_tickers(con, args.min_price, args.min_volume)
             if args.max_tickers:
@@ -702,10 +735,12 @@ def make_parser() -> argparse.ArgumentParser:
     sc.set_defaults(func=cmd_screen)
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
-    st.add_argument("signal", choices=["insiders", "trend", "both"])
+    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum"])
     st.add_argument("--since", default="2006-01-01", help="first event date")
     st.add_argument("--until", help="last event date, e.g. 2015-12-31 (to test on one period, confirm on another)")
     st.add_argument("--max-tickers", type=int, help="trend study: limit the number of stocks (faster)")
+    st.add_argument("--top", type=float, default=0.1, help="momentum: share of stocks to hold (default 0.1 = top 10%%)")
+    st.add_argument("--lookback", type=int, default=12, help="momentum: months of past return to rank by")
     st.add_argument("--min-value", type=float, default=0,
                     help="insiders study: only clusters where insiders bought at least this many $ in total")
     st.add_argument("--officers-only", action="store_true",

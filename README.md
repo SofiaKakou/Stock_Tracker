@@ -132,7 +132,26 @@ python -m trend_bot screen --days 5 --signal buy
 python -m trend_bot screen --min-price 10 --min-volume 5000000
 ```
 
-Stocks under $5, or averaging under $1M of trading a day, are skipped by default. Flips that also have an insider buying cluster are listed first. `alert --market` adds a 🌎 **Market screen** message with the top results to your Discord alert.
+Stocks under $5, stocks averaging under $1M of trading a day, and funds (closed-end funds and ETFs, identified by their SEC industry code) are skipped by default. Use `--include-funds` to keep the funds. Flips that also have an insider buying cluster are listed first.
+
+🔔 **Strong insider picks** are stocks where 3 or more insiders bought $250k+ in the last 30 days *and* the price trend is up. This was the best-performing rule in the studies. `alert --market` adds a 🌎 **Market screen** message to your Discord alert, with strong picks first and **NEW** on ones not seen before.
+
+### Track record
+
+```bash
+python -m trend_bot track                        # how every flagged stock has done since
+python -m trend_bot track --signal strong_insider --benchmark IWM
+```
+
+Every night, `alert --market` saves each flagged stock (new uptrends and downtrends, insider clusters, strong insider picks) with that day's price. `track` shows how they've done since, per signal and against a benchmark, plus the most recent picks. This is the most honest test of the signals: nobody can tune a rule to prices that didn't exist yet. Give it a few months.
+
+### Daily report page
+
+```bash
+python -m trend_bot report --open
+```
+
+Writes `reports/report-DATE.html` (and `reports/latest.html`): a web page with market breadth, strong insider picks with 6-month mini charts, new uptrends and downtrends, insider clusters and the track record. It works offline and follows your light/dark setting. The nightly `run_alerts.bat` creates it automatically.
 
 ### Test a signal on history
 
@@ -151,6 +170,15 @@ Refine the insider test with `--cluster-min 3` (more insiders), `--min-value 250
 Two caveats:
 - **Survivorship bias:** Yahoo only has prices for companies that still exist today. To correct for this, `db update` checks the SEC filings of every company that had insider buying but no longer has prices (about 15–30 minutes the first time, then only new ones). It flags **bankruptcies** (8-K Item 1.03) and **buyouts** (deregistration after merger paperwork). The insider study then adds a second set of results where bankruptcies count as −100% and buyouts as matching the benchmark. It also shows a worst case for the trend-UP group. Companies whose fate is unclear are still left out.
 - **Overlapping events:** events that overlap in time aren't independent, so treat small differences between results as noise.
+
+### Momentum
+
+```bash
+python -m trend_bot study momentum --benchmark SPY
+python -m trend_bot study momentum --top 0.2 --lookback 6 --since 2016-01-01
+```
+
+Momentum is one of the best-documented patterns in stock markets: stocks that rose most over the past year tend to keep outperforming for a while. At the end of each month, the study ranks every stock by its return over the past 12 months (`--lookback`), skipping the latest month because very recent moves tend to reverse. It then holds the top 10% (`--top`) for a month, charging 0.1% per trade. The result is compared with the losers, all stocks held equally, and the benchmark, both overall and year by year. Survivorship bias applies here too.
 
 Backtests can read from the database too: `python -m trend_bot backtest NVDA --from-db --period max`.
 
@@ -227,6 +255,10 @@ trend_bot/
   screen.py      whole-market screen
   study.py       event studies: did a signal come before better returns?
   fates.py       what happened to delisted companies (bankrupt / bought out)
+  company_info.py SEC industry codes (to leave funds out of the screen)
+  track.py       records flagged stocks and measures how they did
+  report.py      the daily HTML report
+  momentum.py    monthly momentum backtest
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs

@@ -472,3 +472,8 @@ def test_report_page(full_db, tmp_path):
     assert page.startswith("<!doctype html>") and "prefers-color-scheme: dark" in page
     assert "FLIP" in page and "<svg" in page and "Track record" in page and "New uptrends (1)" in page
     assert len(list(out.glob("report-*.html"))) == 1
+
+
+def test_cli_momentum_small_db(full_db, tmp_path, capsys):
+    assert main(["study", "momentum", "--db", str(tmp_path / "market.db"), "--since", "2000-01-01"]) == 0
+    assert "Not enough data" in capsys.readouterr().out  # 3 stocks is too few to rank
