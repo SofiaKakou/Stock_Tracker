@@ -79,6 +79,28 @@ python -m trend_bot scan --events       # scan with an extra "earnings" column
 
 This is **context, not a signal**. Big public news, like a new product launch, is usually reflected in the price within minutes. Earnings dates are still worth knowing, because prices often jump sharply around them.
 
+### Insider trades (SEC Form 4)
+
+Company insiders (executives, directors, and anyone owning 10% or more) must report trades in their own company's stock to the SEC within two business days. The bot reads these public filings for free.
+
+```bash
+python -m trend_bot insiders NVDA            # open-market buys and sells, last 90 days
+python -m trend_bot insiders NVDA --all      # also awards, option exercises, gifts...
+python -m trend_bot scan --insiders          # scan with an "insiders_90d" column
+```
+
+- **Buys matter most.** An insider spending their own money on the open market is a meaningful signal. **Cluster buying**, where two or more different insiders buy within 30 days, is the pattern with the best track record in research.
+- **Sales matter much less.** Insiders sell for taxes, diversification, or big purchases. Many sales are pre-scheduled "10b5-1" plans (marked `10b5-1` in the output), which say even less.
+- ETFs like SPY have no insiders, so they show "none".
+
+**Setup:** the SEC asks every automated tool to identify itself. Add your name and email to `.env`:
+
+```
+SEC_USER_AGENT=Your Name your.email@example.com
+```
+
+Filings are cached in `data_cache/sec/`, so only the first run for a ticker is slow.
+
 ## Discord alerts
 
 The bot can post to a Discord channel whenever a stock's trend flips. Each alert shows the price, the 20-day change, RSI, the next earnings date, and a few recent headlines.
@@ -100,6 +122,8 @@ python -m trend_bot alert --test        # sends "Trend Bot is connected"
 python -m trend_bot alert --summary     # real run, plus a table of every ticker
 python -m trend_bot alert --dry-run     # print the messages instead of sending
 ```
+
+If `SEC_USER_AGENT` is set, alerts also check insider trades. A trend alert includes each stock's insider buys and sells from the last 90 days. A separate 🔔 **Insider buying** alert goes out when 2 or more insiders buy within 30 days (change with `--cluster-min` and `--cluster-days`). Each cluster is announced only once. Use `--no-insiders` to turn this off.
 
 The bot remembers each ticker's last trend in `alert_state.json`. The next run reports every change since then, even if the computer was off for a few days. On the very first run it only alerts for flips that happened that day.
 
@@ -143,6 +167,7 @@ trend_bot/
   portfolio.py   multi-ticker backtest with one pot of money
   plot.py        backtest charts (matplotlib)
   news.py        earnings dates and headlines (Yahoo Finance)
+  insiders.py    insider trades from SEC Form 4 filings
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs
@@ -154,6 +179,7 @@ To add a strategy, subclass `Strategy` in `strategy.py`, implement `generate()` 
 ## Ideas for next steps
 
 - **Risk controls**: position sizing by volatility, stop-losses based on average daily range (ATR), and a cap on how much goes into any one stock.
+- **Test the insider signal**: backtest "trend is up *and* insiders bought recently" against the trend alone.
 - **Event filters**: backtest rules like "don't buy in the week before earnings" to see whether they reduce nasty surprises.
 - **Headline sentiment**: score headlines as positive or negative (for example with an AI model) and test whether that adds anything on top of the trend.
 - **Parameter sweeps**: find which MA windows would have worked, then check them on data the sweep didn't use (walk-forward) to avoid overfitting.

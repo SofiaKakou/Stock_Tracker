@@ -19,11 +19,13 @@ from pathlib import Path
 
 import requests
 
+from trend_bot.insiders import InsiderSummary, InsiderTrade
 from trend_bot.news import Headline
 
 GREEN = 0x0CA30C
 RED = 0xD03B3B
 GRAY = 0x8D8C86
+GOLD = 0xEDA100
 MAX_EMBEDS = 10  # Discord's limit per message
 
 
@@ -71,10 +73,21 @@ def find_changes(rows: list[dict], state: dict) -> list[dict]:
 
 
 def updated_state(rows: list[dict], state: dict) -> dict:
-    new = dict(state)
+    new = {t: dict(v) for t, v in state.items()}
     for row in rows:
-        new[row["ticker"]] = {"trend": row["trend"], "date": str(row["date"]), "close": row["close"]}
+        new.setdefault(row["ticker"], {}).update(trend=row["trend"], date=str(row["date"]), close=row["close"])
     return new
+
+
+def new_cluster(ticker: str, cluster: list[InsiderTrade] | None, state: dict) -> bool:
+    """True if there's an insider buying cluster we haven't alerted about yet."""
+    if not cluster:
+        return False
+    return state.get(ticker, {}).get("insider_alerted") != cluster[0].accession
+
+
+def mark_cluster(ticker: str, cluster: list[InsiderTrade], state: dict) -> None:
+    state.setdefault(ticker, {})["insider_alerted"] = cluster[0].accession
 
 
 def _headline_lines(items: list[Headline], limit: int = 1000) -> str:
@@ -91,7 +104,8 @@ def _headline_lines(items: list[Headline], limit: int = 1000) -> str:
     return "\n".join(out)
 
 
-def change_embed(row: dict, strategy_label: str, earnings: str = "", news: list[Headline] | None = None) -> dict:
+def change_embed(row: dict, strategy_label: str, earnings: str = "", news: list[Headline] | None = None,
+                 insiders: InsiderSummary | None = None) -> dict:
     up = row["trend"] == "UP"
     fields = [
         {"name": "Close", "value": f"{row['close']:,.2f}", "inline": True},
@@ -100,6 +114,8 @@ def change_embed(row: dict, strategy_label: str, earnings: str = "", news: list[
     ]
     if earnings:
         fields.append({"name": "Next earnings", "value": earnings, "inline": True})
+    if insiders is not None:
+        fields.append({"name": "Insiders (90 days)", "value": insiders.short, "inline": True})
     if news:
         fields.append({"name": "Recent headlines", "value": _headline_lines(news), "inline": False})
     return {
@@ -107,6 +123,22 @@ def change_embed(row: dict, strategy_label: str, earnings: str = "", news: list[
         "description": f"Trend turned **{'up' if up else 'down'}** ({strategy_label}), as of {row['date']}.",
         "color": GREEN if up else RED,
         "fields": fields,
+    }
+
+
+def insider_embed(ticker: str, cluster: list[InsiderTrade], trend: str | None = None) -> dict:
+    buyers = sorted({t.insider for t in cluster})
+    total = sum(t.value for t in cluster)
+    lines = []
+    for t in cluster[:8]:
+        price = f" @ {t.price:,.2f}" if t.price else ""
+        lines.append(f"• {t.date:%b %d}  **{t.insider}** ({t.role}): {t.shares:,.0f} sh{price}")
+    trend_note = f"\nPrice trend right now: **{trend}**." if trend else ""
+    return {
+        "title": f"🔔 Insider buying  {ticker}",
+        "description": (f"{len(buyers)} insiders bought shares on the open market "
+                        f"(about ${total:,.0f} in total).{trend_note}\n\n" + "\n".join(lines)),
+        "color": GOLD,
     }
 
 

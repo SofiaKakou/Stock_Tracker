@@ -7,6 +7,7 @@
     python -m trend_bot portfolio --plot        # backtest the whole watchlist together
     python -m trend_bot alert                   # send trend changes to Discord
     python -m trend_bot news NVDA               # next earnings date + recent headlines
+    python -m trend_bot insiders NVDA           # insider buys/sells from SEC Form 4 filings
 """
 
 from __future__ import annotations
@@ -101,10 +102,24 @@ def cmd_scan(args: argparse.Namespace) -> int:
         from trend_bot.news import earnings_note, next_earnings
 
         table["earnings"] = [earnings_note(next_earnings(t)) or "–" for t in table.index]
+    if args.insiders:
+        from trend_bot import insiders
+
+        table["insiders_90d"] = [_insider_short(insiders, tk) for tk in table.index]
     table = table.sort_values("action", key=lambda s: s.map(ACTION_ORDER))
     print(f"Strategy: {strategy.label}\n")
     print(table.to_string())
     return 0
+
+
+def _insider_short(insiders, ticker: str) -> str:
+    if ticker.lower().endswith(".csv"):
+        return "–"
+    try:
+        return insiders.summarize(insiders.fetch_trades(ticker, days=90)).short
+    except Exception as e:
+        print(f"[insiders] {ticker}: {e}", file=sys.stderr)
+        return "?"
 
 
 def cmd_backtest(args: argparse.Namespace) -> int:
@@ -209,13 +224,42 @@ def cmd_alert(args: argparse.Namespace) -> int:
 
     state = alerts.load_state(args.state)
     changes = alerts.find_changes(rows, state)
+
+    # Insider trades (last 90 days) for every ticker, unless turned off.
+    insider_trades = {}
+    if not args.no_insiders:
+        from trend_bot import insiders
+
+        for r in rows:
+            if r["ticker"].lower().endswith(".csv"):
+                continue
+            try:
+                insider_trades[r["ticker"]] = insiders.fetch_trades(r["ticker"], days=90)
+            except Exception as e:
+                print(f"[insiders] skipped: {e}", file=sys.stderr)
+                if "SEC_USER_AGENT" in str(e):
+                    break  # same problem for every ticker
+
     embeds = []
     for row in changes:
-        note = news = None
+        note = news = summary = None
         if not args.no_news:
             note = earnings_note(next_earnings(row["ticker"]))
             news = headlines(row["ticker"], limit=3)
-        embeds.append(alerts.change_embed(row, strategy.label, note or "", news))
+        if row["ticker"] in insider_trades:
+            summary = insiders.summarize(insider_trades[row["ticker"]])
+        embeds.append(alerts.change_embed(row, strategy.label, note or "", news, summary))
+
+    new_state = alerts.updated_state(rows, state)
+    clusters = []
+    trend_of = {r["ticker"]: r["trend"] for r in rows}
+    for ticker, trades in insider_trades.items():
+        cluster = insiders.cluster_buy(trades, window_days=args.cluster_days, min_buyers=args.cluster_min)
+        if alerts.new_cluster(ticker, cluster, state):
+            embeds.append(alerts.insider_embed(ticker, cluster, trend_of.get(ticker)))
+            alerts.mark_cluster(ticker, cluster, new_state)
+            clusters.append(ticker)
+
     if args.summary:
         embeds.append(alerts.summary_embed(rows, strategy.label))
 
@@ -224,6 +268,8 @@ def cmd_alert(args: argparse.Namespace) -> int:
                                             for r in changes))
     else:
         print("No trend changes since the last run.")
+    if clusters:
+        print("Insider buying clusters: " + ", ".join(clusters))
 
     if embeds:
         for payload in alerts.payloads(embeds):
@@ -235,7 +281,7 @@ def cmd_alert(args: argparse.Namespace) -> int:
             print(f"Sent {len(embeds)} message(s) to Discord.")
 
     if not args.dry_run:
-        alerts.save_state(args.state, alerts.updated_state(rows, state))
+        alerts.save_state(args.state, new_state)
     return 0
 
 
@@ -254,6 +300,34 @@ def cmd_news(args: argparse.Namespace) -> int:
             print(f"  {when}{h.title}" + (f"  [{h.publisher}]" if h.publisher else ""))
             if h.url:
                 print(f"         {h.url}")
+        print()
+    return 0
+
+
+def cmd_insiders(args: argparse.Namespace) -> int:
+    from trend_bot import insiders
+
+    for ticker in tickers_from(args):
+        trades = insiders.fetch_trades(ticker, days=args.days, market_only=not args.all)
+        print(f"== {ticker}: insider trades filed in the last {args.days} days ==")
+        if not trades:
+            print("None found (or not a US-listed operating company, e.g. an ETF).\n")
+            continue
+        s = insiders.summarize(trades)
+        print(f"Open-market buys: {s.buys} (${s.buy_value:,.0f})   sells: {s.sells} (${s.sell_value:,.0f})")
+        cluster = insiders.cluster_buy(trades, window_days=args.cluster_days, min_buyers=args.cluster_min)
+        if cluster:
+            names = ", ".join(sorted({t.insider for t in cluster}))
+            print(f"*** Cluster buy: {len({t.insider for t in cluster})} insiders bought within "
+                  f"{args.cluster_days} days ({names})")
+        table = pd.DataFrame([{
+            "date": t.date, "insider": t.insider[:24], "role": t.role[:28], "type": t.kind,
+            "shares": f"{t.shares:,.0f}", "price": f"{t.price:,.2f}" if t.price else "–",
+            "value": f"${t.value:,.0f}" if t.price else "–", "plan": "10b5-1" if t.planned else "",
+        } for t in trades[: args.limit]])
+        print("\n" + table.to_string(index=False))
+        if len(trades) > args.limit:
+            print(f"... {len(trades) - args.limit} more (use --limit)")
         print()
     return 0
 
@@ -295,6 +369,7 @@ def make_parser() -> argparse.ArgumentParser:
 
     scan = sub.add_parser("scan", parents=[common, watch], help="show today's signal for each ticker")
     scan.add_argument("--events", action="store_true", help="add a column with the next earnings date")
+    scan.add_argument("--insiders", action="store_true", help="add a column with insider buys/sells (90 days)")
     scan.set_defaults(func=cmd_scan)
 
     bt = sub.add_parser("backtest", parents=[common, money, chart], help="backtest one ticker or CSV")
@@ -315,14 +390,32 @@ def make_parser() -> argparse.ArgumentParser:
     al.add_argument("--dry-run", action="store_true", help="print the messages instead of sending them")
     al.add_argument("--no-news", action="store_true", help="don't add earnings dates and headlines")
     al.add_argument("--state", default="alert_state.json", help="file that remembers the last trends")
+    al.add_argument("--no-insiders", action="store_true", help="don't check SEC insider trades")
+    al.add_argument("--cluster-days", type=int, default=30, help="window for an insider buying cluster")
+    al.add_argument("--cluster-min", type=int, default=2, help="different insiders needed for a cluster")
     al.set_defaults(func=cmd_alert)
 
     nw = sub.add_parser("news", parents=[watch], help="next earnings date and recent headlines")
     nw.add_argument("--limit", type=int, default=5, help="headlines per ticker")
     nw.set_defaults(func=cmd_news)
+
+    ins = sub.add_parser("insiders", parents=[watch], help="insider buys and sells from SEC Form 4 filings")
+    ins.add_argument("--days", type=int, default=90, help="look back this many days (default 90)")
+    ins.add_argument("--all", action="store_true", help="include awards, option exercises, gifts, ...")
+    ins.add_argument("--limit", type=int, default=20, help="rows to show per ticker")
+    ins.add_argument("--cluster-days", type=int, default=30, help="window for an insider buying cluster")
+    ins.add_argument("--cluster-min", type=int, default=2, help="different insiders needed for a cluster")
+    ins.set_defaults(func=cmd_insiders)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    # On Windows, output redirected to a file (like alerts.log) may use a legacy
+    # encoding; never crash over a character it can't represent.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     args = make_parser().parse_args(argv)
     return args.func(args)
