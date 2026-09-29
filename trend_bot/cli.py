@@ -283,6 +283,16 @@ def cmd_alert(args: argparse.Namespace) -> int:
             alerts.mark_cluster(ticker, cluster, new_state)
             clusters.append(ticker)
 
+    if args.model and Path(args.db).exists():
+        from trend_bot import db as mdb, model
+
+        with closing(mdb.connect(args.db)) as con:
+            res = model.update_portfolio(con)
+            if res["rebalanced"] and not args.dry_run:
+                _record_model_picks(con, res)
+        e = alerts.model_embed(res)
+        if e:
+            embeds.append(e)
     if args.market:
         embeds.extend(_market_embeds(args, strategy))
     if args.summary:
@@ -495,6 +505,41 @@ def _print_fates(con, study, events: pd.DataFrame, ev: pd.DataFrame, args: argpa
           + pct(study.summarize(worst, min_price=args.min_price)))
 
 
+def _study_model(con, args: argparse.Namespace) -> None:
+    from trend_bot import model
+
+    print("Scoring every stock at every month-end since the data starts (takes a few minutes)...")
+    monthly = model.backtest(con, hold=args.hold, universe=args.universe, buffer=args.buffer,
+                             cash_rate=args.cash_rate, benchmark=args.benchmark)
+    if monthly.empty:
+        print("Not enough data.")
+        return
+    b = args.benchmark
+    names = {"model": "Model + weather filter", "model_no_weather": "Model, always invested",
+             b: f"{b} (buy & hold)", f"{b}_weather": f"{b} + weather filter", "all_eligible": "All eligible stocks"}
+    cols = list(names)
+    fmt = {"cagr": "{:+.1%}".format, "volatility": "{:.0%}".format, "max_drawdown": "{:.0%}".format,
+           "return_per_risk": "{:.2f}".format, "total": "{:+.0%}".format}
+    print(f"\nTrend Score model: top {args.hold} of the {args.universe:,} most traded stocks, checked monthly, "
+          f"sell below rank {args.buffer}; 0.1% per trade; cash earns {args.cash_rate:g}%/yr")
+    periods = [("All years", monthly.index.min(), monthly.index.max()),
+               ("2006-2015 (check 1)", pd.Timestamp("2006-01-01"), pd.Timestamp("2015-12-31")),
+               ("2016-now (check 2)", pd.Timestamp("2016-01-01"), monthly.index.max())]
+    for label, start, end in periods:
+        part = monthly[(monthly.index >= max(start, pd.Timestamp(args.since))) & (monthly.index <= end)]
+        if part.empty:
+            continue
+        s = model.summarize(part, cols).rename(index=names)
+        print(f"\n== {label}: {part.index[0]:%Y-%m} to {part.index[-1]:%Y-%m} ==")
+        print(s.to_string(formatters=fmt))
+    print(f"\nIn the market {monthly['invested'].mean():.0%} of months; "
+          f"on average {monthly['turnover'].mean():.0%} of the portfolio changed each month.")
+    yearly = (1 + monthly[["model", "model_no_weather", b]]).groupby(monthly.index.year).prod() - 1
+    print("\nYear by year:\n" + yearly.rename(columns=names).rename_axis("year").to_string(
+        float_format=lambda v: f"{v:+.0%}"))
+    print("\nreturn_per_risk = yearly growth divided by volatility (higher is better).")
+
+
 def _study_momentum(con, args: argparse.Namespace) -> None:
     from trend_bot import momentum
 
@@ -559,6 +604,9 @@ def cmd_study(args: argparse.Namespace) -> int:
         if args.signal == "momentum":
             _study_momentum(con, args)
             return 0
+        if args.signal == "model":
+            _study_model(con, args)
+            return 0
         if args.signal in ("trend", "both"):
             tickers = liquid_tickers(con, args.min_price, args.min_volume)
             if args.max_tickers:
@@ -589,7 +637,7 @@ def cmd_track(args: argparse.Namespace) -> int:
     print(s.to_string(formatters={
         "avg_days": "{:.0f}".format, "avg_return": "{:+.1%}".format, "median_return": "{:+.1%}".format,
         "win_rate": "{:.0%}".format, "avg_vs_bench": "{:+.1%}".format, "beat_bench_rate": "{:.0%}".format}))
-    print("\n(For 'New downtrend' a negative return means the warning was right.)")
+    print("\n(For 'New downtrend' and 'Model sell' a negative return means the sell signal was right.)")
     recent = perf.sort_values("date", ascending=False).head(args.limit).copy()
     recent["signal"] = recent["signal"].map(lambda s: track.SIGNALS.get(s, s))
     for col in ("return", "vs_bench"):
@@ -622,6 +670,53 @@ def cmd_report(args: argparse.Namespace) -> int:
     if args.open and sys.stdout.isatty():
         open_file(dated)
     return 0
+
+
+def cmd_model(args: argparse.Namespace) -> int:
+    from trend_bot import db, model
+
+    with closing(db.connect(args.db)) as con:
+        res = model.update_portfolio(con, hold=args.hold, universe=args.universe, buffer=args.buffer,
+                                     force=args.rebalance)
+        if res["rebalanced"] and not args.no_record:
+            _record_model_picks(con, res)
+    _print_model(res, args.top)
+    return 0
+
+
+def _record_model_picks(con, res: dict) -> None:
+    for signal, tickers in (("model_buy", res["buys"]), ("model_sell", res["sells"])):
+        for t in tickers:
+            price = res["scores"]["close"].get(t)
+            if price is None:
+                price = con.execute("SELECT last_close FROM tickers WHERE ticker = ?", (t,)).fetchone()[0]
+            con.execute("INSERT OR IGNORE INTO picks VALUES (?, ?, ?, ?, ?)",
+                        (res["date"], t, signal, float(price), "Trend Score model"))
+    con.commit()
+
+
+def _print_model(res: dict, top: int) -> None:
+    weather = ("☀️  INVEST: the S&P 500 is above its 200-day average" if res["weather"] == "invest"
+               else "🌧️  CAUTION: the S&P 500 is below its 200-day average - the model says hold cash")
+    print(f"Trend Score model · {res['date']}\nMarket weather: {weather}")
+    if res["weather_changed"]:
+        print("   (the weather changed since the last run)")
+    if res["rebalanced"]:
+        print(f"\nMonthly check done today. Buy: {', '.join(res['buys']) or 'nothing'}  |  "
+              f"Sell: {', '.join(res['sells']) or 'nothing'}")
+    else:
+        print("\nNo changes: the portfolio is checked on the first run of each month (or use --rebalance).")
+    h = res["holdings"]
+    if len(h):
+        show = h[["since", "entry_price", "close", "return", "score_now"]].copy()
+        show["return"] = show["return"].map(lambda v: f"{v:+.1%}" if pd.notna(v) else "–")
+        show["score_now"] = show["score_now"].map(lambda v: f"{v:.0f}" if pd.notna(v) else "out of universe")
+        print(f"\nModel portfolio ({len(h)} stocks, equal amounts):\n" + show.to_string(float_format="{:,.2f}".format))
+    s = res["scores"].head(top).copy()
+    if len(s):
+        s = s[["score", "trend", "momentum", "high52", "steadiness", "insiders", "buyers", "close"]]
+        print(f"\nTop {len(s)} scores today (parts are 0-1, higher is better):\n" + s.to_string(
+            float_format="{:.2f}".format))
 
 
 # --- argument parsing ---------------------------------------------------------
@@ -686,6 +781,8 @@ def make_parser() -> argparse.ArgumentParser:
     al.add_argument("--state", default="alert_state.json", help="file that remembers the last trends")
     al.add_argument("--no-insiders", action="store_true", help="don't check SEC insider trades")
     al.add_argument("--market", action="store_true", help="add the whole-market screen (needs the database)")
+    al.add_argument("--model", action="store_true",
+                    help="add the Trend Score model's monthly buys/sells and weather changes (needs the database)")
     al.add_argument("--market-limit", type=int, default=10, help="stocks listed in the market screen")
     al.add_argument("--min-price", type=float, default=5, help="market screen: minimum share price")
     al.add_argument("--min-volume", type=float, default=1e6, help="market screen: minimum average daily $ volume")
@@ -735,12 +832,16 @@ def make_parser() -> argparse.ArgumentParser:
     sc.set_defaults(func=cmd_screen)
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
-    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum"])
+    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model"])
     st.add_argument("--since", default="2006-01-01", help="first event date")
     st.add_argument("--until", help="last event date, e.g. 2015-12-31 (to test on one period, confirm on another)")
     st.add_argument("--max-tickers", type=int, help="trend study: limit the number of stocks (faster)")
     st.add_argument("--top", type=float, default=0.1, help="momentum: share of stocks to hold (default 0.1 = top 10%%)")
     st.add_argument("--lookback", type=int, default=12, help="momentum: months of past return to rank by")
+    st.add_argument("--hold", type=int, default=20, help="model: stocks to hold (default 20)")
+    st.add_argument("--universe", type=int, default=1000, help="model: most traded stocks to choose from")
+    st.add_argument("--buffer", type=int, default=40, help="model: sell a stock once it falls below this rank")
+    st.add_argument("--cash-rate", type=float, default=2.0, help="model: yearly %% earned while in cash")
     st.add_argument("--min-value", type=float, default=0,
                     help="insiders study: only clusters where insiders bought at least this many $ in total")
     st.add_argument("--officers-only", action="store_true",
@@ -754,6 +855,16 @@ def make_parser() -> argparse.ArgumentParser:
     rp.add_argument("--benchmark", default="SPY", help="benchmark for the track record (default SPY)")
     rp.add_argument("--open", action="store_true", help="open the report in your browser")
     rp.set_defaults(func=cmd_report)
+
+    md = sub.add_parser("model", help="Trend Score model: today's portfolio, buy/sell signals, market weather")
+    md.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    md.add_argument("--hold", type=int, default=20, help="stocks to hold (default 20)")
+    md.add_argument("--universe", type=int, default=1000, help="most traded stocks to choose from")
+    md.add_argument("--buffer", type=int, default=40, help="sell a stock once it falls below this rank")
+    md.add_argument("--top", type=int, default=30, help="top scores to list")
+    md.add_argument("--rebalance", action="store_true", help="do the monthly check now")
+    md.add_argument("--no-record", action="store_true", help="don't save buys/sells for 'track'")
+    md.set_defaults(func=cmd_model)
 
     tr = sub.add_parser("track", help="how the stocks the bot flagged have done since")
     tr.add_argument("--db", default="market.db", help="database file (default: market.db)")

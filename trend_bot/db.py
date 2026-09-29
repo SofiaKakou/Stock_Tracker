@@ -80,6 +80,15 @@ CREATE TABLE IF NOT EXISTS picks (
     PRIMARY KEY (date, ticker, signal)
 ) WITHOUT ROWID;
 
+-- The Trend Score model portfolio (see model.py).
+CREATE TABLE IF NOT EXISTS model_holdings (
+    ticker      TEXT PRIMARY KEY,
+    rank        INTEGER,
+    since       TEXT,            -- date it entered the portfolio
+    entry_price REAL,
+    score       REAL             -- score at the last monthly check
+);
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 

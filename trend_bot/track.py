@@ -15,6 +15,8 @@ import pandas as pd
 from trend_bot.db import load_many
 
 SIGNALS = {
+    "model_buy": "📈 Model buy",
+    "model_sell": "📉 Model sell",
     "strong_insider": "🔔 3+ insiders, $250k+, uptrend",
     "insider_cluster": "Insider buying cluster",
     "uptrend": "New uptrend",

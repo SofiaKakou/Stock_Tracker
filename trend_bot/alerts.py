@@ -203,3 +203,22 @@ def market_embed(flips, clusters, strategy_label: str, limit: int = 10,
         "description": (f"{strategy_label}\n\n" + text)[:4000],
         "color": GOLD if len(strong) else GRAY,
     }
+
+
+def model_embed(res: dict) -> dict | None:
+    """Monthly model update (buys/sells), or a note when the market weather changes. None otherwise."""
+    invest = res["weather"] == "invest"
+    weather = ("☀️ **Invest** - the S&P 500 is above its 200-day average" if invest
+               else "🌧️ **Caution** - the S&P 500 is below its 200-day average; the model holds cash")
+    if res["rebalanced"]:
+        scores = res["scores"]
+        buy = [f"`{t:<6}` score {scores.loc[t, 'score']:.0f}, price {scores.loc[t, 'close']:,.2f}"
+               for t in res["buys"] if t in scores.index]
+        lines = [weather, "", f"**🟢 Buy ({len(res['buys'])})**", *(buy or ["nothing new"]),
+                 "", f"**🔴 Sell ({len(res['sells'])})**", ", ".join(f"`{t}`" for t in res["sells"]) or "nothing",
+                 "", f"Holding {len(res['holdings'])} stocks, equal amounts. Next check: first run of next month."]
+        return {"title": "📈 Trend Score model - monthly check", "description": "\n".join(lines)[:4000],
+                "color": GREEN if invest else RED}
+    if res["weather_changed"]:
+        return {"title": "🌦️ Market weather changed", "description": weather, "color": GREEN if invest else RED}
+    return None

@@ -164,6 +164,31 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
     parts += [f"<h2>Insider buying clusters, last 30 days ({len(clusters)})</h2>",
               _table(["Ticker", "Company", "6 months", "Insiders", "Bought", "Trend", "Strong"], cl_rows)]
 
+    held = pd.read_sql_query("SELECT * FROM model_holdings ORDER BY rank", con)
+    weather = con.execute("SELECT value FROM meta WHERE key = 'model_weather'").fetchone()
+    parts.append("<h2>📈 Trend Score model portfolio</h2>")
+    if weather:
+        parts.append('<p class="sub">Market weather: ' + (
+            '<b class="up">☀️ Invest</b>: the S&P 500 is above its 200-day average' if weather[0] == "invest"
+            else '<b class="down">🌧️ Caution</b>: the S&P 500 is below its 200-day average, so the model holds cash')
+            + "</p>")
+    if held.empty:
+        parts.append('<p class="empty">Not started yet. Run <code>python -m trend_bot model</code> '
+                     "(the nightly alert does this).</p>")
+    else:
+        mcloses = {t: df["Close"] for t, df in load_many(
+            con, list(held["ticker"]), start=(dt.date.today() - dt.timedelta(days=200)).isoformat()).items()}
+        mrows = []
+        for h in held.itertuples(index=False):
+            c = mcloses.get(h.ticker, pd.Series(dtype=float))
+            now = float(c.iloc[-1]) if len(c) else float("nan")
+            mrows.append([f"<b>{esc(h.ticker)}</b>", esc(str(h.since)), sparkline(c), f"{h.entry_price:,.2f}",
+                          f"{now:,.2f}", _pct(now / h.entry_price - 1 if h.entry_price else None),
+                          f"{h.score:.0f}"])
+        parts.append(_table(["Ticker", "Since", "6 months", "Bought at", "Now", "Return", "Score"], mrows, left={0, 1}))
+        parts.append('<p class="note">Equal amounts in each stock. Checked once a month: stocks that fall out of the '
+                     "top 40 are sold and the best new ones bought. Theoretical, not advice.</p>")
+
     perf = track.performance(con, benchmark=benchmark)
     parts.append(f"<h2>Track record (vs {esc(benchmark)})</h2>")
     if perf.empty:
@@ -175,8 +200,8 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
                  f"{r['beat_bench_rate']:.0%}"] for sig, r in s.iterrows()]
         parts.append(_table(["Signal", "Picks", "Avg days", "Avg return", "Median", "Went up",
                              f"Avg vs {esc(benchmark)}", f"Beat {esc(benchmark)}"], rows, left={0}))
-        parts.append(f'<p class="note">Since {perf["date"].min()}. For new downtrends, a negative return means '
-                     "the warning was right. Picks need months before these numbers mean much.</p>")
+        parts.append(f'<p class="note">Since {perf["date"].min()}. For new downtrends and model sells, a negative return '
+                     "means the sell signal was right. Picks need months before these numbers mean much.</p>")
 
     parts.append(f'<p class="note">Generated {dt.datetime.now():%Y-%m-%d %H:%M} by trend_bot. '
                  "Not financial advice.</p>")

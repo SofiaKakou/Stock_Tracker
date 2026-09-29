@@ -171,6 +171,31 @@ Two caveats:
 - **Survivorship bias:** Yahoo only has prices for companies that still exist today. To correct for this, `db update` checks the SEC filings of every company that had insider buying but no longer has prices (about 15–30 minutes the first time, then only new ones). It flags **bankruptcies** (8-K Item 1.03) and **buyouts** (deregistration after merger paperwork). The insider study then adds a second set of results where bankruptcies count as −100% and buyouts as matching the benchmark. It also shows a worst case for the trend-UP group. Companies whose fate is unclear are still left out.
 - **Overlapping events:** events that overlap in time aren't independent, so treat small differences between results as noise.
 
+### Trend Score model (buy and sell ideas)
+
+```bash
+python -m trend_bot study model        # 20-year test, split into 2006-2015 and 2016-now
+python -m trend_bot model              # today's portfolio, buy/sell signals, market weather
+```
+
+Every stock among the ~1,000 most traded (over $5, no funds) gets a **score from 0 to 100**, combining signals with research behind them:
+
+| Weight | Signal | Higher score when... |
+|---|---|---|
+| 25% | Trend | the price is above its 50- and 200-day averages |
+| 25% | Momentum | the 6- and 12-month return is strong (skipping the latest month) |
+| 20% | 52-week high | the price is close to its high of the past year |
+| 15% | Steadiness | day-to-day swings are small |
+| 15% | Insiders | 2+ insiders bought in the last 90 days (3+ sellers lower it) |
+
+The weights are fixed round numbers, not fitted to past data.
+
+- **Model portfolio:** the top 20 scores, equal amounts. It's checked once a month. A stock is sold only when it falls out of the top 40, which avoids needless trading, and the best new ones are bought.
+- **Market weather:** when the S&P 500 is below its 200-day average at the monthly check, the model holds cash.
+- **Signals:** the nightly alert (`--model`) posts 📈 **monthly buys and sells** to Discord, plus a note whenever the weather changes. The report page shows the portfolio, and `track` records every model buy and sell so you can see how they do.
+
+`study model` compares the model with and without the weather filter, SPY buy-and-hold, SPY with the weather filter, and all eligible stocks. It shows all years, then **2006–2015 and 2016–now separately**: a rule you can trust should hold up in both. Options: `--hold`, `--universe`, `--buffer`, `--cash-rate` (default 2%/yr while in cash). This is theoretical, and the survivorship bias caveat applies.
+
 ### Momentum
 
 ```bash
@@ -208,7 +233,7 @@ If `SEC_USER_AGENT` is set, alerts also check insider trades. A trend alert incl
 
 The bot remembers each ticker's last trend in `alert_state.json`. The next run reports every change since then, even if the computer was off for a few days. On the very first run it only alerts for flips that happened that day.
 
-**4. Run it every weekday (Windows).** `run_alerts.bat` runs `alert --summary` and appends the output to `alerts.log`. Once `market.db` exists, it also runs `db update` first and adds the market screen. Schedule it after the US market closes (4pm New York time, plus about an hour for the data to settle). Set `/ST` to that time in *your* time zone. `23:30` below is for Central/Eastern Europe:
+**4. Run it every weekday (Windows).** `run_alerts.bat` runs `alert --summary` and appends the output to `alerts.log`. Once `market.db` exists, it also runs `db update` first, adds the market screen and the Trend Score model (`--market --model`), and writes the report page. Schedule it after the US market closes (4pm New York time, plus about an hour for the data to settle). Set `/ST` to that time in *your* time zone. `23:30` below is for Central/Eastern Europe:
 
 ```powershell
 schtasks /Create /TN "TrendBot Alerts" /TR "$env:USERPROFILE\Stock_Tracker\run_alerts.bat" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 23:30
@@ -259,6 +284,7 @@ trend_bot/
   track.py       records flagged stocks and measures how they did
   report.py      the daily HTML report
   momentum.py    monthly momentum backtest
+  model.py       Trend Score model: scores, model portfolio, weather, backtest
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs
