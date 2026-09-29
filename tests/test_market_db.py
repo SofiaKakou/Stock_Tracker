@@ -213,7 +213,9 @@ def test_cli_db_screen_study(full_db, tmp_path, capsys):
     assert "FLIP" in out and "YES" in out and "Trend flips" in out
     assert main(["study", "both", "--db", path, "--fast", "10", "--slow", "50", "--since", "2000-01-01"]) == 0
     out = capsys.readouterr().out
-    assert "Insider cluster buys" in out and "survivorship" in out
+    assert "Insider cluster buys" in out and "survivorship" in out and "median_vs_bench" in out
+    assert main(["study", "insiders", "--db", path, "--since", "2000-01-01", "--until", "2001-01-01"]) == 0
+    assert "0 events" in capsys.readouterr().out
     assert main(["backtest", "UPPY", "--from-db", "--db", path, "--fast", "10", "--slow", "50", "--period", "max"]) == 0
     assert "Buy & hold" in capsys.readouterr().out
 

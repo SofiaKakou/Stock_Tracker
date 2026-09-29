@@ -146,6 +146,8 @@ For every past event, the study buys the day after the signal became public. It 
 
 Refine the insider test with `--cluster-min 3` (more insiders), `--min-value 250000` (bigger buys), and `--officers-only` (only executives like the CEO and CFO, not directors or large outside investors).
 
+**Avoid fooling yourself.** If you try enough combinations, one will look good by luck. Choose your rule on one period (`--until 2015-12-31`), then check it on a period it hasn't seen (`--since 2016-01-01`). Only trust a rule that holds up in both.
+
 Two caveats:
 - **Survivorship bias:** Yahoo only has companies that still exist today, and delisted companies are missing. Results come out somewhat better than reality.
 - **Overlapping events:** events that overlap in time aren't independent, so treat small differences between results as noise.

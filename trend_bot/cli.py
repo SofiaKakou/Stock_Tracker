@@ -445,19 +445,22 @@ def cmd_study(args: argparse.Namespace) -> int:
     strategy = build_strategy(args)
     with closing(db.connect(args.db)) as con:
         pct = lambda df: df.to_string(formatters={
-            c: "{:+.1%}".format for c in ("avg_return", "median_return", "avg_vs_bench")} | {
+            c: "{:+.1%}".format for c in ("avg_return", "median_return", "avg_vs_bench", "median_vs_bench")} | {
             c: "{:.0%}".format for c in ("win_rate", "beat_bench_rate")})
         print(f"Benchmark: {args.benchmark} (bought and sold on the same days as each stock)\n")
         if args.signal in ("insiders", "both"):
             events = study.cluster_events(con, window_days=args.cluster_days, min_buyers=args.cluster_min,
                                           since=args.since, min_value=args.min_value,
                                           officers_only=args.officers_only)
+            if args.until:
+                events = events[events["date"] <= pd.Timestamp(args.until)]
             rules = [f"{args.cluster_min}+ insiders within {args.cluster_days} days"]
             if args.min_value:
                 rules.append(f"at least ${args.min_value:,.0f} bought")
             if args.officers_only:
                 rules.append("executives only")
-            print(f"Insider cluster buys since {args.since} ({', '.join(rules)}): {len(events):,} events")
+            period = f"{args.since} to {args.until}" if args.until else f"since {args.since}"
+            print(f"Insider cluster buys {period} ({', '.join(rules)}): {len(events):,} events")
             ev = study.add_returns(con, events, strategy=strategy, benchmark=args.benchmark)
             if not ev.empty:
                 print("\nAll clusters (buy the day after the filing is public):\n" + pct(study.summarize(ev, min_price=args.min_price)))
@@ -470,6 +473,8 @@ def cmd_study(args: argparse.Namespace) -> int:
             if args.max_tickers:
                 tickers = tickers[: args.max_tickers]
             events = study.trend_flip_events(con, strategy, tickers, since=args.since)
+            if args.until:
+                events = events[events["date"] <= pd.Timestamp(args.until)]
             print(f"\nTrend BUY flips ({strategy.label}) in {len(tickers):,} stocks since {args.since}: "
                   f"{len(events):,} events")
             ev = study.add_returns(con, events, benchmark=args.benchmark)
@@ -589,6 +594,7 @@ def make_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
     st.add_argument("signal", choices=["insiders", "trend", "both"])
     st.add_argument("--since", default="2006-01-01", help="first event date")
+    st.add_argument("--until", help="last event date, e.g. 2015-12-31 (to test on one period, confirm on another)")
     st.add_argument("--max-tickers", type=int, help="trend study: limit the number of stocks (faster)")
     st.add_argument("--min-value", type=float, default=0,
                     help="insiders study: only clusters where insiders bought at least this many $ in total")
