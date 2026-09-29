@@ -6,12 +6,14 @@ Open, High, Low, Close, Volume (prices adjusted for splits/dividends).
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pandas as pd
 
 REQUIRED_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 CACHE_DIR = Path("data_cache")
+CACHE_MAX_AGE_MINUTES = 60
 
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
@@ -38,11 +40,14 @@ def load_csv(path: str | Path) -> pd.DataFrame:
 def load_yahoo(ticker: str, period: str = "2y", use_cache: bool = True) -> pd.DataFrame:
     """Download daily prices from Yahoo Finance, caching to data_cache/.
 
-    The cache is keyed by ticker, period and date, so it refreshes once a day.
+    A cached download is reused for CACHE_MAX_AGE_MINUTES, so repeated runs are
+    fast but a scheduled run later in the day still sees the latest close.
     """
-    cache_file = CACHE_DIR / f"{ticker.upper()}_{period}_{pd.Timestamp.today():%Y%m%d}.csv"
+    cache_file = CACHE_DIR / f"{ticker.upper()}_{period}.csv"
     if use_cache and cache_file.exists():
-        return load_csv(cache_file)
+        age_minutes = (time.time() - cache_file.stat().st_mtime) / 60
+        if age_minutes < CACHE_MAX_AGE_MINUTES:
+            return load_csv(cache_file)
 
     import yfinance as yf  # imported lazily so offline use doesn't need it
 

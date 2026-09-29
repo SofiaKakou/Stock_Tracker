@@ -30,3 +30,29 @@ def test_macd_columns():
 def test_slope_sign():
     assert ind.slope(pd.Series(np.linspace(1, 2, 50))).dropna().gt(0).all()
     assert ind.slope(pd.Series(np.linspace(2, 1, 50))).dropna().lt(0).all()
+
+
+def test_cache_expires(tmp_path, monkeypatch):
+    import os
+    import sys
+    import types
+
+    from conftest import make_prices
+    from trend_bot import data
+
+    monkeypatch.setattr(data, "CACHE_DIR", tmp_path)
+    calls = []
+
+    def fake_download(*a, **k):
+        calls.append(1)
+        return make_prices(np.linspace(1, 2, 30))
+
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(download=fake_download))
+    data.load_yahoo("abc", period="1y")
+    data.load_yahoo("abc", period="1y")
+    assert len(calls) == 1  # second call served from cache
+    cached = tmp_path / "ABC_1y.csv"
+    old = cached.stat().st_mtime - 2 * 3600
+    os.utime(cached, (old, old))
+    data.load_yahoo("abc", period="1y")
+    assert len(calls) == 2  # stale cache re-downloads

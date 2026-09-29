@@ -12,7 +12,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-The bot gets prices from Yahoo Finance through [`yfinance`](https://github.com/ranaroussi/yfinance), so you need an internet connection. Downloads are cached in `data_cache/` for the rest of the day.
+The bot gets prices from Yahoo Finance through [`yfinance`](https://github.com/ranaroussi/yfinance), so you need an internet connection. Downloads are cached in `data_cache/` for an hour, so repeated runs are fast and later runs still get fresh prices.
 
 ## Usage
 
