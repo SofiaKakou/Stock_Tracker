@@ -232,8 +232,8 @@ def test_alert_market_embed(full_db, tmp_path, monkeypatch):
 
 
 def test_non_stocks_filtered():
-    keep = ["AAPL", "BRK-B", "BF-A", "GOOGL", "SNOW", "ASMLF"]
-    drop = ["AACPW", "AAC-WT", "AACOW", "SPACU", "ABCDR", "BAC-PL", "PSA-P", "XYZ-UN", "XYZ-RT", "XYZ-WS"]
+    keep = ["AAPL", "BRK-B", "BF-A", "GOOGL", "SNOW", "ASMLF", "BABAY"]
+    drop = ["AACPW", "AAC-WT", "AACOW", "SPACU", "ABCDR", "BAC-PL", "PSA-P", "XYZ-UN", "XYZ-RT", "XYZ-WS", "BCAT-RW", "BCTXL"]
     assert all(market_data.is_common_stock(t) for t in keep)
     assert not any(market_data.is_common_stock(t) for t in drop)
 

@@ -21,7 +21,10 @@ BENCHMARKS = {"SPY": "SPDR S&P 500 ETF", "QQQ": "Invesco QQQ (Nasdaq-100)", "IWM
 Downloader = Callable[..., dict[str, pd.DataFrame]]
 
 # Suffixes the SEC list uses for things that aren't common shares.
-NON_STOCK_SUFFIXES = ("WT", "WS", "W", "U", "UN", "R", "RT", "RI")
+NON_STOCK_SUFFIXES = ("WT", "WS", "W", "U", "UN", "R", "RT", "RI", "RW")
+# Nasdaq 5th-letter codes for non-common securities: convertible bonds (G/H/I), preferreds
+# (M/N/O/P), rights (R), with-warrants (T), units (U), warrants (W), and misc (L/Z).
+NASDAQ_NON_STOCK = set("GHILMNOPRTUWZ")
 
 
 def is_common_stock(ticker: str) -> bool:
@@ -33,8 +36,7 @@ def is_common_stock(ticker: str) -> bool:
     if "-" in t:
         suffix = t.rsplit("-", 1)[1]
         return not (suffix in NON_STOCK_SUFFIXES or suffix.startswith("P"))
-    # Nasdaq 5-letter codes: 5th letter W = warrant, U = unit, R = rights, Z = other.
-    return not (len(t) == 5 and t[-1] in "WURZ")
+    return not (len(t) == 5 and t[-1] in NASDAQ_NON_STOCK)
 
 
 
