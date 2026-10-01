@@ -477,3 +477,32 @@ def test_report_page(full_db, tmp_path):
 def test_cli_momentum_small_db(full_db, tmp_path, capsys):
     assert main(["study", "momentum", "--db", str(tmp_path / "market.db"), "--since", "2000-01-01"]) == 0
     assert "Not enough data" in capsys.readouterr().out  # 3 stocks is too few to rank
+
+
+def test_etf_and_etn_flags(full_db):
+    from trend_bot import company_info
+
+    other = """ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
+GDXU|MicroSectors Gold Miners 3X Leveraged ETNs|P|GDXU|Y|100|N|GDXU
+UPPY|Uppy Inc. Common Stock|N|UPPY|N|100|N|UPPY
+BRK.B|Berkshire Hathaway Inc. Class B|N|BRK.B|N|100|N|BRK=B
+File Creation Time: 1001202608:00||||||||"""
+    nasdaq = """Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+FLIP|Flip Corp - Common Stock|Q|N|N|100|N|N
+File Creation Time: 1001202608:00|||||||"""
+    parsed = market_data.parse_symbol_list(other, "ACT Symbol")
+    assert parsed["GDXU"] == (True, "MicroSectors Gold Miners 3X Leveraged ETNs") and "BRK-B" in parsed
+
+    # GDXU is filed with the SEC under a bank, so neither its name nor industry code looks like a fund.
+    full_db.execute("INSERT INTO tickers(ticker, cik, name, exchange, sic) VALUES ('GDXU', 9, 'BANK OF MONTREAL', 'NYSE', 6029)")
+    assert "GDXU" not in company_info.fund_tickers(full_db)
+    pages = {"nasdaqlisted.txt": nasdaq, "otherlisted.txt": other}
+    n = market_data.update_etf_flags(full_db, fetch=lambda url: pages[url.rsplit("/", 1)[-1]].encode(), log=lambda *_: None)
+    assert n == 1 and "GDXU" in company_info.fund_tickers(full_db)
+    assert "FLIP" not in company_info.fund_tickers(full_db)
+
+    # A failed download changes nothing.
+    logs = []
+    assert market_data.update_etf_flags(full_db, fetch=lambda url: 1 / 0, log=logs.append) == 0
+    assert "GDXU" in company_info.fund_tickers(full_db) and "couldn't read" in logs[0]
+    assert company_info.is_fund("Some Bank", 6029, "NYSE", None, "Direxion Daily 2X Bull Shares")

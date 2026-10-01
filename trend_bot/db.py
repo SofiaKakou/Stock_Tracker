@@ -105,7 +105,8 @@ def connect(path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
 
 # Columns added after the first release; ALTER TABLE adds them to older databases.
 EXTRA_COLUMNS = {
-    "tickers": {"sic": "INTEGER", "sic_desc": "TEXT", "info_checked_at": "TEXT"},
+    "tickers": {"sic": "INTEGER", "sic_desc": "TEXT", "info_checked_at": "TEXT",
+                "is_etf": "INTEGER", "security_name": "TEXT"},
 }
 
 

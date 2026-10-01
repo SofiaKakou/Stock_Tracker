@@ -439,6 +439,9 @@ def cmd_db(args: argparse.Namespace) -> int:
         if everything or args.universe_only or args.prices_only:
             n = market_data.update_universe(con, include_otc=args.include_otc, all_securities=args.all_securities)
             print(f"[universe] {n:,} tickers")
+            etfs = market_data.update_etf_flags(con)
+            if etfs:
+                print(f"[universe] {etfs:,} ETFs/ETNs flagged (left out of screens and models)")
         if everything or args.prices_only:
             counts = market_data.update_prices(con, period=args.period, batch_size=args.batch, pause=args.pause,
                                                retry_failed=args.retry_failed, limit=args.limit)

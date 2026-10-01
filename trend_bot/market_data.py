@@ -43,6 +43,58 @@ def is_common_stock(ticker: str) -> bool:
 
 # --- Universe ------------------------------------------------------------------
 
+# Nasdaq's daily lists of every US-listed security, with an ETF flag (covers ETFs and ETNs).
+SYMBOL_LISTS = {
+    "nasdaq": ("https://www.nasdaqtrader.com/dynamic/SymbDir/nasdaqlisted.txt", "Symbol"),
+    "other": ("https://www.nasdaqtrader.com/dynamic/SymbDir/otherlisted.txt", "ACT Symbol"),
+}
+
+
+def parse_symbol_list(text: str, symbol_col: str) -> dict[str, tuple[bool, str]]:
+    """{ticker: (is ETF/ETN, security name)} from a Nasdaq Trader symbol directory file."""
+    lines = [ln for ln in text.splitlines() if ln and not ln.startswith("File Creation Time")]
+    if not lines:
+        return {}
+    header = lines[0].split("|")
+    if symbol_col not in header or "ETF" not in header:
+        return {}
+    i_sym, i_etf, i_name = header.index(symbol_col), header.index("ETF"), header.index("Security Name")
+    out = {}
+    for ln in lines[1:]:
+        f = ln.split("|")
+        if len(f) < len(header):
+            continue
+        out[f[i_sym].strip().upper().replace(".", "-")] = (f[i_etf].strip() == "Y", f[i_name].strip())
+    return out
+
+
+def update_etf_flags(con: sqlite3.Connection, fetch: Callable[[str], bytes] | None = None,
+                     log: Callable[[str], None] = print) -> int:
+    """Mark ETFs/ETNs (e.g. leveraged products filed under a bank) using Nasdaq's symbol lists.
+
+    Best effort: if the lists can't be downloaded, nothing changes.
+    """
+    def default_fetch(url: str) -> bytes:
+        import requests
+
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        return resp.content
+
+    fetch = fetch or default_fetch
+    flags: dict[str, tuple[bool, str]] = {}
+    for url, col in SYMBOL_LISTS.values():
+        try:
+            flags.update(parse_symbol_list(fetch(url).decode("utf-8", "replace"), col))
+        except Exception as e:
+            log(f"[universe] couldn't read {url.rsplit('/', 1)[-1]} ({e}); ETF/ETN flags not updated")
+            return 0
+    rows = [(int(is_etf), name, t) for t, (is_etf, name) in flags.items()]
+    con.executemany("UPDATE tickers SET is_etf = ?, security_name = ? WHERE ticker = ?", rows)
+    con.commit()
+    return sum(1 for is_etf, _, _ in rows if is_etf)
+
+
 def update_universe(con: sqlite3.Connection, include_otc: bool = False, all_securities: bool = False) -> int:
     """Refresh the ticker list from the SEC. Returns the number of tickers tracked.
 

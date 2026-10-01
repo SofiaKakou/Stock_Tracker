@@ -20,14 +20,16 @@ from trend_bot import insiders
 
 FUND_SIC = {6722, 6726}
 # Names that are always funds/ETFs, even when the SEC code is something else.
-ETF_WORDS = re.compile(r"\b(ETF|ETN|ISHARES|SPDR|PROSHARES|DIREXION)\b", re.I)
+ETF_WORDS = re.compile(r"\b(ETF|ETFS|ETN|ETNS|ISHARES|SPDR|PROSHARES|DIREXION|LEVERAGED|INVERSE|\d(\.\d+)?X)\b", re.I)
 # Used only while the SEC code hasn't been looked up yet.
 FUND_WORDS = re.compile(r"\b(FUND|FD|PORTFOLIO|MUNICIPAL|MUNI|PREFERRED INCOME|INCOME (FUND|TRUST))\b", re.I)
 
 
-def is_fund(name: str | None, sic: int | None, exchange: str | None) -> bool:
+def is_fund(name: str | None, sic: int | None, exchange: str | None,
+            is_etf: int | None = None, security_name: str | None = None) -> bool:
+    """True for funds, ETFs and ETNs (including leveraged products filed under the issuing bank)."""
     name = name or ""
-    if exchange == "ETF" or ETF_WORDS.search(name):
+    if exchange == "ETF" or is_etf or ETF_WORDS.search(name) or ETF_WORDS.search(security_name or ""):
         return True
     if sic is not None:
         return sic in FUND_SIC
@@ -35,8 +37,8 @@ def is_fund(name: str | None, sic: int | None, exchange: str | None) -> bool:
 
 
 def fund_tickers(con: sqlite3.Connection) -> set[str]:
-    rows = con.execute("SELECT ticker, name, sic, exchange FROM tickers")
-    return {t for t, name, sic, exch in rows if is_fund(name, sic, exch)}
+    rows = con.execute("SELECT ticker, name, sic, exchange, is_etf, security_name FROM tickers")
+    return {t for t, name, sic, exch, etf, sec_name in rows if is_fund(name, sic, exch, etf, sec_name)}
 
 
 def update_company_info(con: sqlite3.Connection, fetch: Callable[[str], bytes] | None = None,

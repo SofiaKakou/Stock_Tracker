@@ -132,7 +132,7 @@ python -m trend_bot screen --days 5 --signal buy
 python -m trend_bot screen --min-price 10 --min-volume 5000000
 ```
 
-Stocks under $5, stocks averaging under $1M of trading a day, and funds (closed-end funds and ETFs, identified by their SEC industry code) are skipped by default. Use `--include-funds` to keep the funds. Flips that also have an insider buying cluster are listed first.
+Stocks under $5 and stocks averaging under $1M of trading a day are skipped by default, and so are funds. Funds include closed-end funds (identified by their SEC industry code) and ETFs/ETNs. ETFs/ETNs are identified from Nasdaq's daily list of every US-listed security, which also catches leveraged products like GDXU that the SEC files under the issuing bank. Use `--include-funds` to keep the funds. Flips that also have an insider buying cluster are listed first.
 
 🔔 **Strong insider picks** are stocks where 3 or more insiders bought $250k+ in the last 30 days *and* the price trend is up. This was the best-performing rule in the studies. `alert --market` adds a 🌎 **Market screen** message to your Discord alert, with strong picks first and **NEW** on ones not seen before.
 
