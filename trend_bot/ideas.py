@@ -1,0 +1,142 @@
+"""Monthly top ideas from the simple mix: every signal ranked, then averaged, nothing fitted.
+
+In the walk-forward test (study ml) the plain equal-weight average of all the
+signals was steadier than the machine-learning model, so it's the bot's main
+ideas list. Each stock in the universe (~1,000 most traded, over $5, no funds)
+is ranked on every signal, each pointed the way research expects (cheap,
+profitable, beating earnings, few short sellers, strong past year, ...); the
+average of those ranks is its score.
+
+Each idea comes with the signals that put it there, and every list is recorded
+for forward tracking, so its real track record builds up month by month.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import sqlite3
+
+import numpy as np
+import pandas as pd
+
+from trend_bot import factors, fundamentals, ml
+from trend_bot.db import get_meta, set_meta
+
+MIN_SIGNALS = 8  # stocks with fewer known signals aren't listed (too little to go on)
+
+# What a high (oriented) rank on each signal means, and what a low one means.
+GOOD = {
+    "gross_profitability": "very profitable", "roe": "high return on equity",
+    "accruals": "profits backed by cash", "leverage": "little debt",
+    "revenue_growth": "fast sales growth", "asset_growth": "not over-expanding",
+    "earnings_yield": "cheap vs profits", "book_to_market": "cheap vs book value",
+    "sales_to_price": "cheap vs sales", "sue": "profit beat", "revenue_sue": "sales beat",
+    "ear": "market liked last report", "short_ratio": "few short sellers",
+    "days_to_cover": "shorts can exit easily", "short_change": "short sellers backing off",
+    "short_volume_ratio": "little short selling", "mom12": "strong past year",
+}
+BAD = {
+    "gross_profitability": "weak profitability", "roe": "low return on equity",
+    "accruals": "profits not backed by cash", "leverage": "heavy debt",
+    "revenue_growth": "shrinking sales", "asset_growth": "expanding fast",
+    "earnings_yield": "expensive vs profits", "book_to_market": "expensive vs book value",
+    "sales_to_price": "expensive vs sales", "sue": "profit miss", "revenue_sue": "sales miss",
+    "ear": "market disliked last report", "short_ratio": "heavily shorted",
+    "days_to_cover": "crowded short", "short_change": "short sellers piling in",
+    "short_volume_ratio": "lots of short selling", "mom12": "weak past year",
+}
+
+
+def oriented_ranks(df: pd.DataFrame) -> pd.DataFrame:
+    """Each signal as a 0-1 rank within the month, flipped so 1 is always 'good'."""
+    out = {}
+    for c in ml.SIGNALS:
+        if c in df and df[c].notna().any():
+            r = df.groupby("month")[c].rank(pct=True)
+            out[c] = r if fundamentals.EXPECTED[c] > 0 else 1 - r
+    out["mom12"] = df.groupby("month")["mom12"].rank(pct=True)
+    return pd.DataFrame(out, index=df.index)
+
+
+def reasons(ranks: pd.Series, best: bool = True, n: int = 3) -> str:
+    """The strongest few signals behind a stock's place on the list, in plain words."""
+    r = ranks.dropna().sort_values(ascending=not best)
+    r = r[r >= 0.8] if best else r[r <= 0.2]
+    words = GOOD if best else BAD
+    return ", ".join(words.get(k, k) for k in r.index[:n]) or "a bit of everything"
+
+
+def rank_month(df: pd.DataFrame) -> pd.DataFrame:
+    """Score every stock in the table's latest month; best first. Columns: score, pct, close, why."""
+    df = df[df["gone"].isna()] if "gone" in df else df
+    df = df.assign(**{c: np.nan for c in ml.FEATURES if c not in df})  # e.g. no short data loaded yet
+    month = df["month"].max()
+    now = df[df["month"] == month].copy()
+    ranks = oriented_ranks(now)
+    now["score"] = ml.simple_mix(now)
+    now["signals"] = ranks.notna().sum(axis=1)
+    now = now[now["signals"] >= MIN_SIGNALS].dropna(subset=["score"])
+    now["pct"] = now["score"].rank(pct=True)
+    now = now.sort_values("score", ascending=False)
+    k = max(1, len(now) // 2)
+    now["why"] = [reasons(ranks.loc[i], best=j < k) for j, i in enumerate(now.index)]
+    return now.set_index("ticker")[["score", "pct", "close", "signals", "why"]]
+
+
+def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd.DataFrame, str]:
+    """Today's ranking and the date of the prices it uses."""
+    since = (dt.date.today() - dt.timedelta(days=75)).isoformat()
+    df = factors.monthly_factors(con, since=since, universe=universe, log=log, extras=True, include_latest=True)
+    if df.empty:
+        return pd.DataFrame(), ""
+    date = con.execute("SELECT MAX(date) FROM prices WHERE ticker IN (SELECT ticker FROM tickers "
+                       "WHERE last_date IS NOT NULL)").fetchone()[0][:10]
+    return rank_month(df), date
+
+
+def save(con: sqlite3.Connection, ranked: pd.DataFrame, date: str, top: int = 15, bottom: int = 10) -> None:
+    pick = lambda part: [{"ticker": t, "close": float(r["close"]) if pd.notna(r["close"]) else None,
+                          "why": r["why"]} for t, r in part.iterrows()]
+    set_meta(con, "mix_ranking", json.dumps({"date": date, "stocks": len(ranked), "top": pick(ranked.head(top)),
+                                             "bottom": pick(ranked.tail(bottom).iloc[::-1])}))
+    con.commit()
+
+
+def load(con: sqlite3.Connection, max_age_days: int = 45) -> dict | None:
+    raw = get_meta(con, "mix_ranking")
+    if not raw:
+        return None
+    r = json.loads(raw)
+    return r if (dt.date.today() - dt.date.fromisoformat(r["date"])).days <= max_age_days else None
+
+
+# --- How reliable has it been? -------------------------------------------------------------------
+
+def save_scorecard(con: sqlite3.Connection, card: dict[str, pd.DataFrame], preds: pd.DataFrame) -> None:
+    """Keep the simple mix's walk-forward numbers from study ml (it's tested there, next to the model)."""
+    row = lambda label: card[label].loc["simple_mix"] if "simple_mix" in card[label].index else None
+    halves = [k for k in card if k != "all"]
+    out = {"from": f"{preds['month'].min():%Y}", "to": f"{preds['month'].max():%Y}"}
+    a = row("all")
+    for k in ("months", "mean_ic", "ic_t", "ic_positive", "top10_per_year", "average_stock_per_year"):
+        out[k] = float(a[k]) if a is not None and k in a and pd.notna(a[k]) else None
+    out["halves_positive"] = all(row(h) is not None and row(h)["mean_ic"] > 0 for h in halves)
+    set_meta(con, "mix_scorecard", json.dumps(out))
+    con.commit()
+
+
+def reliability_note(con: sqlite3.Connection) -> str:
+    raw = get_meta(con, "mix_scorecard")
+    if not raw:
+        return "Not tested yet: the monthly honesty check (study ml) adds its track record."
+    s = json.loads(raw)
+    if s.get("top10_per_year") is None:
+        return "Not enough history to test it yet."
+    steady = "in both halves of the test" if s.get("halves_positive") else "but not in both halves of the test"
+    months = f", {s['months']:.0f} months" if s.get("months") else ""
+    return (f"Tested {s['from']}-{s['to']}{months} (nothing is fitted, so there's no hindsight in how it adds up the "
+            f"signals): the top 10% returned "
+            f"{s['top10_per_year']:+.1%} a year after costs vs {s['average_stock_per_year']:+.1%} for the average "
+            f"stock, and the ranking pointed the right way in {s['ic_positive']:.0%} of months, {steady}. "
+            "A small edge on average in the past, not a promise for any one stock.")

@@ -271,6 +271,24 @@ Results are shown for all years, before 2018 and from 2018 on (`--split-year`), 
 
 It only goes back in if its public float was at least as big as the universe's smaller members. Price-based signals can't be measured for these companies. The main tables include them, and a last table shows each signal with and without them, so you can see how much the bias mattered.
 
+### Top ideas (every signal, simple mix)
+
+```bash
+python -m trend_bot ideas                 # rank the ~1,000 most traded stocks now, save and track the list
+python -m trend_bot ideas --top 20 --no-record
+```
+
+This is the bot's main ideas list. Every stock in the universe (over $5, no funds) is ranked on every signal, each pointed the way research expects: cheap, profitable, profits backed by cash, little debt, beating earnings, few short sellers, strong past year, and so on. The average of those ranks is its score. Nothing is fitted to past returns, so there's no hindsight in how the signals are added up.
+
+In the walk-forward test (`study ml`), this simple mix was steadier than the machine-learning model, and its top 10% beat the average stock. Each idea lists the signals that put it there (e.g. "cheap vs sales, profit beat, few short sellers"), and the bottom of the list shows the stocks most likely to lag.
+
+**In the cloud:**
+- The nightly run makes a new list on the first run of each month, after `study ml` has refreshed its track record.
+- The weekly Discord outlook and the report show the list with a "How reliable is this?" line.
+- The top and bottom 10% are recorded for forward tracking (`track`, `💡 Top ideas` / `⚠️ Most likely to lag`).
+
+It's a starting point for your own research, not a buy list.
+
 ### One model over every signal (machine learning)
 
 ```bash
@@ -414,6 +432,7 @@ trend_bot/
   earnings.py    quarterly earnings surprises (SUE) and announcement returns
   short_interest.py FINRA short interest and short volume
   ml.py          one LightGBM model over every signal, walk-forward tested
+  ideas.py       monthly top ideas from the simple mix, with reasons
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs

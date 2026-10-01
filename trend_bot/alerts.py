@@ -268,3 +268,19 @@ def ml_status_line(verdict: dict | None) -> str:
         return ("The all-signal model hasn't beaten a simple mix of the same signals on years it never saw, "
                 "so its ideas aren't shown. Its picks are still tracked forward.")
     return ""
+
+
+def ideas_embed(ranking: dict | None, weather: dict, note: str) -> dict | None:
+    """Monthly top ideas from the simple mix (every signal ranked and averaged), with its track record."""
+    if not ranking:
+        return None
+    from trend_bot.model import weather_text
+
+    line = lambda p: (f"`{p['ticker']:<6}`" + (f" {p['close']:,.2f}" if p.get("close") else "") + f" · {p['why']}")
+    lines = [weather_text(weather, markdown=True), "",
+             "**⚠️ Most likely to lag**", *[line(p) for p in ranking["bottom"]], "",
+             "**💡 Top ideas**", *[line(p) for p in ranking["top"]], "",
+             f"_How reliable is this? {note}_",
+             f"Ranked {ranking['stocks']:,} stocks on {ranking['date']}; refreshed monthly. Not financial advice."]
+    return {"title": "💡 Top ideas (every signal, simple mix)", "description": "\n".join(lines)[:4000],
+            "color": GREEN if weather.get("invest") else RED}

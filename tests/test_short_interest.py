@@ -162,3 +162,10 @@ def test_factor_study_includes_short_selling(model_db, tmp_path, monkeypatch, ca
     assert res["all"].loc["short_combo", "mean_ic"] > 0   # less shorted = stronger drift in the simulation
     assert main(["study", "factors", "--db", str(tmp_path / "market.db"), "--since", str(DATES[260].date())]) == 0
     assert "short_combo" in capsys.readouterr().out
+
+
+def test_stray_quote_in_a_company_name_does_not_break_parsing():
+    # Real 2018 files have names like: 20180215|XYZ|Some "Odd Co|... with an unbalanced quote.
+    data = si_file("2018-02-15", {"AAA": (500, 100), "BRKB": (900, 300)}).replace(b"AAA Inc", b'"AAA Odd Inc')
+    rows = short_interest.parse_short_interest(data, {"AAA", "BRK-B"})
+    assert sorted(r[0] for r in rows) == ["AAA", "BRK-B"]

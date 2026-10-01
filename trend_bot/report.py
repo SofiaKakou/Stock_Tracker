@@ -108,6 +108,23 @@ def _table(headers: list[str], rows: list[list[str]], left: set[int] = frozenset
     return f'<div class="scroll"><table><thead><tr>{th}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
+def _ideas_section(con: sqlite3.Connection, esc) -> list[str]:
+    """The monthly simple-mix ideas with the reasons, and how reliable they've been."""
+    from trend_bot import ideas
+
+    r = ideas.load(con)
+    if not r:
+        return []
+    row = lambda p: [f"<b>{esc(p['ticker'])}</b>", f"{p['close']:,.2f}" if p.get("close") else "–", esc(p["why"])]
+    heads = ["Ticker", "Close", "Mostly because"]
+    return ["<h2>💡 Top ideas (every signal, simple mix)</h2>",
+            f'<p class="sub">{r["stocks"]:,} most traded stocks ranked on every signal on {esc(r["date"])}; '
+            "refreshed monthly.</p>",
+            "<h3>⚠️ Most likely to lag</h3>", _table(heads, [row(p) for p in r["bottom"]], left={0, 2}),
+            "<h3>💡 Top ideas</h3>", _table(heads, [row(p) for p in r["top"]], left={0, 2}),
+            f'<p class="note"><b>How reliable is this?</b> {esc(ideas.reliability_note(con))}</p>']
+
+
 def _ml_section(con: sqlite3.Connection, esc) -> list[str]:
     """The all-signal model's ideas, only if it passed its walk-forward test."""
     from trend_bot import ml
@@ -191,6 +208,7 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
         '<div class="tiles">' + "".join(f'<div class="tile"><div class="n">{n}</div><div class="l">{l}</div></div>'
                                         for n, l in tiles) + "</div>",
     ]
+    parts += _ideas_section(con, esc)
     parts += _outlook(con, esc)
     parts += _ml_section(con, esc)
     parts.append("<h2>🔔 Strong insider buying in an uptrend</h2>")

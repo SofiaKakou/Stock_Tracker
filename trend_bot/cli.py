@@ -309,7 +309,11 @@ def cmd_alert(args: argparse.Namespace) -> int:
                         ftrack.record_forecast(con, preds, date)
                         fdb.set_meta(con, "forecast_week", week)
                         con.commit()
-                    from trend_bot import ml as fml
+                    from trend_bot import ideas as fideas, ml as fml
+
+                    e = alerts.ideas_embed(fideas.load(con), fmodel.weather_status(con), fideas.reliability_note(con))
+                    if e:
+                        embeds.append(e)
 
                     verdict, ranking = fml.load(con)
                     note = forecast.reliability_note(forecast.load_scorecard(con))
@@ -658,6 +662,9 @@ def _study_ml(con, args: argparse.Namespace) -> None:
     print("  Top 15:    " + ", ".join(ranking.index[:15]))
     print("  Bottom 15: " + ", ".join(ranking.index[-15:]))
     ml.save(con, ranking, latest, card, passed, text)
+    from trend_bot import ideas
+
+    ideas.save_scorecard(con, card, preds)
     new = track.record_ml(con, ranking, latest)
     print(f"\nRecorded {len(new)} new picks (top and bottom 10%) for forward tracking: see 'python -m trend_bot track'.")
 
@@ -939,6 +946,40 @@ def cmd_forecast(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ideas(args: argparse.Namespace) -> int:
+    from trend_bot import db, ideas, model, track
+
+    if not Path(args.db).exists():
+        print(f"{args.db} not found. Build it first:  python -m trend_bot db update", file=sys.stderr)
+        return 1
+    with closing(db.connect(args.db)) as con:
+        if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
+            print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
+            return 1
+        print("Ranking the most traded stocks on every signal...")
+        ranked, date = ideas.latest(con, universe=args.universe)
+        if ranked.empty:
+            print("Not enough data.")
+            return 1
+        if not args.no_record:
+            ideas.save(con, ranked, date, top=args.top, bottom=args.bottom)
+            new = track.record_ml(con, ranked, date, prefix="mix")
+        ws = model.weather_status(con)
+        note = ideas.reliability_note(con)
+    from trend_bot.model import weather_text
+
+    show = lambda df: df.assign(rank=df["pct"].map("{:.0%}".format))[["close", "rank", "why"]].to_string(
+        float_format="{:,.2f}".format)
+    print(f"\nTop ideas · {date} · {len(ranked):,} stocks ranked\n\nMarket weather: {weather_text(ws)}\n")
+    print(f"== ⚠️  Most likely to lag ==\n{show(ranked.tail(args.bottom).iloc[::-1])}")
+    print(f"\n== 💡 Top ideas ==\n{show(ranked.head(args.top))}")
+    print(f"\nHow reliable is this? {note}")
+    if not args.no_record:
+        print(f"Recorded {len(new)} new picks (top and bottom 10%) for forward tracking ('track').")
+    print("A starting point for your own research, not financial advice.")
+    return 0
+
+
 def _print_forecast(preds: pd.DataFrame, date: str, ws: dict, trained_on: str, note: str, top: int) -> None:
     from trend_bot.model import weather_text
 
@@ -1135,6 +1176,14 @@ def make_parser() -> argparse.ArgumentParser:
     fc.add_argument("--retrain", action="store_true", help="relearn from history now (otherwise monthly)")
     fc.add_argument("--no-record", action="store_true", help="don't save the ideas for 'track'")
     fc.set_defaults(func=cmd_forecast)
+
+    ide = sub.add_parser("ideas", help="monthly top ideas: every signal ranked and averaged (the simple mix)")
+    ide.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    ide.add_argument("--universe", type=int, default=1000, help="most traded stocks to rank (default 1000)")
+    ide.add_argument("--top", type=int, default=15, help="top ideas to list")
+    ide.add_argument("--bottom", type=int, default=10, help="most-likely-to-lag stocks to list")
+    ide.add_argument("--no-record", action="store_true", help="don't save the list or record picks for 'track'")
+    ide.set_defaults(func=cmd_ideas)
 
     sr = sub.add_parser("send-report", help="post a file (the HTML report by default) to Discord")
     sr.add_argument("--path", default="reports/latest.html")
