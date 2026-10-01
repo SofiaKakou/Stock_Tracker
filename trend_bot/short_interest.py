@@ -30,7 +30,7 @@ from trend_bot.db import get_meta, set_meta
 
 SI_URL = "https://cdn.finra.org/equity/otcmarket/biweekly/shrt{date:%Y%m%d}.csv"
 SV_URL = "https://cdn.finra.org/equity/regsho/daily/CNMSshvol{date:%Y%m%d}.txt"
-SI_FIRST = dt.date(2017, 6, 1)       # FINRA's site has reports from about 2018 on
+SI_FIRST = dt.date(2017, 6, 1)       # FINRA's site has reports from Dec 29, 2017 on
 SV_FIRST = dt.date(2018, 8, 1)       # consolidated daily short volume starts here
 PUBLISH_LAG_DAYS = 12                # report date -> publicly available (conservative)
 

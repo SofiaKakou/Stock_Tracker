@@ -272,7 +272,7 @@ python -m trend_bot study factors --split-year 2022
 ```
 
 Short sellers borrow shares and sell them, betting the price will fall. They are often well-informed, and research has found that heavily shorted stocks, and stocks whose short interest jumps, tend to lag. The bot downloads FINRA's free files:
-- **Short interest:** how many shares of each stock were sold short and not yet bought back, reported twice a month (around the 15th and the month end). History on FINRA's site starts in 2018. A report only counts from 12 days after its date, because FINRA publishes it about 7 business days later.
+- **Short interest:** how many shares of each stock were sold short and not yet bought back, reported twice a month (around the 15th and the month end). History on FINRA's site starts at the end of 2017. A report only counts from 12 days after its date, because FINRA publishes it about 7 business days later.
 - **Short volume:** each day, how much of the off-exchange trading in each stock was short selling (from August 2018), kept as monthly totals.
 
 The first download takes about half an hour; after that each run only adds what's new. Because the history starts in 2018, use `--split-year 2022` to compare 2018–2021 with 2022 on.
