@@ -16,9 +16,7 @@ jumps, tend to do worse afterwards: short sellers are often well-informed.
 
 from __future__ import annotations
 
-import csv
 import datetime as dt
-import io
 import sqlite3
 import time
 from typing import Callable
@@ -98,11 +96,29 @@ def report_targets(start: dt.date, end: dt.date) -> list[dt.date]:
     return out
 
 
+def _rows(text: str):
+    """Rows of a pipe-separated FINRA file as dicts.
+
+    Split by hand rather than with the csv module: some older files have a stray quote
+    inside a company name, which makes a csv reader swallow the rest of the file.
+    """
+    lines = text.splitlines()
+    if not lines:
+        return
+    clean = lambda v: v.strip().strip('"').strip()
+    header = [clean(h) for h in lines[0].split("|")]
+    for line in lines[1:]:
+        parts = line.split("|")
+        if len(parts) != len(header):
+            continue  # e.g. the record count at the end of short volume files
+        yield dict(zip(header, (clean(p) for p in parts)))
+
+
 def parse_short_interest(data: bytes, keep: set[str] | None = None) -> list[tuple]:
     """(ticker, settle, short, avg_volume) rows from one FINRA short interest file."""
     text = data.decode("utf-8-sig", "replace")
     rows = []
-    for r in csv.DictReader(io.StringIO(text), delimiter="|"):
+    for r in _rows(text):
         try:
             t = match(r["symbolCode"], keep)
             short = float(r["currentShortPositionQuantity"])
@@ -166,7 +182,7 @@ def parse_short_volume(data: bytes, keep: set[str] | None = None) -> tuple[str |
     """(date, [(ticker, short_volume, total_volume)]) from one daily FINRA file."""
     text = data.decode("utf-8-sig", "replace")
     rows, day = [], None
-    for r in csv.DictReader(io.StringIO(text), delimiter="|"):
+    for r in _rows(text):
         try:
             t = symbol(r["Symbol"])
             short, total = float(r["ShortVolume"]), float(r["TotalVolume"])
