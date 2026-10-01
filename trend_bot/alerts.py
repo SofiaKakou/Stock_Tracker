@@ -222,3 +222,13 @@ def model_embed(res: dict) -> dict | None:
     if res["weather_changed"]:
         return {"title": "🌦️ Market weather changed", "description": weather, "color": GREEN if invest else RED}
     return None
+
+
+def forecast_embed(preds, date: str, invest: bool, n: int = 10) -> dict:
+    line = lambda t, r: f"`{t:<6}` {r['p_beat']:.0%} to beat, {r['p_up']:.0%} up · {r['why']}"
+    lines = [("☀️ Market in an uptrend" if invest else "🌧️ Market in a downtrend") + f" · as of {date}", "",
+             "**Most likely to beat the S&P 500 (next 30 days)**",
+             *[line(t, r) for t, r in preds.head(n).iterrows()], "",
+             "**Most likely to lag**", *[line(t, r) for t, r in preds.tail(5).iloc[::-1].iterrows()], "",
+             "Odds from 20 years of history, not certainties. See `study forecast` for how reliable they've been."]
+    return {"title": "🔮 Weekly 30-day outlook", "description": "\n".join(lines)[:4000], "color": GRAY}

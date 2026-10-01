@@ -17,13 +17,16 @@ from trend_bot.db import load_many
 SIGNALS = {
     "model_buy": "📈 Model buy",
     "model_sell": "📉 Model sell",
+    "forecast_top": "🔮 Likely to beat the market",
+    "forecast_bottom": "🔮 Likely to lag the market",
     "strong_insider": "🔔 3+ insiders, $250k+, uptrend",
     "insider_cluster": "Insider buying cluster",
     "uptrend": "New uptrend",
     "downtrend": "New downtrend",
 }
-# Insider clusters stay visible in the screen for weeks; only record them once per stretch.
+# These stay on the lists for weeks; only record them once per stretch.
 REPEAT_AFTER_DAYS = 30
+REPEATING = {"insider_cluster", "strong_insider", "forecast_top", "forecast_bottom"}
 
 
 def _money(v: float) -> str:
@@ -42,9 +45,22 @@ def record_picks(con: sqlite3.Connection, flips: pd.DataFrame, clusters: pd.Data
         if r.get("strong"):
             rows.append((str(r["date"]), t, "strong_insider", r["close"], detail))
 
+    return _insert(con, rows)
+
+
+def record_forecast(con: sqlite3.Connection, preds: pd.DataFrame, date: str, n: int = 10) -> set[tuple[str, str]]:
+    """Save the top and bottom forecast ideas (once per ticker per 30 days)."""
+    rows = []
+    for signal, part in (("forecast_top", preds.head(n)), ("forecast_bottom", preds.tail(n))):
+        for t, r in part.iterrows():
+            rows.append((date, t, signal, r["close"], f"P(beat) {r['p_beat']:.0%}, P(up) {r['p_up']:.0%}"))
+    return _insert(con, rows)
+
+
+def _insert(con: sqlite3.Connection, rows: list[tuple]) -> set[tuple[str, str]]:
     new = set()
     for date, ticker, signal, price, detail in rows:
-        if signal in ("insider_cluster", "strong_insider"):
+        if signal in REPEATING:
             since = (dt.date.fromisoformat(date) - dt.timedelta(days=REPEAT_AFTER_DAYS)).isoformat()
             seen = con.execute("SELECT 1 FROM picks WHERE ticker = ? AND signal = ? AND date >= ? AND date < ?",
                                (ticker, signal, since, date)).fetchone()

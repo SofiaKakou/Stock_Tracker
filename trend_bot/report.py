@@ -146,6 +146,33 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
         parts.append('<p class="empty">None right now. This rule is rare: it needs 3+ insiders spending '
                      '$250k+ in a stock that is already trending up.</p>')
 
+    parts.append("<h2>🔮 30-day outlook</h2>")
+    try:
+        from trend_bot import forecast
+
+        models, trained_on = forecast.load_models(con, log=lambda *_: None)
+        preds, _, _ = forecast.predict_today(con, models)
+    except Exception as e:  # e.g. not enough history yet
+        preds, trained_on = pd.DataFrame(), str(e)
+    if len(preds):
+        fcloses = {t: df["Close"] for t, df in load_many(
+            con, list(preds.index[:10]) + list(preds.index[-5:]),
+            start=(dt.date.today() - dt.timedelta(days=200)).isoformat()).items()}
+
+        def fc_rows(df: pd.DataFrame) -> list[list[str]]:
+            return [[f"<b>{esc(t)}</b>", sparkline(fcloses.get(t, pd.Series(dtype=float))), f"{r['close']:,.2f}",
+                     f"{r['p_beat']:.0%}", f"{r['p_up']:.0%}", esc(r["why"])] for t, r in df.iterrows()]
+
+        heads = ["Ticker", "6 months", "Close", "Beat S&P 500", "Go up", "Mostly because"]
+        parts += ["<p class=\"sub\">Most likely to beat the S&P 500 over the next 30 days</p>",
+                  _table(heads, fc_rows(preds.head(10)), left={0, 5}),
+                  "<p class=\"sub\" style=\"margin-top:16px\">Most likely to lag</p>",
+                  _table(heads, fc_rows(preds.tail(5).iloc[::-1]), left={0, 5}),
+                  f'<p class="note">Odds learned from {esc(trained_on)}. They are probabilities, not '
+                  "certainties: run <code>study forecast</code> to see how reliable they have been.</p>"]
+    else:
+        parts.append('<p class="empty">Not available yet.</p>')
+
     def flip_rows(df: pd.DataFrame) -> list[list[str]]:
         return [[f"<b>{esc(t)}</b>", esc(str(r["name"])), sparkline(closes.get(t, pd.Series(dtype=float))),
                  f"{r['close']:,.2f}", _pct(r["chg_20d"]), f"{r['rsi']:.0f}" if r["rsi"] is not None else "–",

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -293,6 +294,20 @@ def cmd_alert(args: argparse.Namespace) -> int:
         e = alerts.model_embed(res)
         if e:
             embeds.append(e)
+    if args.forecast and Path(args.db).exists():
+        from trend_bot import db as fdb, forecast, track as ftrack
+
+        with closing(fdb.connect(args.db)) as con:
+            week = f"{dt.date.today().isocalendar()[0]}-W{dt.date.today().isocalendar()[1]:02d}"
+            if fdb.get_meta(con, "forecast_week") != week:
+                models, _ = forecast.load_models(con)
+                preds, date, invest = forecast.predict_today(con, models)
+                if len(preds):
+                    if not args.dry_run:
+                        ftrack.record_forecast(con, preds, date)
+                        fdb.set_meta(con, "forecast_week", week)
+                        con.commit()
+                    embeds.append(alerts.forecast_embed(preds, date, invest))
     if args.market:
         embeds.extend(_market_embeds(args, strategy))
     if args.summary:
@@ -505,6 +520,38 @@ def _print_fates(con, study, events: pd.DataFrame, ev: pd.DataFrame, args: argpa
           + pct(study.summarize(worst, min_price=args.min_price)))
 
 
+def _study_forecast(con, args: argparse.Namespace) -> None:
+    from trend_bot import forecast
+
+    print("Building 20 years of training data (takes a few minutes)...")
+    rows = forecast.training_rows(con, universe=args.universe, benchmark=args.benchmark)
+    if rows.empty:
+        print("Not enough data.")
+        return
+    preds = forecast.walk_forward(rows, first_year=args.first_year)
+    if preds.empty:
+        print("Not enough history before the first test year.")
+        return
+    card = forecast.scorecard(preds)
+    pct = lambda v: f"{v:.1%}"
+    print(f"\n30-day outlook, tested year by year from {preds['month'].min():%Y} to {preds['month'].max():%Y}: "
+          f"{len(preds):,} predictions, each made with only the years before it.\n")
+    print("== How often it was right ==")
+    print(card["summary"].to_string(formatters={c: pct for c in ("happened", "accuracy", "naive_accuracy")} |
+                                    {"brier": "{:.4f}".format, "naive_brier": "{:.4f}".format}))
+    print("naive = always guessing the more common outcome. brier = prediction error, lower is better;\n"
+          "the model only adds something if it beats the naive numbers.")
+    for key, label in (("calibration_beat", "beats the S&P 500"), ("calibration_up", "goes up")):
+        print(f"\n== When it said X% chance it {label}, how often did it happen? ==")
+        print(card[key].to_string(formatters={"predicted": pct, "happened": pct}))
+    print("\n== Ranking stocks by chance to beat the S&P 500, every month ==")
+    ideas = card["ideas"].copy()
+    ideas["beat_spy_months"] = ideas["beat_spy_months"].map(lambda v: "–" if pd.isna(v) else f"{v:.0%}")
+    print(ideas.to_string(formatters={"avg_month": "{:+.2%}".format}))
+    print(f"The top 10% did better than the bottom 10% in {card['top_beat_bottom']:.0%} of months.")
+    print("\nNote: only companies still listed today are included (survivorship bias).")
+
+
 def _study_model(con, args: argparse.Namespace) -> None:
     from trend_bot import model
 
@@ -609,6 +656,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "model":
             _study_model(con, args)
+            return 0
+        if args.signal == "forecast":
+            _study_forecast(con, args)
             return 0
         if args.signal in ("trend", "both"):
             tickers = liquid_tickers(con, args.min_price, args.min_volume)
@@ -722,6 +772,34 @@ def _print_model(res: dict, top: int) -> None:
             float_format="{:.2f}".format))
 
 
+def cmd_forecast(args: argparse.Namespace) -> int:
+    from trend_bot import db, forecast, track
+
+    with closing(db.connect(args.db)) as con:
+        models, trained_on = forecast.load_models(con, retrain=args.retrain)
+        preds, date, invest = forecast.predict_today(con, models)
+        if preds.empty:
+            print("No stocks to score yet.")
+            return 1
+        if not args.no_record:
+            track.record_forecast(con, preds, date)
+    _print_forecast(preds, date, invest, trained_on, args.top)
+    return 0
+
+
+def _print_forecast(preds: pd.DataFrame, date: str, invest: bool, trained_on: str, top: int) -> None:
+    weather = "☀️  market in an uptrend" if invest else "🌧️  market in a downtrend (S&P 500 below its 200-day average)"
+    print(f"30-day outlook · {date} · {weather}")
+    print(f"Learned from {trained_on}. These are odds, not certainties.\n")
+    show = lambda df: df.assign(p_up=df["p_up"].map("{:.0%}".format), p_beat=df["p_beat"].map("{:.0%}".format))[
+        ["close", "p_up", "p_beat", "why"]].to_string(float_format="{:,.2f}".format)
+    print(f"== Most likely to beat the S&P 500 over the next 30 days ==\n{show(preds.head(top))}")
+    print(f"\n== Most likely to lag the S&P 500 ==\n{show(preds.tail(top).iloc[::-1])}")
+    print(f"\nAcross all {len(preds):,} stocks: average chance to go up {preds['p_up'].mean():.0%}, "
+          f"to beat the S&P 500 {preds['p_beat'].mean():.0%}. "
+          "Check 'study forecast' for how reliable these odds have been.")
+
+
 # --- argument parsing ---------------------------------------------------------
 
 def make_parser() -> argparse.ArgumentParser:
@@ -784,6 +862,8 @@ def make_parser() -> argparse.ArgumentParser:
     al.add_argument("--state", default="alert_state.json", help="file that remembers the last trends")
     al.add_argument("--no-insiders", action="store_true", help="don't check SEC insider trades")
     al.add_argument("--market", action="store_true", help="add the whole-market screen (needs the database)")
+    al.add_argument("--forecast", action="store_true",
+                    help="once a week, add the 30-day outlook's top ideas (needs the database)")
     al.add_argument("--model", action="store_true",
                     help="add the Trend Score model's monthly buys/sells and weather changes (needs the database)")
     al.add_argument("--market-limit", type=int, default=10, help="stocks listed in the market screen")
@@ -835,7 +915,9 @@ def make_parser() -> argparse.ArgumentParser:
     sc.set_defaults(func=cmd_screen)
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
-    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model"])
+    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast"])
+    st.add_argument("--first-year", type=int, default=2011,
+                    help="forecast: first year to predict (each year uses only earlier years)")
     st.add_argument("--since", default="2006-01-01", help="first event date")
     st.add_argument("--until", help="last event date, e.g. 2015-12-31 (to test on one period, confirm on another)")
     st.add_argument("--max-tickers", type=int, help="trend study: limit the number of stocks (faster)")
@@ -868,6 +950,13 @@ def make_parser() -> argparse.ArgumentParser:
     md.add_argument("--rebalance", action="store_true", help="do the monthly check now")
     md.add_argument("--no-record", action="store_true", help="don't save buys/sells for 'track'")
     md.set_defaults(func=cmd_model)
+
+    fc = sub.add_parser("forecast", help="30-day outlook: chance each stock goes up / beats the market")
+    fc.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    fc.add_argument("--top", type=int, default=15, help="ideas to list at each end")
+    fc.add_argument("--retrain", action="store_true", help="relearn from history now (otherwise monthly)")
+    fc.add_argument("--no-record", action="store_true", help="don't save the ideas for 'track'")
+    fc.set_defaults(func=cmd_forecast)
 
     tr = sub.add_parser("track", help="how the stocks the bot flagged have done since")
     tr.add_argument("--db", default="market.db", help="database file (default: market.db)")

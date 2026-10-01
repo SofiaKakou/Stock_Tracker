@@ -196,6 +196,22 @@ The weights are fixed round numbers, not fitted to past data.
 
 `study model` compares the model with and without the weather filter, SPY buy-and-hold, SPY with the weather filter, and all eligible stocks. It shows all years, then **2006–2015 and 2016–now separately**: a rule you can trust should hold up in both. Options: `--hold`, `--universe`, `--buffer`, `--cash-rate` (default 2%/yr while in cash). This is theoretical, and the survivorship bias caveat applies.
 
+### 30-day outlook (up / down odds)
+
+```bash
+python -m trend_bot study forecast     # how reliable the odds have been (walk-forward test)
+python -m trend_bot forecast           # today's ideas: most and least likely to beat the market
+```
+
+For every stock in the model universe, the bot estimates two chances for the next 30 days: that it **goes up**, and that it **beats the S&P 500**. It uses a logistic regression on the Trend Score's signal parts plus the market weather, learned from every month since 2006. It relearns once a month, and each idea comes with its main reasons ("in an uptrend, near its 52-week high").
+
+`study forecast` is the honesty check. It predicts each year from 2011 using **only the years before it**, then reports:
+- accuracy and prediction error, compared with always guessing the more common outcome,
+- whether "60% chance" really happened about 60% of the time,
+- how the top 10% of ideas did each month compared with the bottom 10% and the S&P 500.
+
+The nightly alert (`--forecast`) posts a 🔮 **weekly outlook** to Discord. The report page lists the top and bottom ideas, and `track` records them. Predicting single stocks a month ahead is close to a coin flip, so treat this as a ranked idea list, not a certainty.
+
 ### Momentum
 
 ```bash
@@ -233,7 +249,7 @@ If `SEC_USER_AGENT` is set, alerts also check insider trades. A trend alert incl
 
 The bot remembers each ticker's last trend in `alert_state.json`. The next run reports every change since then, even if the computer was off for a few days. On the very first run it only alerts for flips that happened that day.
 
-**4. Run it every weekday (Windows).** `run_alerts.bat` runs `alert --summary` and appends the output to `alerts.log`. Once `market.db` exists, it also runs `db update` first, adds the market screen and the Trend Score model (`--market --model`), and writes the report page. Schedule it after the US market closes (4pm New York time, plus about an hour for the data to settle). Set `/ST` to that time in *your* time zone. `23:30` below is for Central/Eastern Europe:
+**4. Run it every weekday (Windows).** `run_alerts.bat` runs `alert --summary` and appends the output to `alerts.log`. Once `market.db` exists, it also runs `db update` first, adds the market screen, the Trend Score model and the weekly outlook (`--market --model --forecast`), and writes the report page. Schedule it after the US market closes (4pm New York time, plus about an hour for the data to settle). Set `/ST` to that time in *your* time zone. `23:30` below is for Central/Eastern Europe:
 
 ```powershell
 schtasks /Create /TN "TrendBot Alerts" /TR "$env:USERPROFILE\Stock_Tracker\run_alerts.bat" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 23:30
@@ -285,6 +301,7 @@ trend_bot/
   report.py      the daily HTML report
   momentum.py    monthly momentum backtest
   model.py       Trend Score model: scores, model portfolio, weather, backtest
+  forecast.py    30-day outlook: logistic regression, walk-forward test, live odds
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs
