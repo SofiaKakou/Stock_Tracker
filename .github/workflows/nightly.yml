@@ -1,0 +1,85 @@
+# Runs the bot every weekday evening on GitHub's servers, so no PC needs to be on.
+#
+# Setup (once): repository Settings -> Secrets and variables -> Actions -> New repository secret
+#   DISCORD_WEBHOOK_URL   your Discord webhook URL
+#   SEC_USER_AGENT        your name and email, e.g. "Jane Doe jane@example.com"
+# Then run it once by hand: Actions tab -> "Nightly market run" -> Run workflow.
+# The first run builds the database from scratch (1-2 hours); later runs take a few minutes.
+
+name: Nightly market run
+
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"   # 22:30 UTC, Mon-Fri: after the US market closes
+  workflow_dispatch: {}        # "Run workflow" button for a manual run
+
+concurrency:
+  group: nightly-market-run    # never two runs at once
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      # The database (and alert memory) carries over between runs via GitHub's cache.
+      - name: Restore database
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+
+      - name: Update data
+        run: python -m trend_bot db update || echo "::warning::db update did not finish (see log); continuing"
+
+      # Re-test the 30-day outlook monthly (and on manual runs) for its "How reliable is this?" note.
+      - name: Monthly honesty check
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule != ''
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date +%d)" -le 3 ]; then
+            python -m trend_bot study forecast || echo "::warning::study forecast failed"
+          fi
+
+      - name: Discord alerts
+        run: python -m trend_bot alert --summary --market --model --forecast
+
+      - name: Report
+        run: |
+          python -m trend_bot report
+          python -m trend_bot send-report
+
+      - name: Save database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ github.run_id }}
+          path: reports/latest.html
+          if-no-files-found: ignore
+          retention-days: 30

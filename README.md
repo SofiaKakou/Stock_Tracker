@@ -122,6 +122,8 @@ What `db update` does:
 | Insider trades | SEC quarterly bulk files (2006 onwards) | Complete and fast. Each quarter is published a few weeks after it ends. Only open-market buys and sales are stored. |
 | Recent insider trades | SEC daily filing index | Fills the weeks since the last published quarter, one filing at a time (`--insider-days`, default 30). Only filings for companies the screen can show are downloaded; add `--insiders-all-companies` for everyone. |
 
+If the SEC keeps refusing requests after the bot's waits (1, 3 and 10 minutes), the bot **pauses all SEC downloads for 24 hours**, so it doesn't extend the block. Prices, alerts and the report keep updating; use `--ignore-sec-pause` to try sooner. The one-time catch-ups (what happened to delisted companies, and industry codes) are spread over several nights, at most `--sec-lookups` (default 1,500) per run.
+
 Useful flags: `--prices-only`, `--insiders-only`, `--insider-since 2015`, `--retry-failed` (retry tickers that returned no data), and `--pause 2` (go slower if Yahoo starts refusing).
 
 ### Screen the whole market
@@ -229,6 +231,18 @@ python -m trend_bot study momentum --top 0.2 --lookback 6 --since 2016-01-01
 Momentum is one of the best-documented patterns in stock markets: stocks that rose most over the past year tend to keep outperforming for a while. At the end of each month, the study ranks every stock by its return over the past 12 months (`--lookback`), skipping the latest month because very recent moves tend to reverse. It then holds the top 10% (`--top`) for a month, charging 0.1% per trade. The result is compared with the losers, all stocks held equally, and the benchmark, both overall and year by year. Survivorship bias applies here too.
 
 Backtests can read from the database too: `python -m trend_bot backtest NVDA --from-db --period max`.
+
+## Running in the cloud (GitHub Actions)
+
+`.github/workflows/nightly.yml` runs everything on GitHub's servers every weekday at 22:30 UTC, so your PC doesn't need to be on. Each run updates the database, sends the Discord messages, builds the report and posts it to Discord as a file. Each report is also kept for 30 days under the run's "Artifacts".
+
+1. On GitHub, open the repository, then **Settings → Secrets and variables → Actions → New repository secret**, and add:
+   - `DISCORD_WEBHOOK_URL`: your webhook URL
+   - `SEC_USER_AGENT`: your name and email, e.g. `Jane Doe jane@example.com`
+2. Open the **Actions** tab, then **Nightly market run → Run workflow**. The first run builds the database from scratch (about 1–2 hours). Later runs take a few minutes.
+3. Turn off the Windows task so you don't get messages twice: `Disable-ScheduledTask -TaskName "TrendBot Alerts"`.
+
+The database is kept between runs in GitHub's Actions cache. If it's ever evicted (after 7 days without a run, or if the 10 GB cache limit is exceeded), the next run rebuilds it automatically. Public repositories run for free; private ones get about 2,000 free minutes a month, and the nightly run uses roughly 10–20 of them.
 
 ## Discord alerts
 
