@@ -576,7 +576,10 @@ def _study_factors(con, args: argparse.Namespace) -> None:
         return
     tables = factors.study(df, split_year=args.split_year)
     fmt = {"months": "{:.0f}".format, "stocks": "{:.0f}".format, "mean_ic": "{:+.3f}".format,
-           "ic_t": "{:+.1f}".format, "ic_positive": "{:.0%}".format, "top_minus_bottom": "{:+.2%}".format}
+           "ic_t": "{:+.1f}".format, "ic_positive": "{:.0%}".format, "top_minus_bottom": "{:+.2%}".format,
+           "ic_listed_only": "{:+.3f}".format, "ic_with_gone": "{:+.3f}".format,
+           "tmb_listed_only": "{:+.2%}".format, "tmb_with_gone": "{:+.2%}".format}
+    print(_gone_note(df))
     print(f"\n{df['month'].min():%Y-%m} to {df['month'].max():%Y-%m}, up to {args.universe:,} most traded stocks a month")
     for label, table in tables.items():
         print(f"\n== {label} ==\n" + table.to_string(formatters=fmt))
@@ -588,6 +591,18 @@ def _study_factors(con, args: argparse.Namespace) -> None:
         print(f"  {n:<20} {d}")
     for name, parts in factors.COMBOS.items():
         print(f"  {name:<20} average rank of {', '.join(parts)}")
+
+
+def _gone_note(df: pd.DataFrame) -> str:
+    """One line on the companies that disappeared and were put back into the study."""
+    gone = df["gone"].dropna() if "gone" in df else pd.Series(dtype=str)
+    if gone.empty:
+        return ("Note: only companies listed today have prices, so ones that went bankrupt or were bought out "
+                "are missing (their fates are looked up a little each night; results improve as that fills in).")
+    c = gone.value_counts()
+    return (f"Companies that disappeared, put back for their last month: {c.get('bankrupt', 0):,} bankrupt (-100%), "
+            f"{c.get('delisted', 0):,} delisted (-30%), {c.get('acquired', 0):,} bought out (average stock). "
+            "Price-based signals can't be measured for them.")
 
 
 def _study_ml(con, args: argparse.Namespace) -> None:
@@ -602,6 +617,7 @@ def _study_ml(con, args: argparse.Namespace) -> None:
     if df.empty:
         print("Not enough data.")
         return
+    print(_gone_note(df))
     first = max(args.first_year, df["month"].dt.year.min() + 2)
     preds = ml.walk_forward(df, first_year=first, trees=args.trees)
     if preds.empty:
@@ -621,8 +637,8 @@ def _study_ml(con, args: argparse.Namespace) -> None:
           "(no fitting). quality_value / momentum: single-idea baselines.\n"
           "mean_ic: rank correlation with next month's return (0.02-0.05 is useful). ic_t above ~2: unlikely luck. "
           "top10_per_year: holding the top 10% each month, after 0.1% trading costs each way, vs average_stock "
-          "(every stock in the universe, equal weight). Stocks that were delisted mid-month are left out, "
-          "which flatters every approach a little.")
+          "(every stock in the universe, equal weight). Momentum can't be measured for companies that disappeared, "
+          "so its numbers still leave them out.")
     passed, text = ml.verdict(card, args.split_year)
     print(f"\nVerdict: {text}")
     ranking, imp = ml.today(df, trees=args.trees)

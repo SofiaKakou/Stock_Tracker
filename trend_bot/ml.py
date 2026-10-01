@@ -83,14 +83,18 @@ def simple_mix(df: pd.DataFrame) -> pd.Series:
 def walk_forward(df: pd.DataFrame, first_year: int = 2014, trees: int = TREES, log=print) -> pd.DataFrame:
     """Out-of-sample predictions: each year scored by a model trained on earlier years only."""
     df = df.dropna(subset=["ret"]).reset_index(drop=True)
-    X, y = ranked(df), target(df)
+    listed = df["gone"].isna() if "gone" in df else pd.Series(True, index=df.index)
+    X = ranked(df)
+    y = target(df[listed])
     out = []
     for year in sorted(y for y in df["month"].dt.year.unique() if y >= first_year):
-        tr = df["month"].dt.year < year
+        # Companies that later disappeared are only scored, never trained on: their price inputs
+        # are missing, and a model must not learn "missing price data = bankrupt".
+        tr = (df["month"].dt.year < year) & listed
         te = df["month"].dt.year == year
         if tr.sum() < 1000:
             continue
-        m = train(X[tr], y[tr], trees)
+        m = train(X[tr], y[tr[tr].index], trees)
         part = df.loc[te, ["month", "ticker", "ret"]].copy()
         part["model"] = m.predict(X[te])
         out.append(part)
@@ -166,6 +170,7 @@ def importance(m) -> pd.Series:
 
 def today(df: pd.DataFrame, trees: int = TREES) -> tuple[pd.DataFrame, pd.Series]:
     """Train on all known months and rank the latest one. Returns (ranking, input importance)."""
+    df = df[df["gone"].isna()] if "gone" in df else df
     known = df.dropna(subset=["ret"])
     X_all = ranked(df)
     m = train(X_all.loc[known.index], target(known), trees)
