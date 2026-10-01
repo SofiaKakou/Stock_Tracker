@@ -12,3 +12,5 @@ alerts.log
 market.db
 market.db-*
 reports/
+update.log
+update_errors.log

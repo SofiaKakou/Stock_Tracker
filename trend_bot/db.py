@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
 
 def connect(path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
-    con = sqlite3.connect(path)
+    # Wait up to a minute if another command (e.g. a background db update) is writing.
+    con = sqlite3.connect(path, timeout=60)
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.executescript(SCHEMA)
