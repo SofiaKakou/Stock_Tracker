@@ -244,6 +244,12 @@ From these it builds classic signals from finance research:
 | book_to_market | book equity / market value | higher |
 | sales_to_price | sales / market value | higher |
 | quality_value_combo | average rank of profitability, earnings yield, book-to-market, accruals, asset growth | higher |
+| sue | latest quarter's profit surprise: profit minus the same quarter a year earlier, divided by how much that change usually varies for the company | higher |
+| revenue_sue | the same surprise measure for revenue | higher |
+| ear | stock minus S&P 500 over the 3 trading days around the latest quarterly filing | higher |
+| earnings_combo | average rank of sue, revenue_sue and ear | higher |
+
+**Earnings surprises** (`trend_bot/earnings.py`): after a company reports results far better (or worse) than its own history suggested, its stock has tended to keep drifting the same way for weeks ("post-earnings drift"). The bot rebuilds each company's quarterly numbers from its 10-Qs (the fourth quarter is the full year minus the first nine months), uses the value as first reported (not later restatements), and dates each surprise by the day the filing reached the SEC. A surprise counts for 95 days, and needs at least 4 earlier quarters of history.
 
 Market value is price × shares outstanding. Past stock splits are recorded (and back-filled once by `db update`), so old share counts and Yahoo's split-adjusted prices line up.
 
@@ -359,6 +365,7 @@ trend_bot/
   forecast.py    30-day outlook: logistic regression, walk-forward test, live odds
   fundamentals.py SEC company facts: download, point-in-time lookups, factor values
   factors.py     factor study (IC and top-minus-bottom per signal)
+  earnings.py    quarterly earnings surprises (SUE) and announcement returns
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs

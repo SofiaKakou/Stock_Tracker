@@ -574,6 +574,7 @@ def _study_factors(con, args: argparse.Namespace) -> None:
     for n, d in fundamentals.DESCRIPTIONS.items():
         print(f"  {n:<20} {d}")
     print(f"  {'quality_value_combo':<20} average rank of {', '.join(factors.QUALITY_VALUE)}")
+    print(f"  {'earnings_combo':<20} average rank of {', '.join(factors.EARNINGS)}")
 
 
 def _study_forecast(con, args: argparse.Namespace) -> None:

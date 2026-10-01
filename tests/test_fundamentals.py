@@ -56,7 +56,7 @@ def test_parse_keeps_full_years_and_10k_10q_only():
     rows = fundamentals.parse_company(company(7, [2020, 2021], 0.3))
     items = pd.DataFrame(rows, columns=["cik", "item", "priority", "start", "end", "filed", "val"])
     rev = items[items["item"] == "revenue"]
-    assert len(rev) == 2 and not (rev["val"] == 99.0).any() and not (rev["val"] == 5.0).any()
+    assert len(rev) == 3 and (rev["val"] == 99.0).any() and not (rev["val"] == 5.0).any()  # 2 years + 1 quarter; 8-K ignored
     assert items[items["item"] == "assets"]["start"].isna().all()
     assert set(items["item"]) >= {"revenue", "gross_profit", "net_income", "cfo", "assets", "shares"}
 
