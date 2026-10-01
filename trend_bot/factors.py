@@ -19,7 +19,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-from trend_bot import fundamentals, model
+from trend_bot import earnings, fundamentals, model
 from trend_bot.company_info import fund_tickers
 
 
@@ -82,6 +82,8 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
     panel = panel or model.monthly_panel(con)
     raw = raw_close_monthly(con, list(tickers.values()))
     splits = pd.read_sql_query("SELECT * FROM splits", con)
+    log("[factors] working out quarterly earnings surprises...")
+    ev = earnings.events(con, facts, tickers)
     nxt = panel["close"].shift(-1) / panel["close"] - 1
     months = [m for m in panel["close"].index[:-1] if m >= pd.Timestamp(since)]
     rows = []
@@ -94,7 +96,7 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
         f = f[f.index.isin(list(tickers))]
         caps = market_caps(raw.loc[month] if month in raw.index else pd.Series(dtype=float),
                            f["shares"], f["shares_date"], splits, tickers)
-        vals = fundamentals.factor_values(f, caps)
+        vals = fundamentals.factor_values(f, caps).join(earnings.latest(ev, month), how="left")
         vals.index = [tickers[c] for c in vals.index]
         vals = vals[vals.index.isin(feat.index)]
         vals["ret"] = nxt.loc[month, vals.index]
@@ -137,14 +139,16 @@ def evaluate(df: pd.DataFrame, factor: str, sign: int = 1, min_stocks: int = 50)
 
 
 QUALITY_VALUE = ["gross_profitability", "earnings_yield", "book_to_market", "accruals", "asset_growth"]
+EARNINGS = ["sue", "revenue_sue", "ear"]
 
 
 def study(df: pd.DataFrame, split_year: int = 2018) -> dict[str, pd.DataFrame]:
     df = df.copy()
     df["quality_value_combo"] = composite(df, QUALITY_VALUE)
+    df["earnings_combo"] = composite(df, EARNINGS)
     periods = {"all": df, f"before {split_year}": df[df["month"].dt.year < split_year],
                f"{split_year} on": df[df["month"].dt.year >= split_year]}
-    names = list(fundamentals.EXPECTED) + ["quality_value_combo"]
+    names = list(fundamentals.EXPECTED) + ["quality_value_combo", "earnings_combo"]
     out = {}
     for label, part in periods.items():
         rows = {}

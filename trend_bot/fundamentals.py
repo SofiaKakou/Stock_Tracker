@@ -66,7 +66,9 @@ def parse_company(doc: dict) -> list[tuple]:
                     if not start:
                         continue
                     days = (dt.date.fromisoformat(e["end"]) - dt.date.fromisoformat(start)).days
-                    if not 350 <= days <= 380:  # keep full fiscal years only
+                    # Full fiscal years, single quarters, and 9-month year-to-date
+                    # (the last one is needed to work out fourth quarters).
+                    if not (350 <= days <= 380 or 80 <= days <= 100 or 260 <= days <= 285):
                         continue
                 elif start:
                     continue
@@ -156,6 +158,7 @@ def as_of(facts: pd.DataFrame, when: pd.Timestamp, max_age_days: int = 550) -> p
     Flows are the last full fiscal year; balance-sheet items and shares the latest reported.
     Also returns *_prior: the same item one year earlier (for growth rates).
     """
+    facts = annual_only(facts)
     known = facts[(facts["filed"] <= when) & (facts["end"] >= when - pd.Timedelta(days=max_age_days))]
     older = facts[facts["filed"] <= when]
     out = {}
@@ -178,7 +181,15 @@ def as_of(facts: pd.DataFrame, when: pd.Timestamp, max_age_days: int = 550) -> p
 
 
 def load_facts(con: sqlite3.Connection) -> pd.DataFrame:
-    return pd.read_sql_query("SELECT * FROM facts", con, parse_dates=["start", "end", "filed"])
+    df = pd.read_sql_query("SELECT * FROM facts", con, parse_dates=["start", "end", "filed"])
+    df["days"] = (df["end"] - df["start"]).dt.days  # NaN for point-in-time items
+    return df
+
+
+def annual_only(facts: pd.DataFrame) -> pd.DataFrame:
+    """Drop quarterly and year-to-date rows: flows as full fiscal years, plus point-in-time items."""
+    days = facts["days"] if "days" in facts else (facts["end"] - facts["start"]).dt.days
+    return facts[days.isna() | days.between(350, 380)]
 
 
 # --- Factor values ----------------------------------------------------------------------------------
@@ -214,6 +225,8 @@ EXPECTED = {
     "gross_profitability": +1, "roe": +1, "accruals": -1, "leverage": -1,
     "revenue_growth": +1, "asset_growth": -1,
     "earnings_yield": +1, "book_to_market": +1, "sales_to_price": +1,
+    # Earnings surprises (see earnings.py)
+    "sue": +1, "revenue_sue": +1, "ear": +1,
 }
 DESCRIPTIONS = {
     "gross_profitability": "gross profit / assets (Novy-Marx)",
@@ -225,4 +238,7 @@ DESCRIPTIONS = {
     "earnings_yield": "net income / market value",
     "book_to_market": "book equity / market value (Fama-French value)",
     "sales_to_price": "sales / market value",
+    "sue": "latest quarter's profit surprise vs a year earlier, standardized (post-earnings drift)",
+    "revenue_sue": "the same surprise measure for revenue",
+    "ear": "stock minus S&P 500 over the 3 days around the latest quarterly filing",
 }
