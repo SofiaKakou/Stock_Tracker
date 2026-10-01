@@ -111,3 +111,12 @@ def test_cli_model_study_alert_report(model_db, tmp_path, monkeypatch, capsys):
 
     assert main(["track", "--db", path]) == 0
     assert "Model buy" in capsys.readouterr().out
+
+
+def test_study_model_yearly_respects_since(model_db, tmp_path, capsys):
+    since = str(DATES[400].year)
+    assert main(["study", "model", "--db", str(tmp_path / "market.db"), "--hold", "10",
+                 "--since", f"{since}-01-01"]) == 0
+    yearly = capsys.readouterr().out.split("Year by year:")[1]
+    years = [int(line.split()[0]) for line in yearly.splitlines() if line[:4].isdigit()]
+    assert min(years) >= int(since) and "SPY + weather filter" in yearly

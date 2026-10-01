@@ -532,11 +532,14 @@ def _study_model(con, args: argparse.Namespace) -> None:
         s = model.summarize(part, cols).rename(index=names)
         print(f"\n== {label}: {part.index[0]:%Y-%m} to {part.index[-1]:%Y-%m} ==")
         print(s.to_string(formatters=fmt))
-    print(f"\nIn the market {monthly['invested'].mean():.0%} of months; "
-          f"on average {monthly['turnover'].mean():.0%} of the portfolio changed each month.")
-    yearly = (1 + monthly[["model", "model_no_weather", b]]).groupby(monthly.index.year).prod() - 1
+    shown = monthly[monthly.index >= pd.Timestamp(args.since)]
+    print(f"\nIn the market {shown['invested'].mean():.0%} of months; "
+          f"on average {shown['turnover'].mean():.0%} of the portfolio changed each month.")
+    # min_count=1 keeps years without benchmark data blank instead of showing +0%.
+    yearly = (1 + shown[["model", "model_no_weather", b, f"{b}_weather"]]).groupby(
+        shown.index.year).prod(min_count=1) - 1
     print("\nYear by year:\n" + yearly.rename(columns=names).rename_axis("year").to_string(
-        float_format=lambda v: f"{v:+.0%}"))
+        float_format=lambda v: f"{v:+.0%}", na_rep="–"))
     print("\nreturn_per_risk = yearly growth divided by volatility (higher is better).")
 
 
