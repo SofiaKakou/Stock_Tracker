@@ -115,13 +115,14 @@ def _ideas_section(con: sqlite3.Connection, esc) -> list[str]:
     r = ideas.load(con)
     if not r:
         return []
-    row = lambda p: [f"<b>{esc(p['ticker'])}</b>", f"{p['close']:,.2f}" if p.get("close") else "–", esc(p["why"])]
-    heads = ["Ticker", "Close", "Mostly because"]
+    row = lambda p: [f"<b>{esc(p['ticker'])}</b>", f"{p['close']:,.2f}" if p.get("close") else "–",
+                     esc(p.get("sector") or "–"), esc(p["why"])]
+    heads = ["Ticker", "Close", "Industry", "Mostly because"]
     return ["<h2>💡 Top ideas (every signal, simple mix)</h2>",
             f'<p class="sub">{r["stocks"]:,} most traded stocks ranked on every signal on {esc(r["date"])}; '
             "refreshed monthly.</p>",
-            "<h3>⚠️ Most likely to lag</h3>", _table(heads, [row(p) for p in r["bottom"]], left={0, 2}),
-            "<h3>💡 Top ideas</h3>", _table(heads, [row(p) for p in r["top"]], left={0, 2}),
+            "<h3>⚠️ Most likely to lag</h3>", _table(heads, [row(p) for p in r["bottom"]], left={0, 2, 3}),
+            "<h3>💡 Top ideas</h3>", _table(heads, [row(p) for p in r["top"]], left={0, 2, 3}),
             f'<p class="note"><b>How reliable is this?</b> {esc(ideas.reliability_note(con))}</p>']
 
 

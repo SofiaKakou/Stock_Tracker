@@ -48,12 +48,12 @@ BAD = {
 }
 
 
-def oriented_ranks(df: pd.DataFrame) -> pd.DataFrame:
-    """Each signal as a 0-1 rank within the month, flipped so 1 is always 'good'."""
+def oriented_ranks(df: pd.DataFrame, by_sector: bool = False) -> pd.DataFrame:
+    """Each signal as a 0-1 rank within the month (or industry), flipped so 1 is always 'good'."""
     out = {}
     for c in ml.SIGNALS:
         if c in df and df[c].notna().any():
-            r = df.groupby("month")[c].rank(pct=True)
+            r = factors.group_rank(df, c, by_sector)
             out[c] = r if fundamentals.EXPECTED[c] > 0 else 1 - r
     out["mom12"] = df.groupby("month")["mom12"].rank(pct=True)
     return pd.DataFrame(out, index=df.index)
@@ -67,21 +67,23 @@ def reasons(ranks: pd.Series, best: bool = True, n: int = 3) -> str:
     return ", ".join(words.get(k, k) for k in r.index[:n]) or "a bit of everything"
 
 
-def rank_month(df: pd.DataFrame) -> pd.DataFrame:
-    """Score every stock in the table's latest month; best first. Columns: score, pct, close, why."""
+def rank_month(df: pd.DataFrame, by_sector: bool = False) -> pd.DataFrame:
+    """Score every stock in the table's latest month; best first. Columns: score, pct, close, sector, why."""
     df = df[df["gone"].isna()] if "gone" in df else df
     df = df.assign(**{c: np.nan for c in ml.FEATURES if c not in df})  # e.g. no short data loaded yet
     month = df["month"].max()
     now = df[df["month"] == month].copy()
-    ranks = oriented_ranks(now)
-    now["score"] = ml.simple_mix(now)
+    ranks = oriented_ranks(now, by_sector)
+    now["score"] = ml.simple_mix(now, by_sector)
     now["signals"] = ranks.notna().sum(axis=1)
     now = now[now["signals"] >= MIN_SIGNALS].dropna(subset=["score"])
     now["pct"] = now["score"].rank(pct=True)
     now = now.sort_values("score", ascending=False)
     k = max(1, len(now) // 2)
     now["why"] = [reasons(ranks.loc[i], best=j < k) for j, i in enumerate(now.index)]
-    return now.set_index("ticker")[["score", "pct", "close", "signals", "why"]]
+    if "sector" not in now:
+        now["sector"] = None
+    return now.set_index("ticker")[["score", "pct", "close", "signals", "sector", "why"]]
 
 
 def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd.DataFrame, str]:
@@ -92,11 +94,12 @@ def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd
         return pd.DataFrame(), ""
     date = con.execute("SELECT MAX(date) FROM prices WHERE ticker IN (SELECT ticker FROM tickers "
                        "WHERE last_date IS NOT NULL)").fetchone()[0][:10]
-    return rank_month(df), date
+    return rank_month(df, by_sector=method(con) == "industry_mix"), date
 
 
 def save(con: sqlite3.Connection, ranked: pd.DataFrame, date: str, top: int = 15, bottom: int = 10) -> None:
     pick = lambda part: [{"ticker": t, "close": float(r["close"]) if pd.notna(r["close"]) else None,
+                          "sector": r["sector"] if isinstance(r["sector"], str) else None,
                           "why": r["why"]} for t, r in part.iterrows()]
     set_meta(con, "mix_ranking", json.dumps({"date": date, "stocks": len(ranked), "top": pick(ranked.head(top)),
                                              "bottom": pick(ranked.tail(bottom).iloc[::-1])}))
@@ -114,16 +117,32 @@ def load(con: sqlite3.Connection, max_age_days: int = 45) -> dict | None:
 # --- How reliable has it been? -------------------------------------------------------------------
 
 def save_scorecard(con: sqlite3.Connection, card: dict[str, pd.DataFrame], preds: pd.DataFrame) -> None:
-    """Keep the simple mix's walk-forward numbers from study ml (it's tested there, next to the model)."""
-    row = lambda label: card[label].loc["simple_mix"] if "simple_mix" in card[label].index else None
+    """Keep the mix's walk-forward numbers from study ml (it's tested there, next to the model).
+
+    Two versions are tested: signals ranked against the whole market (simple_mix) and within
+    each industry (industry_mix). The industry version is used only if it ranked stocks better
+    in both halves of the test; otherwise the plain one stays.
+    """
     halves = [k for k in card if k != "all"]
-    out = {"from": f"{preds['month'].min():%Y}", "to": f"{preds['month'].max():%Y}"}
-    a = row("all")
+    ic = lambda method, label: (card[label].loc[method, "mean_ic"]
+                                if method in card[label].index else np.nan)
+    better = bool(halves) and all(ic("industry_mix", h) > ic("simple_mix", h) for h in halves)
+    method = "industry_mix" if better else "simple_mix"
+    out = {"method": method, "from": f"{preds['month'].min():%Y}", "to": f"{preds['month'].max():%Y}"}
+    a = card["all"].loc[method]
     for k in ("months", "mean_ic", "ic_t", "ic_positive", "top10_per_year", "average_stock_per_year"):
-        out[k] = float(a[k]) if a is not None and k in a and pd.notna(a[k]) else None
-    out["halves_positive"] = all(row(h) is not None and row(h)["mean_ic"] > 0 for h in halves)
+        out[k] = float(a[k]) if k in a and pd.notna(a[k]) else None
+    out["halves_positive"] = all(ic(method, h) > 0 for h in halves)
+    out["other_ic"] = float(card["all"].loc["simple_mix" if better else "industry_mix", "mean_ic"]) \
+        if "industry_mix" in card["all"].index else None
     set_meta(con, "mix_scorecard", json.dumps(out))
     con.commit()
+
+
+def method(con: sqlite3.Connection) -> str:
+    """'industry_mix' if the last test chose comparing within industries, else 'simple_mix'."""
+    raw = get_meta(con, "mix_scorecard")
+    return json.loads(raw).get("method", "simple_mix") if raw else "simple_mix"
 
 
 def reliability_note(con: sqlite3.Connection) -> str:
@@ -134,8 +153,10 @@ def reliability_note(con: sqlite3.Connection) -> str:
     if s.get("top10_per_year") is None:
         return "Not enough history to test it yet."
     steady = "in both halves of the test" if s.get("halves_positive") else "but not in both halves of the test"
+    how = ("Company signals are compared within each industry (that tested better than against the whole market). "
+           if s.get("method") == "industry_mix" else "")
     months = f", {s['months']:.0f} months" if s.get("months") else ""
-    return (f"Tested {s['from']}-{s['to']}{months} (nothing is fitted, so there's no hindsight in how it adds up the "
+    return (f"{how}Tested {s['from']}-{s['to']}{months} (nothing is fitted, so there's no hindsight in how it adds up the "
             f"signals): the top 10% returned "
             f"{s['top10_per_year']:+.1%} a year after costs vs {s['average_stock_per_year']:+.1%} for the average "
             f"stock, and the ranking pointed the right way in {s['ic_positive']:.0%} of months, {steady}. "

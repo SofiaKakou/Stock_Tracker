@@ -589,7 +589,9 @@ def _study_factors(con, args: argparse.Namespace) -> None:
     fmt = {"months": "{:.0f}".format, "stocks": "{:.0f}".format, "mean_ic": "{:+.3f}".format,
            "ic_t": "{:+.1f}".format, "ic_positive": "{:.0%}".format, "top_minus_bottom": "{:+.2%}".format,
            "ic_listed_only": "{:+.3f}".format, "ic_with_gone": "{:+.3f}".format,
-           "tmb_listed_only": "{:+.2%}".format, "tmb_with_gone": "{:+.2%}".format}
+           "tmb_listed_only": "{:+.2%}".format, "tmb_with_gone": "{:+.2%}".format,
+           "ic_whole_market": "{:+.3f}".format, "ic_within_industry": "{:+.3f}".format,
+           "t_within_industry": "{:+.1f}".format, "tmb_within_industry": "{:+.2%}".format}
     print(_gone_note(df))
     print(f"\n{df['month'].min():%Y-%m} to {df['month'].max():%Y-%m}, up to {args.universe:,} most traded stocks a month")
     for label, table in tables.items():
@@ -645,7 +647,8 @@ def _study_ml(con, args: argparse.Namespace) -> None:
         cols = [c for c in fmt if c in table]
         print(f"\n== {label} ==\n" + table[cols].to_string(formatters=fmt))
     print("\nmodel: the machine-learning model. simple_mix: equal-weight average rank of every signal plus momentum "
-          "(no fitting). quality_value / momentum: single-idea baselines.\n"
+          "(no fitting). industry_mix: the same, with company signals ranked within each industry. "
+          "quality_value / momentum: single-idea baselines.\n"
           "mean_ic: rank correlation with next month's return (0.02-0.05 is useful). ic_t above ~2: unlikely luck. "
           "top10_per_year: holding the top 10% each month, after 0.1% trading costs each way, vs average_stock "
           "(every stock in the universe, equal weight). Momentum can't be measured for companies that disappeared, "
@@ -665,6 +668,7 @@ def _study_ml(con, args: argparse.Namespace) -> None:
     from trend_bot import ideas
 
     ideas.save_scorecard(con, card, preds)
+    print(f"Top ideas will use: {ideas.method(con)} (industry_mix only if it beat simple_mix in both halves).")
     new = track.record_ml(con, ranking, latest)
     print(f"\nRecorded {len(new)} new picks (top and bottom 10%) for forward tracking: see 'python -m trend_bot track'.")
 
@@ -968,7 +972,8 @@ def cmd_ideas(args: argparse.Namespace) -> int:
         note = ideas.reliability_note(con)
     from trend_bot.model import weather_text
 
-    show = lambda df: df.assign(rank=df["pct"].map("{:.0%}".format))[["close", "rank", "why"]].to_string(
+    show = lambda df: df.assign(rank=df["pct"].map("{:.0%}".format), sector=df["sector"].fillna("-"))[
+        ["close", "rank", "sector", "why"]].to_string(
         float_format="{:,.2f}".format)
     print(f"\nTop ideas · {date} · {len(ranked):,} stocks ranked\n\nMarket weather: {weather_text(ws)}\n")
     print(f"== ⚠️  Most likely to lag ==\n{show(ranked.tail(args.bottom).iloc[::-1])}")

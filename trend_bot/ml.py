@@ -74,11 +74,12 @@ def train(X: pd.DataFrame, y: pd.Series, trees: int = TREES):
     return lgb.train(PARAMS, lgb.Dataset(X, y, free_raw_data=False), num_boost_round=trees)
 
 
-def simple_mix(df: pd.DataFrame) -> pd.Series:
+def simple_mix(df: pd.DataFrame, by_sector: bool = False) -> pd.Series:
     """The baseline: equal-weight average rank of every signal, each pointed the expected way,
-    plus 12-month momentum. No fitting at all."""
+    plus 12-month momentum. No fitting at all. by_sector: company signals are ranked within each
+    industry (momentum stays market-wide)."""
     cols = [c for c in SIGNALS if df[c].notna().any()]
-    mix = factors.composite(df, cols) if cols else pd.Series(np.nan, index=df.index)
+    mix = factors.composite(df, cols, by_sector) if cols else pd.Series(np.nan, index=df.index)
     mom = df.groupby("month")["mom12"].rank(pct=True)
     return pd.concat([mix * len(cols), mom], axis=1).sum(axis=1, min_count=1) / (len(cols) + 1)
 
@@ -107,6 +108,7 @@ def walk_forward(df: pd.DataFrame, first_year: int = 2014, trees: int = TREES, l
     preds = pd.concat(out)
     base = df.loc[preds.index]
     preds["simple_mix"] = simple_mix(df).loc[preds.index]
+    preds["industry_mix"] = simple_mix(df, by_sector=True).loc[preds.index]
     preds["momentum"] = base["mom12"]
     preds["quality_value"] = factors.composite(df, factors.QUALITY_VALUE).loc[preds.index]
     return preds
@@ -128,7 +130,7 @@ def top_portfolio(preds: pd.DataFrame, col: str, top: float = 0.1) -> pd.DataFra
 
 def scorecard(preds: pd.DataFrame, split_year: int = 2020) -> dict[str, pd.DataFrame]:
     """IC, top-minus-bottom and a top-10% portfolio per approach, for all years and both halves."""
-    approaches = ["model", "simple_mix", "quality_value", "momentum"]
+    approaches = ["model", "simple_mix", "industry_mix", "quality_value", "momentum"]
     periods = {"all": preds, f"before {split_year}": preds[preds["month"].dt.year < split_year],
                f"{split_year} on": preds[preds["month"].dt.year >= split_year]}
     out = {}

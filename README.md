@@ -287,6 +287,8 @@ In the walk-forward test (`study ml`), this simple mix was steadier than the mac
 - The weekly Discord outlook and the report show the list with a "How reliable is this?" line.
 - The top and bottom 10% are recorded for forward tracking (`track`, `💡 Top ideas` / `⚠️ Most likely to lag`).
 
+**Within each industry.** A bank and a software company look very different on debt, margins and price-to-book. So `study ml` also tests an **industry_mix**, where company signals are ranked against the company's own industry instead of the whole market. It uses about 15 groups built from SEC industry codes (`sectors.py`); an industry with fewer than 10 companies that month falls back to the whole market. The top ideas switch to the industry version **only if it ranked stocks better in both halves of the test**. Otherwise they stay with the plain mix, and the note says which one is used. `study factors` also shows each signal ranked against the whole market and within its industry.
+
 It's a starting point for your own research, not a buy list.
 
 ### One model over every signal (machine learning)
@@ -433,6 +435,7 @@ trend_bot/
   short_interest.py FINRA short interest and short volume
   ml.py          one LightGBM model over every signal, walk-forward tested
   ideas.py       monthly top ideas from the simple mix, with reasons
+  sectors.py     industry groups from SEC industry codes
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs

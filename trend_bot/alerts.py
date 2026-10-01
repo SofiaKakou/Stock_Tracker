@@ -276,7 +276,8 @@ def ideas_embed(ranking: dict | None, weather: dict, note: str) -> dict | None:
         return None
     from trend_bot.model import weather_text
 
-    line = lambda p: (f"`{p['ticker']:<6}`" + (f" {p['close']:,.2f}" if p.get("close") else "") + f" · {p['why']}")
+    line = lambda p: (f"`{p['ticker']:<6}`" + (f" {p['close']:,.2f}" if p.get("close") else "")
+                      + (f" · {p['sector']}" if p.get("sector") else "") + f" · {p['why']}")
     lines = [weather_text(weather, markdown=True), "",
              "**⚠️ Most likely to lag**", *[line(p) for p in ranking["bottom"]], "",
              "**💡 Top ideas**", *[line(p) for p in ranking["top"]], "",
