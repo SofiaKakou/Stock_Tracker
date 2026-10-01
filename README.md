@@ -289,6 +289,17 @@ In the walk-forward test (`study ml`), this simple mix was steadier than the mac
 
 **Within each industry.** A bank and a software company look very different on debt, margins and price-to-book. So `study ml` also tests an **industry_mix**, where company signals are ranked against the company's own industry instead of the whole market. It uses about 15 groups built from SEC industry codes (`sectors.py`); an industry with fewer than 10 companies that month falls back to the whole market. The top ideas switch to the industry version **only if it ranked stocks better in both halves of the test**. Otherwise they stay with the plain mix, and the note says which one is used. `study factors` also shows each signal ranked against the whole market and within its industry.
 
+**Would it have made money?**
+
+```bash
+python -m trend_bot study ideas                     # hold the top 20 each month, 2009-now
+python -m trend_bot study ideas --hold 30 --split-year 2020
+```
+
+This holds the top 20 ideas (`--hold`) in equal amounts and re-checks them monthly. A stock is kept while it stays in the top 40 (`--buffer`), which means fewer trades. Each trade costs 0.1%. It's shown with and without the **weather filter** (cash, earning 2% a year, while the S&P 500 is below its 200-day average). Both the plain and the industry version are compared with the S&P 500 and the average stock, for all years and for both halves, plus year by year.
+
+The nightly run repeats this on the first run of each month, and the headline numbers (yearly growth and worst drop vs the S&P 500) join the "How reliable is this?" note. Companies that disappeared only count in their last month, so the real past was a little worse than this for any stock list.
+
 It's a starting point for your own research, not a buy list.
 
 ### One model over every signal (machine learning)
@@ -346,7 +357,7 @@ Backtests can read from the database too: `python -m trend_bot backtest NVDA --f
 2. Open the **Actions** tab, then **Nightly market run → Run workflow**. The first run builds the database from scratch (about 1–2 hours). Later runs take a few minutes.
 3. Turn off the Windows task so you don't get messages twice: `Disable-ScheduledTask -TaskName "TrendBot Alerts"`.
 
-**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `ml`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
+**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `ml`, `ideas`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
 
 The database is kept between runs in GitHub's Actions cache. If it's ever evicted (after 7 days without a run, or if the 10 GB cache limit is exceeded), the next run rebuilds it automatically. Public repositories run for free; private ones get about 2,000 free minutes a month, and the nightly run uses roughly 10–20 of them.
 

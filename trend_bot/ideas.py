@@ -160,4 +160,88 @@ def reliability_note(con: sqlite3.Connection) -> str:
             f"signals): the top 10% returned "
             f"{s['top10_per_year']:+.1%} a year after costs vs {s['average_stock_per_year']:+.1%} for the average "
             f"stock, and the ranking pointed the right way in {s['ic_positive']:.0%} of months, {steady}. "
+            f"{backtest_note(con) + ' ' if backtest_note(con) else ''}"
             "A small edge on average in the past, not a promise for any one stock.")
+
+
+# --- Would it have made money? A portfolio test ---------------------------------------------------
+
+def scores(df: pd.DataFrame, by_sector: bool = False) -> pd.Series:
+    """The mix score for every row of a monthly table (NaN where too few signals are known)."""
+    df = df.assign(**{c: np.nan for c in ml.FEATURES if c not in df})
+    known = oriented_ranks(df, by_sector).notna().sum(axis=1)
+    return ml.simple_mix(df, by_sector).where(known >= MIN_SIGNALS)
+
+
+def backtest(df: pd.DataFrame, spy: pd.Series, hold: int = 20, buffer: int = 40, cost_bps: float = 10,
+             cash_rate: float = 2.0) -> pd.DataFrame:
+    """Monthly returns of holding the top `hold` ideas (equal weight), for both mixes, with and without
+    the weather filter (cash when the S&P 500 is below its 200-day average), against SPY.
+
+    A holding is kept while it stays in the top `buffer` (fewer trades). 0.1% per trade each way.
+    Companies that disappeared are included for their last month, at their fate's return.
+    """
+    from trend_bot import model
+
+    df = df.dropna(subset=["ret"]).reset_index(drop=True)
+    weather = model._monthly_last(model.spy_weather(spy))
+    spy_m = model._monthly_last(spy)
+    cash_m = (1 + cash_rate / 100) ** (1 / 12) - 1
+    cost = cost_bps / 10_000 * 2
+    out = {}
+    for name, by_sector in (("mix", False), ("industry_mix", True)):
+        s = scores(df, by_sector)
+        held: list[str] = []
+        rows = {}
+        for month, g in df.assign(score=s).dropna(subset=["score"]).groupby("month"):
+            if len(g) < hold * 3:
+                continue
+            ranked = g.set_index("ticker")["score"].sort_values(ascending=False)
+            new, buys, _ = model.rebalance(ranked, held, hold, buffer)
+            r = g.set_index("ticker")["ret"].reindex(new).dropna()
+            gross = (r.mean() if len(r) else 0.0) - cost * len(buys) / hold
+            invest = bool(weather.get(month, True))
+            rows[month + pd.offsets.MonthEnd(1)] = {name: gross if invest else cash_m, f"{name}_always": gross,
+                                                    f"{name}_turnover": len(buys) / hold}
+            held = new
+        out[name] = pd.DataFrame(rows).T
+    res = out["mix"].join(out["industry_mix"], how="outer")
+    months = res.index - pd.offsets.MonthEnd(1)
+    spy_r = (spy_m.shift(-1) / spy_m - 1).reindex(months).to_numpy()
+    invest = weather.reindex(months).fillna(True).astype(bool).to_numpy()
+    res["SPY"] = spy_r
+    res["SPY_weather"] = np.where(invest, spy_r, cash_m)
+    res["average_stock"] = df.groupby("month")["ret"].mean().reindex(months).to_numpy()
+    res["invested"] = invest
+    return res.sort_index()
+
+
+NAMES = {"mix": "Top ideas + weather filter", "mix_always": "Top ideas, always invested",
+         "industry_mix": "Industry top ideas + weather", "industry_mix_always": "Industry top ideas, always invested",
+         "SPY": "S&P 500 (buy & hold)", "SPY_weather": "S&P 500 + weather filter",
+         "average_stock": "Average stock (equal weight)"}
+
+
+def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> None:
+    """Keep the headline numbers of the portfolio test for the reliability note."""
+    from trend_bot import model
+
+    col = "industry_mix" if method(con) == "industry_mix" else "mix"
+    s = model.summarize(monthly, [col, "SPY"])
+    if col not in s.index or "SPY" not in s.index:
+        return
+    set_meta(con, "ideas_backtest", json.dumps({
+        "hold": hold, "from": f"{monthly.index.min():%Y}", "to": f"{monthly.index.max():%Y}",
+        "cagr": float(s.loc[col, "cagr"]), "max_drawdown": float(s.loc[col, "max_drawdown"]),
+        "spy_cagr": float(s.loc["SPY", "cagr"]), "spy_max_drawdown": float(s.loc["SPY", "max_drawdown"])}))
+    con.commit()
+
+
+def backtest_note(con: sqlite3.Connection) -> str:
+    raw = get_meta(con, "ideas_backtest")
+    if not raw:
+        return ""
+    b = json.loads(raw)
+    return (f"Holding the top {b['hold']} with the weather filter, {b['from']}-{b['to']}: {b['cagr']:+.1%} a year "
+            f"(worst drop {b['max_drawdown']:.0%}) vs the S&P 500's {b['spy_cagr']:+.1%} "
+            f"(worst drop {b['spy_max_drawdown']:.0%}).")

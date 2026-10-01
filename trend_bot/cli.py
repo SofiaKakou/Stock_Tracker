@@ -673,6 +673,51 @@ def _study_ml(con, args: argparse.Namespace) -> None:
     print(f"\nRecorded {len(new)} new picks (top and bottom 10%) for forward tracking: see 'python -m trend_bot track'.")
 
 
+def _study_ideas(con, args: argparse.Namespace) -> None:
+    from trend_bot import factors, ideas, model
+    from trend_bot.db import load_prices
+
+    if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
+        print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
+        return
+    since = args.since if args.since != "2006-01-01" else "2009-06-30"  # XBRL filings start in 2009
+    print("Building the monthly table of every signal (takes a while)...")
+    df = factors.monthly_factors(con, since=since, universe=args.universe, extras=True)
+    spy = load_prices(con, args.benchmark)["Close"]
+    if df.empty or spy.empty:
+        print("Not enough data.")
+        return
+    print(_gone_note(df))
+    monthly = ideas.backtest(df, spy, hold=args.hold, buffer=args.buffer, cash_rate=args.cash_rate)
+    if monthly.empty:
+        print("Not enough data.")
+        return
+    cols = [c for c in ideas.NAMES if c in monthly]
+    fmt = {"cagr": "{:+.1%}".format, "volatility": "{:.0%}".format, "max_drawdown": "{:.0%}".format,
+           "return_per_risk": "{:.2f}".format, "total": "{:+.0%}".format}
+    print(f"\nTop {args.hold} ideas of the {args.universe:,} most traded stocks, equal weight, checked monthly, "
+          f"kept while in the top {args.buffer}; 0.1% per trade; cash earns {args.cash_rate:g}%/yr when the weather "
+          "filter says so (S&P 500 below its 200-day average).")
+    split = pd.Timestamp(f"{args.split_year}-01-01")
+    for label, part in (("All years", monthly), (f"before {args.split_year}", monthly[monthly.index < split]),
+                        (f"{args.split_year} on", monthly[monthly.index >= split])):
+        if part.empty:
+            continue
+        s = model.summarize(part, cols).rename(index=ideas.NAMES)
+        print(f"\n== {label}: {part.index[0]:%Y-%m} to {part.index[-1]:%Y-%m} ==\n" + s.to_string(formatters=fmt))
+    yearly = (1 + monthly[["mix", "mix_always", "industry_mix", "SPY"]]).groupby(monthly.index.year).prod(
+        min_count=1) - 1
+    print("\nYear by year:\n" + yearly.rename(columns=ideas.NAMES).rename_axis("year").to_string(
+        float_format=lambda v: f"{v:+.0%}", na_rep="–"))
+    beat = (yearly["mix"] > yearly["SPY"]).mean()
+    print(f"\nIn the market {monthly['invested'].mean():.0%} of months; about "
+          f"{monthly['mix_turnover'].mean():.0%} of the portfolio changed each month; the top ideas (+ weather) beat "
+          f"the S&P 500 in {beat:.0%} of years.")
+    print("return_per_risk = yearly growth divided by volatility (higher is better). Companies that disappeared "
+          "only count in their last month, so the real past was a little worse than this for every stock list.")
+    ideas.save_backtest(con, monthly, args.hold)
+
+
 def _study_forecast(con, args: argparse.Namespace) -> None:
     from trend_bot import forecast
 
@@ -820,6 +865,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "ml":
             _study_ml(con, args)
+            return 0
+        if args.signal == "ideas":
+            _study_ideas(con, args)
             return 0
         if args.signal in ("trend", "both"):
             tickers = liquid_tickers(con, args.min_price, args.min_volume)
@@ -1137,7 +1185,8 @@ def make_parser() -> argparse.ArgumentParser:
     sc.set_defaults(func=cmd_screen)
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
-    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml"])
+    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml",
+                                       "ideas"])
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
     st.add_argument("--trees", type=int, default=300, help="ml: boosting rounds (default 300)")
     st.add_argument("--first-year", type=int, default=2011,
@@ -1147,7 +1196,7 @@ def make_parser() -> argparse.ArgumentParser:
     st.add_argument("--max-tickers", type=int, help="trend study: limit the number of stocks (faster)")
     st.add_argument("--top", type=float, default=0.1, help="momentum: share of stocks to hold (default 0.1 = top 10%%)")
     st.add_argument("--lookback", type=int, default=12, help="momentum: months of past return to rank by")
-    st.add_argument("--hold", type=int, default=20, help="model: stocks to hold (default 20)")
+    st.add_argument("--hold", type=int, default=20, help="model / ideas: stocks to hold (default 20)")
     st.add_argument("--universe", type=int, default=1000, help="model: most traded stocks to choose from")
     st.add_argument("--buffer", type=int, default=40, help="model: sell a stock once it falls below this rank")
     st.add_argument("--cash-rate", type=float, default=2.0, help="model: yearly %% earned while in cash")
