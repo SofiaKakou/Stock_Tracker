@@ -4,3 +4,4 @@ yfinance>=0.2.40
 pytest>=7.0
 matplotlib>=3.7
 requests>=2.31
+lightgbm>=4.0

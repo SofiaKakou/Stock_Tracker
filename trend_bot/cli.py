@@ -590,6 +590,54 @@ def _study_factors(con, args: argparse.Namespace) -> None:
         print(f"  {name:<20} average rank of {', '.join(parts)}")
 
 
+def _study_ml(con, args: argparse.Namespace) -> None:
+    from trend_bot import db, ml
+
+    if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
+        print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
+        return
+    since = args.since if args.since != "2006-01-01" else "2009-06-30"  # XBRL filings start in 2009
+    print("Building the monthly table of every signal (takes a while)...")
+    df = ml.dataset(con, since=since, universe=args.universe, include_latest=True)
+    if df.empty:
+        print("Not enough data.")
+        return
+    first = max(args.first_year, df["month"].dt.year.min() + 2)
+    preds = ml.walk_forward(df, first_year=first, trees=args.trees)
+    if preds.empty:
+        print("Not enough history before the first test year.")
+        return
+    card = ml.scorecard(preds, split_year=args.split_year)
+    fmt = {"months": "{:.0f}".format, "stocks": "{:.0f}".format, "mean_ic": "{:+.3f}".format,
+           "ic_t": "{:+.1f}".format, "ic_positive": "{:.0%}".format, "top_minus_bottom": "{:+.2%}".format,
+           "top10_per_year": "{:+.1%}".format, "average_stock_per_year": "{:+.1%}".format,
+           "turnover": "{:.0%}".format}
+    print(f"\nWalk-forward test {preds['month'].min():%Y-%m} to {preds['month'].max():%Y-%m}: each year predicted "
+          f"by a model trained only on earlier years ({len(preds):,} predictions).")
+    for label, table in card.items():
+        cols = [c for c in fmt if c in table]
+        print(f"\n== {label} ==\n" + table[cols].to_string(formatters=fmt))
+    print("\nmodel: the machine-learning model. simple_mix: equal-weight average rank of every signal plus momentum "
+          "(no fitting). quality_value / momentum: single-idea baselines.\n"
+          "mean_ic: rank correlation with next month's return (0.02-0.05 is useful). ic_t above ~2: unlikely luck. "
+          "top10_per_year: holding the top 10% each month, after 0.1% trading costs each way, vs average_stock "
+          "(every stock in the universe, equal weight). Stocks that were delisted mid-month are left out, "
+          "which flatters every approach a little.")
+    passed, text = ml.verdict(card, args.split_year)
+    print(f"\nVerdict: {text}")
+    ranking, imp = ml.today(df, trees=args.trees)
+    print("\nWhat the model leans on most (share of its total gain):")
+    print("  " + ", ".join(f"{k} {v:.0%}" for k, v in imp.head(12).items()))
+    latest = df["month"].max()
+    print(f"\nRanking as of {latest:%Y-%m-%d} ({'model passed' if passed else 'model NOT passed - research only'}):")
+    print("  Top 15:    " + ", ".join(ranking.index[:15]))
+    print("  Bottom 15: " + ", ".join(ranking.index[-15:]))
+    db.set_meta(con, "ml_verdict", json.dumps({"passed": passed, "date": f"{latest:%Y-%m-%d}", "text": text,
+                                                "ic": float(card["all"].loc["model", "mean_ic"]),
+                                                "mix_ic": float(card["all"].loc["simple_mix", "mean_ic"])}))
+    con.commit()
+
+
 def _study_forecast(con, args: argparse.Namespace) -> None:
     from trend_bot import forecast
 
@@ -734,6 +782,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "factors":
             _study_factors(con, args)
+            return 0
+        if args.signal == "ml":
+            _study_ml(con, args)
             return 0
         if args.signal in ("trend", "both"):
             tickers = liquid_tickers(con, args.min_price, args.min_volume)
@@ -1016,8 +1067,9 @@ def make_parser() -> argparse.ArgumentParser:
     sc.set_defaults(func=cmd_screen)
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
-    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors"])
+    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml"])
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
+    st.add_argument("--trees", type=int, default=300, help="ml: boosting rounds (default 300)")
     st.add_argument("--first-year", type=int, default=2011,
                     help="forecast: first year to predict (each year uses only earlier years)")
     st.add_argument("--since", default="2006-01-01", help="first event date")

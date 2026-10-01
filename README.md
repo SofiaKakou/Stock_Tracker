@@ -264,6 +264,23 @@ Market value is price × shares outstanding. Past stock splits are recorded (and
 
 Results are shown for all years, before 2018 and from 2018 on (`--split-year`), and a real signal should hold up in both.
 
+### One model over every signal (machine learning)
+
+```bash
+python -m trend_bot study ml                      # walk-forward test, then today's ranking
+python -m trend_bot study ml --first-year 2014 --split-year 2020
+```
+
+Every month-end, each of the ~1,000 most traded stocks gets about 30 inputs: price trend and momentum, last month's move, volatility, size, insider buying and selling, company financials, earnings surprises and short selling. Each input becomes a within-month rank, and a gradient-boosted tree model (LightGBM) learns to predict each stock's rank in next month's returns. Trees can pick up combinations a simple average can't ("cheap **and** improving earnings"), but they can also learn noise.
+
+So it's tested the honest way: each year is predicted by a model trained only on the years before it. The results are compared with:
+- **simple_mix:** the equal-weight average rank of every signal plus momentum (nothing fitted),
+- **quality_value** and **momentum** on their own.
+
+For each it shows the IC, top-minus-bottom, and a portfolio holding the top 10% each month after trading costs, vs the average stock. The **verdict** only says PASSED if the model beat the simple mix on unseen years in both halves (before and from `--split-year`) with an `ic_t` above 2. Otherwise treat its rankings as no better than the simple mix. The last lines show what the model relies on most and today's top and bottom 15 (also saved, with the verdict, for later use in the alerts).
+
+Stocks delisted in the middle of a month are left out of the returns, which flatters every approach a little (most for small, weak stocks).
+
 ### Short selling (FINRA)
 
 ```bash
@@ -298,7 +315,7 @@ Backtests can read from the database too: `python -m trend_bot backtest NVDA --f
 2. Open the **Actions** tab, then **Nightly market run → Run workflow**. The first run builds the database from scratch (about 1–2 hours). Later runs take a few minutes.
 3. Turn off the Windows task so you don't get messages twice: `Disable-ScheduledTask -TaskName "TrendBot Alerts"`.
 
-**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
+**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `ml`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
 
 The database is kept between runs in GitHub's Actions cache. If it's ever evicted (after 7 days without a run, or if the 10 GB cache limit is exceeded), the next run rebuilds it automatically. Public repositories run for free; private ones get about 2,000 free minutes a month, and the nightly run uses roughly 10–20 of them.
 
@@ -385,6 +402,7 @@ trend_bot/
   factors.py     factor study (IC and top-minus-bottom per signal)
   earnings.py    quarterly earnings surprises (SUE) and announcement returns
   short_interest.py FINRA short interest and short volume
+  ml.py          one LightGBM model over every signal, walk-forward tested
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs

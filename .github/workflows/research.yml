@@ -10,7 +10,7 @@ on:
         description: "Which study to run"
         type: choice
         default: factors
-        options: [factors, forecast, model, insiders, momentum, trend]
+        options: [factors, ml, forecast, model, insiders, momentum, trend]
       args:
         description: "Extra options, e.g. --benchmark IWM --since 2016-01-01 (optional)"
         type: string
