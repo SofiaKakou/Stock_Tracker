@@ -9,19 +9,12 @@ jobs:
     steps:
       - name: Probe FINRA
         run: |
-          get() { echo "===== $1"; curl -sS -L -m 60 -A "Mozilla/5.0 trend-bot" -o out -w "HTTP %{http_code} bytes %{size_download} type %{content_type}\n" "$@"; head -c 700 out; echo; echo "..."; tail -c 300 out; echo; }
-          get "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20260915.csv"
-          get "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20140115.csv"
-          get "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20190115.csv"
-          get "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20220114.csv"
-          get "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest?limit=3" -H "Accept: application/json"
-          get "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest" -H "Accept: text/plain" -H "Content-Type: application/json" -X POST -d '{"limit":5,"compareFilters":[{"compareType":"EQUAL","fieldName":"symbolCode","fieldValue":"AAPL"}]}'
-          get "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest" -H "Accept: text/plain" -H "Content-Type: application/json" -X POST -d '{"limit":5,"compareFilters":[{"compareType":"EQUAL","fieldName":"settlementDate","fieldValue":"2015-01-15"}]}'
-          get "https://api.finra.org/metadata/group/otcMarket/name/consolidatedShortInterest" -H "Accept: application/json"
-          get "https://cdn.finra.org/equity/regsho/daily/CNMSshvol20260930.txt"
-          get "https://cdn.finra.org/equity/regsho/daily/CNMSshvol20100104.txt"
-          get "https://cdn.finra.org/equity/regsho/daily/CNMSshvol20180802.txt"
-          get "https://cdn.finra.org/equity/regsho/daily/FNSQshvol20100104.txt"
-          get "https://www.finra.org/finra-data/browse-catalog/equity-short-interest/files"
-          grep -o 'https\?://[^" ]*cdn.finra.org[^" ]*' out | sort -u | head -40 || true
-          grep -o '[^" ]*shrt[0-9]*[^" ]*' out | sort -u | head -20 || true
+          for y in 2006 2008 2010 2012 2013 2015 2016 2017 2018; do
+            for d in ${y}0115 ${y}0114 ${y}0113 ${y}0112 ${y}0131 ${y}0130 ${y}0129 ${y}0613 ${y}0615 ${y}0614 ${y}0612 ${y}0630 ${y}0629 ${y}0628; do
+              c=$(curl -s -o out -w "%{http_code}" "https://cdn.finra.org/equity/otcmarket/biweekly/shrt${d}.csv")
+              if [ "$c" = 200 ]; then echo "$d OK $(wc -l < out) lines"; head -2 out; grep -c '|NYSE|\||NNM|\||NSD|' out || true; grep -E '^[^|]*\|(AAPL|IBM|BRK)' out | head -3; fi
+            done
+          done
+          curl -s -o out "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20260915.csv"; cut -d'|' -f5 out | sort | uniq -c
+          grep -E '"BRK|"BF' out | head -4
+          grep -c . out
