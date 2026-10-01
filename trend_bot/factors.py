@@ -135,7 +135,7 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
             vals = vals.join(short, how="left")
         vals = vals[vals.index.isin(feat.index)]
         if extras:
-            vals = vals.join(feat.drop(columns="close"), how="left")
+            vals = vals.join(feat, how="left")   # close is kept for reference, not used as an input
             vals["mom1"] = last1.loc[month, vals.index]
         vals["ret"] = nxt.loc[month, vals.index]
         vals["month"] = month

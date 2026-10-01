@@ -66,3 +66,33 @@ def test_study_ml_end_to_end(model_db, tmp_path, monkeypatch, capsys):
     assert "Verdict:" in out and "Top 15:" in out and "simple_mix" in out
     saved = json.loads(db.get_meta(model_db, "ml_verdict"))
     assert set(saved) >= {"passed", "date", "ic", "mix_ic"}
+    ranking = json.loads(db.get_meta(model_db, "ml_ranking"))
+    assert ranking["date"] == str(DATES[-1].date()) and len(ranking["top"]) == 10   # a real trading day
+    picks = dict(model_db.execute("SELECT signal, COUNT(*) FROM picks GROUP BY signal"))
+    assert picks["ml_top"] == picks["ml_bottom"] >= 1          # top and bottom 10%, tracked either way
+    assert "Recorded" in out
+    # Running it again the same month records nothing new.
+    assert main(["study", "ml", "--db", str(tmp_path / "market.db"), "--trees", "20", "--universe", "100"]) == 0
+    assert dict(model_db.execute("SELECT signal, COUNT(*) FROM picks GROUP BY signal")) == picks
+
+
+def test_model_ideas_only_shown_when_it_passed(model_db, monkeypatch):
+    from trend_bot import alerts, report
+
+    ranking = {"date": "2026-09-30", "top": [{"ticker": "S79", "close": 80.0}], "bottom": [{"ticker": "S00", "close": 9.0}]}
+    failed = {"passed": False, "ic": 0.01, "mix_ic": 0.02, "text": "NOT PASSED"}
+    assert alerts.ml_embed(failed, ranking) is None
+    assert "aren't shown" in alerts.ml_status_line(failed)
+    passed = dict(failed, passed=True, ic=0.04)
+    e = alerts.ml_embed(passed, ranking)
+    assert "S79" in e["description"] and "S00" in e["description"] and alerts.ml_status_line(passed) == ""
+
+    monkeypatch.setattr(ml.dt, "date", type("D", (ml.dt.date,), {"today": classmethod(lambda c: ml.dt.date(2026, 10, 5))}))
+    db.set_meta(model_db, "ml_ranking", json.dumps(ranking))
+    db.set_meta(model_db, "ml_verdict", json.dumps(failed))
+    assert report._ml_section(model_db, str) == []
+    db.set_meta(model_db, "ml_verdict", json.dumps(passed))
+    html = "".join(report._ml_section(model_db, str))
+    assert "All-signal model" in html and "S79" in html
+    monkeypatch.setattr(ml.dt, "date", type("D", (ml.dt.date,), {"today": classmethod(lambda c: ml.dt.date(2027, 1, 5))}))
+    assert ml.load(model_db) == (None, None)                    # stale rankings are not shown

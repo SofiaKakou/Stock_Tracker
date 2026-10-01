@@ -50,12 +50,14 @@ jobs:
       - name: Update data
         run: python -m trend_bot db update || echo "::warning::db update did not finish (see log); continuing"
 
-      # Re-test the 30-day outlook monthly (and on manual runs) for its "How reliable is this?" note.
+      # Monthly (and on manual runs): re-test the 30-day outlook for its "How reliable is this?" note, and
+      # re-test the all-signal model (its ideas are only shown if it passes; its picks are tracked either way).
       - name: Monthly honesty check
         if: github.event_name == 'workflow_dispatch' || github.event.schedule != ''
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date +%d)" -le 3 ]; then
             python -m trend_bot study forecast || echo "::warning::study forecast failed"
+            python -m trend_bot study ml || echo "::warning::study ml failed"
           fi
 
       - name: Discord alerts

@@ -246,3 +246,25 @@ def forecast_embed(preds, date: str, weather: dict, note: str, n: int = 10) -> d
              f"_How reliable is this? {note}_", f"As of {date}. Odds, not certainties."]
     return {"title": "🌦️ Weekly outlook", "description": "\n".join(lines)[:4000],
             "color": GREEN if weather["invest"] else RED}
+
+
+def ml_embed(verdict: dict | None, ranking: dict | None) -> dict | None:
+    """The all-signal model's ideas - only when it beat the simple mix on years it never saw."""
+    if not verdict or not ranking or not verdict.get("passed"):
+        return None
+    line = lambda p: f"`{p['ticker']:<6}`" + (f" {p['close']:,.2f}" if p.get("close") else "")
+    lines = [f"Passed its honesty test: on years it never saw it ranked stocks better than a simple mix of "
+             f"the same signals (IC {verdict['ic']:+.3f} vs {verdict['mix_ic']:+.3f}).", "",
+             "**⚠️ Most likely to lag**", *[line(p) for p in ranking["bottom"]], "",
+             "**💡 Top ideas**", *[line(p) for p in ranking["top"]], "",
+             f"_Ranking from {ranking['date']}, refreshed monthly. Its picks are tracked forward "
+             "(see the report). Odds, not certainties._"]
+    return {"title": "🤖 All-signal model", "description": "\n".join(lines)[:4000], "color": GOLD}
+
+
+def ml_status_line(verdict: dict | None) -> str:
+    """One line for the weekly outlook when the model's ideas are not shown."""
+    if verdict and not verdict.get("passed"):
+        return ("The all-signal model hasn't beaten a simple mix of the same signals on years it never saw, "
+                "so its ideas aren't shown. Its picks are still tracked forward.")
+    return ""

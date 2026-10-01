@@ -16,12 +16,15 @@ mix on the unseen years.
 
 from __future__ import annotations
 
+import datetime as dt
+import json
 import sqlite3
 
 import numpy as np
 import pandas as pd
 
 from trend_bot import factors, fundamentals, model
+from trend_bot.db import get_meta, set_meta
 
 PRICE = ["trend", "mom12", "mom6", "mom1", "high52", "vol", "dollar_vol", "market_cap"]
 INSIDERS = ["insider_buyers", "insider_sellers"]
@@ -179,3 +182,28 @@ def today(df: pd.DataFrame, trees: int = TREES) -> tuple[pd.DataFrame, pd.Series
     now["score"] = m.predict(X_all.loc[now.index])
     now["pct"] = now["score"].rank(pct=True)
     return now.sort_values("score", ascending=False).set_index("ticker"), importance(m)
+
+
+# --- Saved results (for the weekly outlook and forward tracking) ------------------------------------
+
+def save(con: sqlite3.Connection, ranking: pd.DataFrame, date: str, card: dict[str, pd.DataFrame],
+         passed: bool, text: str, n: int = 10) -> None:
+    """Keep the verdict and the top/bottom of today's ranking in the database."""
+    pick = lambda part: [{"ticker": t, "close": float(r["close"]) if pd.notna(r.get("close")) else None}
+                         for t, r in part.iterrows()]
+    set_meta(con, "ml_verdict", json.dumps({
+        "passed": passed, "date": date, "text": text,
+        "ic": float(card["all"].loc["model", "mean_ic"]), "mix_ic": float(card["all"].loc["simple_mix", "mean_ic"])}))
+    set_meta(con, "ml_ranking", json.dumps({"date": date, "top": pick(ranking.head(n)),
+                                            "bottom": pick(ranking.tail(n).iloc[::-1])}))
+    con.commit()
+
+
+def load(con: sqlite3.Connection, max_age_days: int = 45) -> tuple[dict | None, dict | None]:
+    """(verdict, ranking) if a recent `study ml` saved them, else (None, None)."""
+    v, r = get_meta(con, "ml_verdict"), get_meta(con, "ml_ranking")
+    if not v or not r:
+        return None, None
+    verdict, ranking = json.loads(v), json.loads(r)
+    age = (dt.date.today() - dt.date.fromisoformat(ranking["date"])).days
+    return (verdict, ranking) if age <= max_age_days else (None, None)

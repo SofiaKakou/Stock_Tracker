@@ -284,7 +284,11 @@ So it's tested the honest way: each year is predicted by a model trained only on
 - **simple_mix:** the equal-weight average rank of every signal plus momentum (nothing fitted),
 - **quality_value** and **momentum** on their own.
 
-For each it shows the IC, top-minus-bottom, and a portfolio holding the top 10% each month after trading costs, vs the average stock. The **verdict** only says PASSED if the model beat the simple mix on unseen years in both halves (before and from `--split-year`) with an `ic_t` above 2. Otherwise treat its rankings as no better than the simple mix. The last lines show what the model relies on most and today's top and bottom 15 (also saved, with the verdict, for later use in the alerts).
+For each it shows the IC, top-minus-bottom, and a portfolio holding the top 10% each month after trading costs, vs the average stock. The **verdict** only says PASSED if the model beat the simple mix on unseen years in both halves (before and from `--split-year`) with an `ic_t` above 2. Otherwise treat its rankings as no better than the simple mix. The last lines show what the model relies on most and today's top and bottom 15.
+
+**In the cloud** the nightly run re-tests the model on the first run of each month. Then:
+- **Weekly outlook and report:** they show its top and most-likely-to-lag ideas **only if it passed**. Otherwise the outlook says in one line that it's not shown.
+- **Forward tracking, either way:** its top and bottom 10% are recorded as picks (`🤖 All-signal model` in `track` and the report). Grading picks on prices that didn't exist yet when they were made is the one test a model can't fool.
 
 Companies that disappeared are handled as in `study factors` (below). The model is never trained on them, because their price inputs are missing and it mustn't learn "missing prices = bankrupt". It is scored on them, though. Momentum can't be measured for them, so its row still leaves them out.
 
