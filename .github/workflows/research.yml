@@ -1,0 +1,99 @@
+# Runs a study on GitHub's servers against the cloud database and posts the results to Discord.
+# Actions tab -> "Research run" -> Run workflow -> pick a study.
+
+name: Research run
+
+on:
+  workflow_dispatch:
+    inputs:
+      study:
+        description: "Which study to run"
+        type: choice
+        default: factors
+        options: [factors, forecast, model, insiders, momentum, trend]
+      args:
+        description: "Extra options, e.g. --benchmark IWM --since 2016-01-01 (optional)"
+        type: string
+        default: ""
+      refresh:
+        description: "Refresh data first? fundamentals = company financials now (~15 min); full = whole nightly update"
+        type: choice
+        default: none
+        options: [none, fundamentals, full]
+
+concurrency:
+  group: nightly-market-run    # shares the database with the nightly run, so never at the same time
+  cancel-in-progress: false
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+
+      - name: Refresh data
+        if: inputs.refresh != 'none'
+        run: |
+          if [ "${{ inputs.refresh }}" = "fundamentals" ]; then
+            python -m trend_bot db update --fundamentals-only --ignore-sec-pause || echo "::warning::refresh did not finish"
+          else
+            python -m trend_bot db update || echo "::warning::refresh did not finish"
+          fi
+
+      - name: Run the study
+        run: |
+          mkdir -p reports
+          python -m trend_bot study ${{ inputs.study }} ${{ inputs.args }} 2>&1 | tee reports/study-${{ inputs.study }}.txt
+          {
+            echo "## study ${{ inputs.study }} ${{ inputs.args }}"
+            echo '```'
+            cat reports/study-${{ inputs.study }}.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post results to Discord
+        if: always()
+        run: |
+          python -m trend_bot send-report --path reports/study-${{ inputs.study }}.txt \
+            --message "🔬 Research run: study ${{ inputs.study }} ${{ inputs.args }} (results attached)" || true
+
+      - name: Save database
+        if: always() && inputs.refresh != 'none'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: study-${{ inputs.study }}-${{ github.run_id }}
+          path: reports/study-${{ inputs.study }}.txt
+          if-no-files-found: ignore
+          retention-days: 90

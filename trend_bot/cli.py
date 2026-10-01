@@ -435,6 +435,8 @@ def cmd_db(args: argparse.Namespace) -> int:
                       f"{f.get('unknown', 0):,} unclear)")
             return 0
 
+        if args.fundamentals_only:
+            args.insiders_only = True  # same SEC step, but only the fundamentals part matters
         everything = not (args.universe_only or args.prices_only or args.insiders_only)
         if everything or args.universe_only or args.prices_only:
             n = market_data.update_universe(con, include_otc=args.include_otc, all_securities=args.all_securities)
@@ -445,6 +447,7 @@ def cmd_db(args: argparse.Namespace) -> int:
                                                retry_failed=args.retry_failed, limit=args.limit)
             print(f"[prices] new {counts['new']:,}, updated {counts['updated']:,}, "
                   f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}")
+            market_data.backfill_splits(con, pause=args.pause)
         if everything or args.insiders_only:
             paused = db.get_meta(con, "sec_paused_until")
             if paused and dt.datetime.now().isoformat() < paused and not args.ignore_sec_pause:
@@ -452,6 +455,11 @@ def cmd_db(args: argparse.Namespace) -> int:
                       "skipping insider data today (prices, alerts and the report still update)")
                 return 0
             try:
+                if args.fundamentals_only:
+                    from trend_bot import fundamentals
+
+                    fundamentals.update_fundamentals(con, force=True)
+                    return 0
                 added = sec_bulk.load_quarters(con, since_year=args.insider_since)
                 print(f"[insiders] {added} quarterly file(s) loaded")
                 filings = sec_bulk.load_recent_days(con, max_days=args.insider_days,
@@ -466,6 +474,10 @@ def cmd_db(args: argparse.Namespace) -> int:
                 from trend_bot import company_info
 
                 company_info.update_company_info(con, limit=args.sec_lookups)
+                if not args.no_fundamentals:
+                    from trend_bot import fundamentals
+
+                    fundamentals.update_fundamentals(con, force=args.fundamentals_only)
             except RuntimeError as e:
                 print(f"[insiders] stopped: {e}", file=sys.stderr)
                 if "limiting" in str(e):
@@ -535,6 +547,33 @@ def _print_fates(con, study, events: pd.DataFrame, ev: pd.DataFrame, args: argpa
     worst = pd.concat([ev[ev["trend"] == "UP"], gone[gone["status"] == "bankrupt"]])
     print("\nTrend UP, WORST CASE (as if every bankruptcy above had been in an uptrend):\n"
           + pct(study.summarize(worst, min_price=args.min_price)))
+
+
+def _study_factors(con, args: argparse.Namespace) -> None:
+    from trend_bot import factors, fundamentals
+
+    if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
+        print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
+        return
+    since = args.since if args.since != "2006-01-01" else "2009-06-30"  # XBRL filings start in 2009
+    print("Ranking stocks by each signal at every month-end, using only financials filed by then...")
+    df = factors.monthly_factors(con, since=since, universe=args.universe)
+    if df.empty:
+        print("Not enough data.")
+        return
+    tables = factors.study(df, split_year=args.split_year)
+    fmt = {"months": "{:.0f}".format, "stocks": "{:.0f}".format, "mean_ic": "{:+.3f}".format,
+           "ic_t": "{:+.1f}".format, "ic_positive": "{:.0%}".format, "top_minus_bottom": "{:+.2%}".format}
+    print(f"\n{df['month'].min():%Y-%m} to {df['month'].max():%Y-%m}, up to {args.universe:,} most traded stocks a month")
+    for label, table in tables.items():
+        print(f"\n== {label} ==\n" + table.to_string(formatters=fmt))
+    print("\nmean_ic: rank correlation with next month's return (0.02-0.05 is useful, signs already flipped so"
+          " positive = worked as expected). ic_t: above about 2 means unlikely to be luck. top_minus_bottom:"
+          " best 10% minus worst 10%, per month.")
+    print("\nWhat each signal is:")
+    for n, d in fundamentals.DESCRIPTIONS.items():
+        print(f"  {n:<20} {d}")
+    print(f"  {'quality_value_combo':<20} average rank of {', '.join(factors.QUALITY_VALUE)}")
 
 
 def _study_forecast(con, args: argparse.Namespace) -> None:
@@ -678,6 +717,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "forecast":
             _study_forecast(con, args)
+            return 0
+        if args.signal == "factors":
+            _study_factors(con, args)
             return 0
         if args.signal in ("trend", "both"):
             tickers = liquid_tickers(con, args.min_price, args.min_volume)
@@ -929,6 +971,7 @@ def make_parser() -> argparse.ArgumentParser:
                      help="max days of recent filings to fetch one by one (default 30)")
     dbp.add_argument("--sec-lookups", type=int, default=1500,
                      help="max company lookups per run for the one-time catch-ups (default 1500)")
+    dbp.add_argument("--no-fundamentals", action="store_true", help="skip the weekly company-financials refresh")
     dbp.add_argument("--ignore-sec-pause", action="store_true",
                      help="try the SEC even if it asked us to slow down in the last 24 hours")
     dbp.add_argument("--insiders-all-companies", action="store_true",
@@ -937,6 +980,8 @@ def make_parser() -> argparse.ArgumentParser:
     only.add_argument("--universe-only", action="store_true")
     only.add_argument("--prices-only", action="store_true")
     only.add_argument("--insiders-only", action="store_true")
+    only.add_argument("--fundamentals-only", action="store_true",
+                      help="refresh company financials now (normally weekly, as part of db update)")
     dbp.set_defaults(func=cmd_db)
 
     market = argparse.ArgumentParser(add_help=False)
@@ -955,7 +1000,8 @@ def make_parser() -> argparse.ArgumentParser:
     sc.set_defaults(func=cmd_screen)
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
-    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast"])
+    st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors"])
+    st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
     st.add_argument("--first-year", type=int, default=2011,
                     help="forecast: first year to predict (each year uses only earlier years)")
     st.add_argument("--since", default="2006-01-01", help="first event date")
@@ -998,7 +1044,7 @@ def make_parser() -> argparse.ArgumentParser:
     fc.add_argument("--no-record", action="store_true", help="don't save the ideas for 'track'")
     fc.set_defaults(func=cmd_forecast)
 
-    sr = sub.add_parser("send-report", help="post the HTML report to Discord as a file")
+    sr = sub.add_parser("send-report", help="post a file (the HTML report by default) to Discord")
     sr.add_argument("--path", default="reports/latest.html")
     sr.add_argument("--message", default="📄 Today's market report (open the file in your browser)")
     sr.add_argument("--webhook", help="Discord webhook URL (default: DISCORD_WEBHOOK_URL)")

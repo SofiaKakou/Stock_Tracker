@@ -166,11 +166,11 @@ def update_universe(con: sqlite3.Connection, include_otc: bool = False, all_secu
 # --- Downloading -----------------------------------------------------------------
 
 def yahoo_download(tickers: list[str], start: str | None = None, period: str | None = None) -> dict[str, pd.DataFrame]:
-    """Raw daily bars for many tickers: {ticker: DataFrame[Open, High, Low, Close, Adj Close, Volume]}."""
+    """Raw daily bars for many tickers: {ticker: DataFrame[Open, High, Low, Close, Adj Close, Volume, Stock Splits]}."""
     import yfinance as yf
 
     raw = yf.download(tickers, start=start, period=None if start else period, interval="1d",
-                      auto_adjust=False, actions=False, group_by="ticker", threads=True, progress=False)
+                      auto_adjust=False, actions=True, group_by="ticker", threads=True, progress=False)
     out: dict[str, pd.DataFrame] = {}
     if raw is None or raw.empty:
         return out
@@ -207,7 +207,56 @@ def _needs_reload(con: sqlite3.Connection, ticker: str, df: pd.DataFrame) -> boo
     return False
 
 
+def _save_splits(con: sqlite3.Connection, ticker: str, df: pd.DataFrame, full_history: bool) -> None:
+    if "Stock Splits" not in df:
+        return
+    if full_history:
+        con.execute("DELETE FROM splits WHERE ticker = ?", (ticker,))
+    s = df["Stock Splits"].fillna(0)
+    rows = [(ticker, d.strftime("%Y-%m-%d"), float(r)) for d, r in s[s > 0].items()]
+    con.executemany("INSERT OR REPLACE INTO splits VALUES (?, ?, ?)", rows)
+    if full_history:
+        con.execute("UPDATE tickers SET splits_checked = 1 WHERE ticker = ?", (ticker,))
+
+
+def backfill_splits(con: sqlite3.Connection, downloader: Downloader = yahoo_download, batch_size: int = 100,
+                    pause: float = 1.0, limit: int | None = None, log: Callable[[str], None] = print) -> int:
+    """One-time: record past stock splits for tickers whose full history was saved before splits were kept."""
+    todo = [t for (t,) in con.execute(
+        "SELECT ticker FROM tickers WHERE last_date IS NOT NULL AND splits_checked IS NULL ORDER BY ticker")]
+    if limit:
+        todo = todo[:limit]
+    if not todo:
+        return 0
+    log(f"[splits] looking up past stock splits for {len(todo):,} tickers (one time)...")
+    for i in range(0, len(todo), batch_size):
+        chunk = todo[i : i + batch_size]
+        try:
+            got = downloader(chunk, period="max")
+        except Exception as e:
+            log(f"[splits] download error: {e}; will continue next run")
+            break
+        for t in chunk:
+            if t in got:
+                _save_splits(con, t, got[t], full_history=True)
+        con.commit()
+        log(f"[splits] {min(i + batch_size, len(todo)):,}/{len(todo):,}")
+        if pause and i + batch_size < len(todo):
+            time.sleep(pause)
+    return len(todo)
+
+
+def split_factor_after(splits: pd.DataFrame, ticker: str, dates: pd.DatetimeIndex) -> pd.Series:
+    """Product of split ratios strictly after each date: turns a split-adjusted price into the actual one."""
+    s = splits[splits["ticker"] == ticker]
+    out = pd.Series(1.0, index=dates)
+    for d, r in zip(pd.to_datetime(s["date"]), s["ratio"]):
+        out[dates < d] *= r
+    return out
+
+
 def _save(con: sqlite3.Connection, ticker: str, df: pd.DataFrame, replace_all: bool) -> None:
+    _save_splits(con, ticker, df, full_history=replace_all)
     if replace_all:
         con.execute("DELETE FROM prices WHERE ticker = ?", (ticker,))
     con.executemany("INSERT OR REPLACE INTO prices VALUES (?, ?, ?, ?, ?, ?, ?, ?)", _rows(ticker, df))
@@ -290,7 +339,7 @@ def update_prices(
             elif last is not None and _needs_reload(con, t, df):
                 reload.append(t)
             else:
-                _save(con, t, df, replace_all=False)
+                _save(con, t, df, replace_all=last is None)  # a new ticker gets its full history
                 counts["new" if last is None else "updated"] += 1
         if reload:
             full = downloader(reload, period=period)
