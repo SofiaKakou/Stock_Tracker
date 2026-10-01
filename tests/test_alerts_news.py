@@ -91,3 +91,24 @@ def test_cli_alert_without_webhook_fails(monkeypatch, tmp_path):
     monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
     monkeypatch.chdir(tmp_path)
     assert main(["alert", "--test"]) == 2
+
+
+def test_send_report_posts_the_file(tmp_path, monkeypatch, capsys):
+    report = tmp_path / "latest.html"
+    report.write_text("<html>hi</html>")
+    posted = {}
+
+    class Resp:
+        status_code = 204
+        text = ""
+
+    def fake_post(url, data=None, files=None, timeout=None, json=None):
+        posted["url"], posted["data"] = url, data
+        posted["name"], posted["body"] = files["files[0]"][0], files["files[0]"][1].read()
+        return Resp()
+
+    monkeypatch.setattr(alerts.requests, "post", fake_post)
+    assert main(["send-report", "--path", str(report), "--webhook", "https://hook"]) == 0
+    assert posted["name"] == "latest.html" and posted["body"] == b"<html>hi</html>"
+    assert "report" in json.loads(posted["data"]["payload_json"])["content"]
+    assert main(["send-report", "--path", str(tmp_path / "missing.html"), "--webhook", "https://hook"]) == 1

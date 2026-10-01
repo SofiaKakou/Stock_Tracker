@@ -820,6 +820,22 @@ def _print_forecast(preds: pd.DataFrame, date: str, ws: dict, trained_on: str, n
     print(f"Learned from {trained_on}. Odds, not certainties; not financial advice.")
 
 
+def cmd_send_report(args: argparse.Namespace) -> int:
+    from trend_bot import alerts
+
+    webhook = args.webhook or alerts.load_webhook()
+    path = Path(args.path)
+    if not webhook:
+        print("No Discord webhook set (DISCORD_WEBHOOK_URL).", file=sys.stderr)
+        return 2
+    if not path.exists():
+        print(f"{path} not found - run 'python -m trend_bot report' first.", file=sys.stderr)
+        return 1
+    alerts.send_file(webhook, path, args.message)
+    print(f"Sent {path.name} to Discord.")
+    return 0
+
+
 # --- argument parsing ---------------------------------------------------------
 
 def make_parser() -> argparse.ArgumentParser:
@@ -981,6 +997,12 @@ def make_parser() -> argparse.ArgumentParser:
     fc.add_argument("--retrain", action="store_true", help="relearn from history now (otherwise monthly)")
     fc.add_argument("--no-record", action="store_true", help="don't save the ideas for 'track'")
     fc.set_defaults(func=cmd_forecast)
+
+    sr = sub.add_parser("send-report", help="post the HTML report to Discord as a file")
+    sr.add_argument("--path", default="reports/latest.html")
+    sr.add_argument("--message", default="📄 Today's market report (open the file in your browser)")
+    sr.add_argument("--webhook", help="Discord webhook URL (default: DISCORD_WEBHOOK_URL)")
+    sr.set_defaults(func=cmd_send_report)
 
     tr = sub.add_parser("track", help="how the stocks the bot flagged have done since")
     tr.add_argument("--db", default="market.db", help="database file (default: market.db)")

@@ -167,6 +167,16 @@ def send(webhook: str, payload: dict, timeout: float = 15) -> None:
         raise RuntimeError(f"Discord returned {resp.status_code}: {resp.text[:200]}")
 
 
+def send_file(webhook: str, path: str | Path, message: str = "", timeout: float = 60) -> None:
+    """Post a file (e.g. the HTML report) to the channel as an attachment."""
+    path = Path(path)
+    with path.open("rb") as f:
+        resp = requests.post(webhook, data={"payload_json": json.dumps({"username": "Trend Bot", "content": message})},
+                             files={"files[0]": (path.name, f, "text/html")}, timeout=timeout)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Discord returned {resp.status_code}: {resp.text[:200]}")
+
+
 def market_embed(flips, clusters, strategy_label: str, limit: int = 10,
                  new: set[tuple[str, str]] | None = None) -> dict:
     """Strong insider picks first, then new uptrends, then the biggest insider clusters."""
