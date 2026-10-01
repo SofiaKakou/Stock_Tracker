@@ -7,14 +7,27 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe FINRA
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements.txt
+      - name: Real FINRA files through the new code
         run: |
-          for y in 2006 2008 2010 2012 2013 2015 2016 2017 2018; do
-            for d in ${y}0115 ${y}0114 ${y}0113 ${y}0112 ${y}0131 ${y}0130 ${y}0129 ${y}0613 ${y}0615 ${y}0614 ${y}0612 ${y}0630 ${y}0629 ${y}0628; do
-              c=$(curl -s -o out -w "%{http_code}" "https://cdn.finra.org/equity/otcmarket/biweekly/shrt${d}.csv")
-              if [ "$c" = 200 ]; then echo "$d OK $(wc -l < out) lines"; head -2 out; grep -c '|NYSE|\||NNM|\||NSD|' out || true; grep -E '^[^|]*\|(AAPL|IBM|BRK)' out | head -3; fi
-            done
-          done
-          curl -s -o out "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20260915.csv"; cut -d'|' -f5 out | sort | uniq -c
-          grep -E '"BRK|"BF' out | head -4
-          grep -c . out
+          python - <<'PY'
+          import datetime as dt, time
+          from trend_bot import db, short_interest as si
+          con = db.connect("t.db")
+          con.executemany("INSERT INTO tickers(ticker) VALUES (?)", [(t,) for t in ["AAPL","BRK-B","BF-B","A","NVDA","GOOGL"]])
+          t0 = time.time()
+          n = si.update_short_interest(con, today=dt.date(2018, 4, 1), start=dt.date(2017, 6, 1))
+          print("SI reports 2017-06..2018-03:", n, f"{time.time()-t0:.0f}s")
+          print(con.execute("SELECT * FROM short_interest_files ORDER BY target").fetchall())
+          n = si.update_short_interest(con, today=dt.date(2026, 10, 1), start=dt.date(2026, 7, 1))
+          print("SI recent:", n, con.execute("SELECT * FROM short_interest WHERE settle >= '2026-07-01' ORDER BY ticker, settle").fetchall()[:20])
+          t0 = time.time()
+          m = si.update_short_volume(con, today=dt.date(2026, 10, 1), start=dt.date(2026, 9, 1))
+          print("SV days:", m, f"{time.time()-t0:.0f}s", con.execute("SELECT * FROM short_volume").fetchall())
+          raw = si.download(si.SI_URL.format(date=dt.date(2026, 9, 15)))
+          rows = si.parse_short_interest(raw)
+          print("all rows in 2026-09-15 file:", len(rows))
+          PY

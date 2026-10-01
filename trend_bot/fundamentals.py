@@ -227,6 +227,8 @@ EXPECTED = {
     "earnings_yield": +1, "book_to_market": +1, "sales_to_price": +1,
     # Earnings surprises (see earnings.py)
     "sue": +1, "revenue_sue": +1, "ear": +1,
+    # Short selling (see short_interest.py): heavily shorted stocks have tended to lag
+    "short_ratio": -1, "days_to_cover": -1, "short_change": -1, "short_volume_ratio": -1,
 }
 DESCRIPTIONS = {
     "gross_profitability": "gross profit / assets (Novy-Marx)",
@@ -241,4 +243,8 @@ DESCRIPTIONS = {
     "sue": "latest quarter's profit surprise vs a year earlier, standardized (post-earnings drift)",
     "revenue_sue": "the same surprise measure for revenue",
     "ear": "stock minus S&P 500 over the 3 days around the latest quarterly filing",
+    "short_ratio": "shares sold short / shares outstanding; lower is better",
+    "days_to_cover": "shares sold short / average daily volume; lower is better",
+    "short_change": "change in shares sold short vs a month earlier; lower is better",
+    "short_volume_ratio": "share of last month's off-exchange volume that was short sales; lower is better",
 }

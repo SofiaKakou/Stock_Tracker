@@ -248,6 +248,11 @@ From these it builds classic signals from finance research:
 | revenue_sue | the same surprise measure for revenue | higher |
 | ear | stock minus S&P 500 over the 3 trading days around the latest quarterly filing | higher |
 | earnings_combo | average rank of sue, revenue_sue and ear | higher |
+| short_ratio | shares sold short / shares outstanding | lower |
+| days_to_cover | shares sold short / average daily volume | lower |
+| short_change | shares sold short vs a month earlier | lower |
+| short_volume_ratio | share of last month's off-exchange trading that was short sales | lower |
+| short_combo | average rank of short_ratio, days_to_cover and short_change | higher |
 
 **Earnings surprises** (`trend_bot/earnings.py`): after a company reports results far better (or worse) than its own history suggested, its stock has tended to keep drifting the same way for weeks ("post-earnings drift"). The bot rebuilds each company's quarterly numbers from its 10-Qs (the fourth quarter is the full year minus the first nine months), uses the value as first reported (not later restatements), and dates each surprise by the day the filing reached the SEC. A surprise counts for 95 days, and needs at least 4 earlier quarters of history.
 
@@ -258,6 +263,19 @@ Market value is price × shares outstanding. Past stock splits are recorded (and
 - **Top minus bottom:** the best 10% minus the worst 10%, per month.
 
 Results are shown for all years, before 2018 and from 2018 on (`--split-year`), and a real signal should hold up in both.
+
+### Short selling (FINRA)
+
+```bash
+python -m trend_bot db update --short-only        # also part of every db update; --no-short skips it
+python -m trend_bot study factors --split-year 2022
+```
+
+Short sellers borrow shares and sell them, betting the price will fall. They are often well-informed, and research has found that heavily shorted stocks, and stocks whose short interest jumps, tend to lag. The bot downloads FINRA's free files:
+- **Short interest:** how many shares of each stock were sold short and not yet bought back, reported twice a month (around the 15th and the month end). History on FINRA's site starts in 2018. A report only counts from 12 days after its date, because FINRA publishes it about 7 business days later.
+- **Short volume:** each day, how much of the off-exchange trading in each stock was short selling (from August 2018), kept as monthly totals.
+
+The first download takes about half an hour; after that each run only adds what's new. Because the history starts in 2018, use `--split-year 2022` to compare 2018–2021 with 2022 on.
 
 ### Momentum
 
@@ -280,7 +298,7 @@ Backtests can read from the database too: `python -m trend_bot backtest NVDA --f
 2. Open the **Actions** tab, then **Nightly market run → Run workflow**. The first run builds the database from scratch (about 1–2 hours). Later runs take a few minutes.
 3. Turn off the Windows task so you don't get messages twice: `Disable-ScheduledTask -TaskName "TrendBot Alerts"`.
 
-**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
+**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
 
 The database is kept between runs in GitHub's Actions cache. If it's ever evicted (after 7 days without a run, or if the 10 GB cache limit is exceeded), the next run rebuilds it automatically. Public repositories run for free; private ones get about 2,000 free minutes a month, and the nightly run uses roughly 10–20 of them.
 
@@ -366,6 +384,7 @@ trend_bot/
   fundamentals.py SEC company facts: download, point-in-time lookups, factor values
   factors.py     factor study (IC and top-minus-bottom per signal)
   earnings.py    quarterly earnings surprises (SUE) and announcement returns
+  short_interest.py FINRA short interest and short volume
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs
