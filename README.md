@@ -264,6 +264,8 @@ Market value is price × shares outstanding. Past stock splits are recorded (and
 
 Results are shown for all years, before 2018 and from 2018 on (`--split-year`), and a real signal should hold up in both.
 
+Building the monthly table of every signal takes about 10 minutes, so it's saved (in `data_cache/factors/`) and reused by `study factors`, `study ml`, `study ideas` and `ideas` until the data changes (new prices, financials, short data, company fates or industry codes).
+
 **Companies that disappeared.** Yahoo only has prices for companies listed today, so a plain study never sees the ones that went bankrupt or were bought out. That makes weak, risky companies look better than they were. To correct this, the bot keeps the financials of every company whose public float ever reached $500M, including ones with no prices today. The nightly update then looks up how each one ended in its SEC filings, a batch each night. Each such company is put back for the month it disappeared:
 - bankrupt: **−100%**,
 - delisted for another reason: **−30%** (the research average),

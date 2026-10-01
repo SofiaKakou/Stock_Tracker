@@ -89,7 +89,12 @@ def rank_month(df: pd.DataFrame, by_sector: bool = False) -> pd.DataFrame:
 def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd.DataFrame, str]:
     """Today's ranking and the date of the prices it uses."""
     since = (dt.date.today() - dt.timedelta(days=75)).isoformat()
-    df = factors.monthly_factors(con, since=since, universe=universe, log=log, extras=True, include_latest=True)
+    # Reuse the full table if a study already built it from today's data; otherwise build just
+    # the last few months (much faster).
+    df = factors.table(con, since=since, universe=universe, log=log, build=False)
+    if df is None:
+        df = factors.monthly_factors(con, since=since, universe=universe, log=log, extras=True,
+                                     include_latest=True)
     if df.empty:
         return pd.DataFrame(), ""
     date = con.execute("SELECT MAX(date) FROM prices WHERE ticker IN (SELECT ticker FROM tickers "

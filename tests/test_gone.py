@@ -108,3 +108,23 @@ def test_fates_catch_up_in_one_go(gone_db, tmp_path, monkeypatch, capsys):
     assert "bankrupt 1" in out and "all caught up" in out
     assert gone_db.execute("SELECT status, fate_date FROM company_fates WHERE cik = ?",
                            (GONE_CIK,)).fetchone() == ("bankrupt", "2025-06-10")
+
+
+def test_monthly_table_is_built_once_per_data_version(gone_db, monkeypatch):
+    builds = []
+    real = factors.monthly_factors
+    monkeypatch.setattr(factors, "monthly_factors", lambda *a, **k: builds.append(1) or real(*a, **k))
+    quiet = dict(log=lambda *_: None)
+    assert factors.table(gone_db, build=False, **quiet) is None       # nothing built yet
+    first = factors.table(gone_db, **quiet)
+    again = factors.table(gone_db, since=str(DATES[400].date()), **quiet)
+    assert len(builds) == 1                                            # second study reuses it
+    assert again["month"].min() >= DATES[400] and len(again) < len(first)
+    assert first["ret"].isna().any()                                   # includes the latest month
+    gone_db.execute("INSERT INTO company_fates VALUES (?, 'Gone Co', 'bankrupt', ?, '2026-01-01')",
+                    (GONE_CIK, str(DATES[600].date())))
+    gone_db.commit()
+    factors.table(gone_db, **quiet)
+    assert len(builds) == 2                                            # new fate: rebuilt
+    folder = fundamentals.insiders.CACHE_DIR.parent / "factors"
+    assert len(list(folder.glob("table_*.pkl"))) == 1                  # old versions removed

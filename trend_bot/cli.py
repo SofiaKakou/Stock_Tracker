@@ -601,7 +601,7 @@ def _study_factors(con, args: argparse.Namespace) -> None:
         return
     since = args.since if args.since != "2006-01-01" else "2009-06-30"  # XBRL filings start in 2009
     print("Ranking stocks by each signal at every month-end, using only financials filed by then...")
-    df = factors.monthly_factors(con, since=since, universe=args.universe)
+    df = factors.table(con, since=since, universe=args.universe)
     if df.empty:
         print("Not enough data.")
         return
@@ -702,7 +702,7 @@ def _study_ideas(con, args: argparse.Namespace) -> None:
         return
     since = args.since if args.since != "2006-01-01" else "2009-06-30"  # XBRL filings start in 2009
     print("Building the monthly table of every signal (takes a while)...")
-    df = factors.monthly_factors(con, since=since, universe=args.universe, extras=True)
+    df = factors.table(con, since=since, universe=args.universe)
     spy = load_prices(con, args.benchmark)["Close"]
     if df.empty or spy.empty:
         print("Not enough data.")
