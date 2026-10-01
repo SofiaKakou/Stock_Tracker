@@ -1,1 +1,328 @@
 # Stock_Tracker
+
+A small trend-following stock bot that runs on your own machine. It downloads daily prices, works out whether each stock is trending up or down, tells you what the strategy would do today (BUY / SELL / HOLD / WAIT), and backtests the strategy on past data.
+
+> This is a research and learning tool. It does **not** place trades, and nothing it prints is financial advice.
+
+## Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+The bot gets prices from Yahoo Finance through [`yfinance`](https://github.com/ranaroussi/yfinance), so you need an internet connection. Downloads are cached in `data_cache/` for an hour, so repeated runs are fast and later runs still get fresh prices.
+
+## Usage
+
+### Scan your watchlist
+
+Put tickers in `watchlist.txt`, one per line, and run:
+
+```bash
+python -m trend_bot scan
+python -m trend_bot scan TSLA AMD          # or pass tickers directly
+```
+
+```
+        date        close  20d_chg   rsi  trend      action
+ticker
+NVDA    2026-09-28  ...    +6.2%     61.3 UP         BUY
+SPY     2026-09-28  ...    +1.1%     55.0 UP         HOLD
+...
+```
+
+| Action | Meaning |
+|--------|---------|
+| **BUY** | The trend turned up today |
+| **SELL** | The trend turned down today |
+| **HOLD** | Still in an uptrend |
+| **WAIT** | Still not in an uptrend |
+
+### Backtest
+
+```bash
+python -m trend_bot backtest AAPL
+python -m trend_bot backtest AAPL --period max --show-trades
+python -m trend_bot backtest my_prices.csv   # CSV with Date,Open,High,Low,Close,Volume
+python -m trend_bot backtest SPY --period max --cash-rate 4 --plot
+```
+
+The backtest shows the strategy and buy-and-hold side by side: total return, yearly growth (CAGR), max drawdown, Sharpe ratio, and time in market. It also reports the number of trades and the win rate.
+
+- `--cash-rate 4` pays 4% a year on money held in cash, as a money-market fund would. The same rate is used as the risk-free rate in the Sharpe ratio. The default is 0%.
+- `--plot` saves a chart to `charts/` and opens it. The top panel shows the price, the strategy's lines, buy (▲) and sell (▼) markers, and shading while in the market. The bottom panel shows the strategy's portfolio value against buy-and-hold. Add `--no-open` to save the chart without opening it.
+
+### Backtest the whole watchlist
+
+```bash
+python -m trend_bot portfolio --cash-rate 4 --plot
+python -m trend_bot portfolio AAPL MSFT NVDA --weighting active --period max
+```
+
+This runs the strategy on every ticker with one pot of money and compares it with putting equal amounts in each ticker and holding them.
+
+| `--weighting` | How money is split |
+|---|---|
+| `equal` (default) | Each ticker gets a fixed 1/N share. When a ticker is out of its trend, its share sits in cash. |
+| `active` | The money is split evenly between the tickers currently in an uptrend. This keeps you fully invested, but you can end up 100% in one stock. |
+
+Only dates where every ticker has prices are used, so a young stock shortens the test for all of them. The chart shows the portfolio's value over time and what it was holding each day.
+
+### Earnings dates and headlines
+
+```bash
+python -m trend_bot news NVDA AAPL      # next earnings date + latest headlines
+python -m trend_bot scan --events       # scan with an extra "earnings" column
+```
+
+This is **context, not a signal**. Big public news, like a new product launch, is usually reflected in the price within minutes. Earnings dates are still worth knowing, because prices often jump sharply around them.
+
+### Insider trades (SEC Form 4)
+
+Company insiders (executives, directors, and anyone owning 10% or more) must report trades in their own company's stock to the SEC within two business days. The bot reads these public filings for free.
+
+```bash
+python -m trend_bot insiders NVDA            # open-market buys and sells, last 90 days
+python -m trend_bot insiders NVDA --all      # also awards, option exercises, gifts...
+python -m trend_bot scan --insiders          # scan with an "insiders_90d" column
+```
+
+- **Buys matter most.** An insider spending their own money on the open market is a meaningful signal. **Cluster buying**, where two or more different insiders buy within 30 days, is the pattern with the best track record in research.
+- **Sales matter much less.** Insiders sell for taxes, diversification, or big purchases. Many sales are pre-scheduled "10b5-1" plans (marked `10b5-1` in the output), which say even less.
+- ETFs like SPY have no insiders, so they show "none".
+
+**Setup:** the SEC asks every automated tool to identify itself. Add your name and email to `.env`:
+
+```
+SEC_USER_AGENT=Your Name your.email@example.com
+```
+
+Filings are cached in `data_cache/sec/`, so only the first run for a ticker is slow.
+
+## Whole-market database
+
+Put every US stock (NYSE, Nasdaq and Cboe, roughly 6,000) and all SEC insider trades since 2006 into one local SQLite file, `market.db`. Then you can scan the whole market daily and test signals on thousands of stocks.
+
+```bash
+python -m trend_bot db update --limit 50   # quick test with 50 tickers first
+python -m trend_bot db update              # the full build (leave it running)
+python -m trend_bot db status              # what's in the database
+```
+
+**The first build takes a while:** roughly 1–3 hours for prices and about 1–2 hours for insider data, and the result is about 2 GB. It saves after every batch, so you can stop it (Ctrl+C) at any time and run it again to continue. After that, a daily `db update` only fetches what's new (about 10–15 minutes). `run_alerts.bat` does this automatically once `market.db` exists.
+
+What `db update` does:
+
+| Step | Source | Notes |
+|---|---|---|
+| Stock list | SEC `company_tickers_exchange.json` | NYSE, Nasdaq, Cboe, plus SPY/QQQ/IWM as benchmarks. Add `--include-otc` for over-the-counter stocks. |
+| Prices | Yahoo Finance, 100 tickers per request | Full history for new tickers (`--period`, default `max`), then only new days. When a dividend or split changes past prices, that ticker is reloaded in full. |
+| Insider trades | SEC quarterly bulk files (2006 onwards) | Complete and fast. Each quarter is published a few weeks after it ends. Only open-market buys and sales are stored. |
+| Recent insider trades | SEC daily filing index | Fills the weeks since the last published quarter, one filing at a time (`--insider-days`, default 30). Only filings for companies the screen can show are downloaded; add `--insiders-all-companies` for everyone. |
+
+Useful flags: `--prices-only`, `--insiders-only`, `--insider-since 2015`, `--retry-failed` (retry tickers that returned no data), and `--pause 2` (go slower if Yahoo starts refusing).
+
+### Screen the whole market
+
+```bash
+python -m trend_bot screen                    # today's trend flips + insider buying clusters
+python -m trend_bot screen --days 5 --signal buy
+python -m trend_bot screen --min-price 10 --min-volume 5000000
+```
+
+Stocks under $5 and stocks averaging under $1M of trading a day are skipped by default, and so are funds. Funds include closed-end funds (identified by their SEC industry code) and ETFs/ETNs. ETFs/ETNs are identified from Nasdaq's daily list of every US-listed security, which also catches leveraged products like GDXU that the SEC files under the issuing bank. Use `--include-funds` to keep the funds. Flips that also have an insider buying cluster are listed first.
+
+🔔 **Strong insider picks** are stocks where 3 or more insiders bought $250k+ in the last 30 days *and* the price trend is up. This was the best-performing rule in the studies. `alert --market` adds a 🌎 **Market screen** message to your Discord alert, with strong picks first and **NEW** on ones not seen before.
+
+### Track record
+
+```bash
+python -m trend_bot track                        # how every flagged stock has done since
+python -m trend_bot track --signal strong_insider --benchmark IWM
+```
+
+Every night, `alert --market` saves each flagged stock (new uptrends and downtrends, insider clusters, strong insider picks) with that day's price. `track` shows how they've done since, per signal and against a benchmark, plus the most recent picks. This is the most honest test of the signals: nobody can tune a rule to prices that didn't exist yet. Give it a few months.
+
+### Daily report page
+
+```bash
+python -m trend_bot report --open
+```
+
+Writes `reports/report-DATE.html` (and `reports/latest.html`): a web page with market breadth, strong insider picks with 6-month mini charts, new uptrends and downtrends, insider clusters and the track record. It works offline and follows your light/dark setting. The nightly `run_alerts.bat` creates it automatically.
+
+### Test a signal on history
+
+```bash
+python -m trend_bot study insiders            # insider cluster buys since 2006
+python -m trend_bot study trend               # 50/200 golden crosses across the market
+python -m trend_bot study both --since 2015-01-01
+```
+
+For every past event, the study buys the day after the signal became public. It reports the average and median return 1, 3, 6 and 12 months later, how often the trade made money, and how it did against a benchmark over the same days (`--benchmark`, default SPY; use `IWM` for small companies, which is where most insider buying happens). Insider clusters are also split by whether the price trend was up or down at the time, which tests the "trend + insiders" combination directly.
+
+Refine the insider test with `--cluster-min 3` (more insiders), `--min-value 250000` (bigger buys), and `--officers-only` (only executives like the CEO and CFO, not directors or large outside investors).
+
+**Avoid fooling yourself.** If you try enough combinations, one will look good by luck. Choose your rule on one period (`--until 2015-12-31`), then check it on a period it hasn't seen (`--since 2016-01-01`). Only trust a rule that holds up in both.
+
+Two caveats:
+- **Survivorship bias:** Yahoo only has prices for companies that still exist today. To correct for this, `db update` checks the SEC filings of every company that had insider buying but no longer has prices (about 15–30 minutes the first time, then only new ones). It flags **bankruptcies** (8-K Item 1.03) and **buyouts** (deregistration after merger paperwork). The insider study then adds a second set of results where bankruptcies count as −100% and buyouts as matching the benchmark. It also shows a worst case for the trend-UP group. Companies whose fate is unclear are still left out.
+- **Overlapping events:** events that overlap in time aren't independent, so treat small differences between results as noise.
+
+### Trend Score model (buy and sell ideas)
+
+```bash
+python -m trend_bot study model        # 20-year test, split into 2006-2015 and 2016-now
+python -m trend_bot model              # today's portfolio, buy/sell signals, market weather
+```
+
+Every stock among the ~1,000 most traded (over $5, no funds) gets a **score from 0 to 100**, combining signals with research behind them:
+
+| Weight | Signal | Higher score when... |
+|---|---|---|
+| 25% | Trend | the price is above its 50- and 200-day averages |
+| 25% | Momentum | the 6- and 12-month return is strong (skipping the latest month) |
+| 20% | 52-week high | the price is close to its high of the past year |
+| 15% | Steadiness | day-to-day swings are small |
+| 15% | Insiders | 2+ insiders bought in the last 90 days (3+ sellers lower it) |
+
+The weights are fixed round numbers, not fitted to past data.
+
+- **Model portfolio:** the top 20 scores, equal amounts. It's checked once a month. A stock is sold only when it falls out of the top 40, which avoids needless trading, and the best new ones are bought.
+- **Market weather:** when the S&P 500 is below its 200-day average at the monthly check, the model holds cash.
+- **Signals:** the nightly alert (`--model`) posts 📈 **monthly buys and sells** to Discord, plus a note whenever the weather changes. The report page shows the portfolio, and `track` records every model buy and sell so you can see how they do.
+
+`study model` compares the model with and without the weather filter, SPY buy-and-hold, SPY with the weather filter, and all eligible stocks. It shows all years, then **2006–2015 and 2016–now separately**: a rule you can trust should hold up in both. Options: `--hold`, `--universe`, `--buffer`, `--cash-rate` (default 2%/yr while in cash). This is theoretical, and the survivorship bias caveat applies.
+
+### 30-day outlook (up / down odds)
+
+```bash
+python -m trend_bot study forecast     # how reliable the odds have been (walk-forward test)
+python -m trend_bot forecast           # today's ideas: most and least likely to beat the market
+```
+
+For every stock in the model universe, the bot estimates two chances for the next 30 days: that it **goes up**, and that it **beats the S&P 500**. It uses a logistic regression on the Trend Score's signal parts plus the market weather, learned from every month since 2006. It relearns once a month, and each idea comes with its main reasons ("in an uptrend, near its 52-week high").
+
+`study forecast` is the honesty check. It predicts each year from 2011 using **only the years before it**, then reports:
+- accuracy and prediction error, compared with always guessing the more common outcome,
+- whether "60% chance" really happened about 60% of the time,
+- how the top 10% of ideas did each month compared with the bottom 10% and the S&P 500.
+
+**What the test found on the full database:** the up/down odds were no more accurate than always guessing the common outcome. The ranking did spot laggards: the bottom 10% trailed the average stock. The top 10% did not beat the market. The outputs are built around that result:
+
+1. **🌦️ Market weather first:** invest or caution, for how many days, and how far the S&P 500 is from its 200-day average. This was the one signal that held up, roughly halving the worst crash.
+2. **⚠️ Most likely to lag:** stocks to be careful with.
+3. **💡 Ideas to research:** the highest odds, clearly marked as a starting point rather than a buy list.
+4. **"How reliable is this?":** one sentence from the latest `study forecast` run, shown with every outlook.
+
+The nightly alert (`--forecast`) posts this as a **weekly outlook** to Discord. The report page opens with the same sections, and `track` records the lists so their live record builds up.
+
+### Momentum
+
+```bash
+python -m trend_bot study momentum --benchmark SPY
+python -m trend_bot study momentum --top 0.2 --lookback 6 --since 2016-01-01
+```
+
+Momentum is one of the best-documented patterns in stock markets: stocks that rose most over the past year tend to keep outperforming for a while. At the end of each month, the study ranks every stock by its return over the past 12 months (`--lookback`), skipping the latest month because very recent moves tend to reverse. It then holds the top 10% (`--top`) for a month, charging 0.1% per trade. The result is compared with the losers, all stocks held equally, and the benchmark, both overall and year by year. Survivorship bias applies here too.
+
+Backtests can read from the database too: `python -m trend_bot backtest NVDA --from-db --period max`.
+
+## Discord alerts
+
+The bot can post to a Discord channel whenever a stock's trend flips. Each alert shows the price, the 20-day change, RSI, the next earnings date, and a few recent headlines.
+
+**1. Create a webhook.** In Discord, open the channel's settings (the ⚙️ next to its name), go to **Integrations → Webhooks → New Webhook**, and click **Copy Webhook URL**.
+
+**2. Save it in a `.env` file** in the `Stock_Tracker` folder. You can copy `.env.example` and edit it:
+
+```
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+```
+
+Anyone with this URL can post to your channel, so keep it private. `.env` is listed in `.gitignore`, so it's never pushed to GitHub.
+
+**3. Try it:**
+
+```bash
+python -m trend_bot alert --test        # sends "Trend Bot is connected"
+python -m trend_bot alert --summary     # real run, plus a table of every ticker
+python -m trend_bot alert --dry-run     # print the messages instead of sending
+```
+
+If `SEC_USER_AGENT` is set, alerts also check insider trades. A trend alert includes each stock's insider buys and sells from the last 90 days. A separate 🔔 **Insider buying** alert goes out when 2 or more insiders buy within 30 days (change with `--cluster-min` and `--cluster-days`). Each cluster is announced only once. Use `--no-insiders` to turn this off.
+
+The bot remembers each ticker's last trend in `alert_state.json`. The next run reports every change since then, even if the computer was off for a few days. On the very first run it only alerts for flips that happened that day.
+
+**4. Run it every weekday (Windows).** `run_alerts.bat` runs `alert --summary` and appends the output to `alerts.log`. Once `market.db` exists, it also runs `db update` first, adds the market screen, the Trend Score model and the weekly outlook (`--market --model --forecast`), and writes the report page. Schedule it after the US market closes (4pm New York time, plus about an hour for the data to settle). Set `/ST` to that time in *your* time zone. `23:30` below is for Central/Eastern Europe:
+
+```powershell
+schtasks /Create /TN "TrendBot Alerts" /TR "$env:USERPROFILE\Stock_Tracker\run_alerts.bat" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 23:30
+schtasks /Run /TN "TrendBot Alerts"        # run once now to check it works
+schtasks /Delete /TN "TrendBot Alerts"     # remove it
+```
+
+Scheduled tasks only run while the computer is on and you're logged in. If you miss a day, the state file makes sure the next run catches up. On Mac or Linux, use cron: `30 23 * * 1-5 cd ~/Stock_Tracker && python3 -m trend_bot alert --summary >> alerts.log 2>&1`.
+
+## Strategies
+
+| Name | Idea | Options |
+|------|------|---------|
+| `ma_cross` (default) | Hold while the fast moving average is above the slow one (50/200 is the classic "golden cross"). | `--fast 50 --slow 200`, `--ema`, `--rsi-max 70` (don't open a new position while overbought) |
+| `breakout` | Donchian / "turtle" breakout: buy on a new N-day high, sell on a new M-day low. | `--entry 55 --exit 20` |
+
+```bash
+python -m trend_bot backtest MSFT --fast 20 --slow 100 --ema
+python -m trend_bot scan --strategy breakout --entry 20 --exit 10
+```
+
+### How the backtest works
+
+- Long or flat only: the bot holds 100% of the stock or 100% cash.
+- A signal from day *t*'s close is traded at that close and starts earning on day *t+1*, so the backtest never uses future data.
+- Each position change costs `--cost-bps` basis points (default 5) to cover commission and slippage.
+- While out of the market, cash earns `--cash-rate`% a year (default 0).
+
+## Project layout
+
+```
+trend_bot/
+  data.py        price loading (Yahoo Finance + CSV), caching, watchlist
+  indicators.py  SMA, EMA, RSI, MACD, slope
+  strategy.py    strategies -> a 0/1 `position` column
+  backtest.py    long/flat backtester and stats
+  portfolio.py   multi-ticker backtest with one pot of money
+  plot.py        backtest charts (matplotlib)
+  news.py        earnings dates and headlines (Yahoo Finance)
+  insiders.py    insider trades from SEC Form 4 filings
+  db.py          the SQLite market database (schema + readers)
+  market_data.py stock list and price downloads into the database
+  sec_bulk.py    SEC insider data sets (quarterly bulk + daily feed)
+  screen.py      whole-market screen
+  study.py       event studies: did a signal come before better returns?
+  fates.py       what happened to delisted companies (bankrupt / bought out)
+  company_info.py SEC industry codes (to leave funds out of the screen)
+  track.py       records flagged stocks and measures how they did
+  report.py      the daily HTML report
+  momentum.py    monthly momentum backtest
+  model.py       Trend Score model: scores, model portfolio, weather, backtest
+  forecast.py    30-day outlook: logistic regression, walk-forward test, live odds
+  alerts.py      Discord messages and the saved-trend state
+  cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
+run_alerts.bat   what Windows Task Scheduler runs
+tests/           offline tests on synthetic prices (run: pytest)
+```
+
+To add a strategy, subclass `Strategy` in `strategy.py`, implement `generate()` so it returns a DataFrame with a `position` column, register it in `STRATEGIES`, and add its options in `cli.py`.
+
+## Ideas for next steps
+
+- **Risk controls**: position sizing by volatility, stop-losses based on average daily range (ATR), and a cap on how much goes into any one stock.
+- **Test the insider signal**: backtest "trend is up *and* insiders bought recently" against the trend alone.
+- **Event filters**: backtest rules like "don't buy in the week before earnings" to see whether they reduce nasty surprises.
+- **Headline sentiment**: score headlines as positive or negative (for example with an AI model) and test whether that adds anything on top of the trend.
+- **Parameter sweeps**: find which MA windows would have worked, then check them on data the sweep didn't use (walk-forward) to avoid overfitting.
+- **More signals**: MACD, trend strength (ADX), volume confirmation, relative strength against SPY.
+- **Paper trading**: connect to a broker's paper-trading API (for example Alpaca) to try it live with fake money.

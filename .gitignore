@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+data_cache/
+*.egg-info/
+charts/
+.env
+alert_state.json
+alerts.log
+market.db
+market.db-*
+reports/
+update.log
+update_errors.log
