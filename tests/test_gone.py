@@ -95,3 +95,16 @@ def test_factor_and_model_studies_put_them_back(gone_db, tmp_path, monkeypatch, 
     assert main(["study", "factors", "--db", str(tmp_path / "market.db"), "--since", str(DATES[260].date())]) == 0
     out = capsys.readouterr().out
     assert "1 bankrupt (-100%)" in out and "listed today only vs with companies that disappeared" in out
+
+
+def test_fates_catch_up_in_one_go(gone_db, tmp_path, monkeypatch, capsys):
+    from trend_bot.cli import main
+
+    doc = {"name": "Gone Co", "filings": {"recent": {"form": ["10-K", "8-K"], "filingDate": ["2024-02-15", "2025-06-10"],
+                                                      "items": ["", "1.03"]}}}
+    monkeypatch.setattr(fates.insiders, "_get", lambda url: json.dumps(doc).encode())
+    assert main(["db", "update", "--fates-only", "--sec-lookups", "20000", "--db", str(tmp_path / "market.db")]) == 0
+    out = capsys.readouterr().out
+    assert "bankrupt 1" in out and "all caught up" in out
+    assert gone_db.execute("SELECT status, fate_date FROM company_fates WHERE cik = ?",
+                           (GONE_CIK,)).fetchone() == ("bankrupt", "2025-06-10")

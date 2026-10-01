@@ -461,8 +461,8 @@ def cmd_db(args: argparse.Namespace) -> int:
                       f"{f.get('unknown', 0):,} unclear)")
             return 0
 
-        if args.fundamentals_only:
-            args.insiders_only = True  # same SEC step, but only the fundamentals part matters
+        if args.fundamentals_only or args.fates_only:
+            args.insiders_only = True  # same SEC step, but only that part matters
         everything = not (args.universe_only or args.prices_only or args.insiders_only or args.short_only)
         if everything or args.universe_only or args.prices_only:
             n = market_data.update_universe(con, include_otc=args.include_otc, all_securities=args.all_securities)
@@ -494,6 +494,15 @@ def cmd_db(args: argparse.Namespace) -> int:
                     from trend_bot import fundamentals
 
                     fundamentals.update_fundamentals(con, force=True)
+                    return 0
+                if args.fates_only:
+                    from trend_bot import fates
+
+                    # Catch up in one go (the nightly run only does --sec-lookups a night).
+                    found = fates.update_fates(con, limit=args.sec_lookups)
+                    print("[fates] " + (", ".join(f"{k} {v:,}" for k, v in sorted(found.items())) or "nothing new"))
+                    left = len(fates.companies_to_check(con))
+                    print(f"[fates] {left:,} companies still to check" if left else "[fates] all caught up")
                     return 0
                 added = sec_bulk.load_quarters(con, since_year=args.insider_since)
                 print(f"[insiders] {added} quarterly file(s) loaded")
@@ -1187,6 +1196,9 @@ def make_parser() -> argparse.ArgumentParser:
     only.add_argument("--prices-only", action="store_true")
     only.add_argument("--insiders-only", action="store_true")
     only.add_argument("--short-only", action="store_true", help="only update FINRA short selling data")
+    only.add_argument("--fates-only", action="store_true",
+                      help="only look up what happened to companies without prices (use a big --sec-lookups "
+                           "to catch up in one go)")
     only.add_argument("--fundamentals-only", action="store_true",
                       help="refresh company financials now (normally weekly, as part of db update)")
     dbp.set_defaults(func=cmd_db)
