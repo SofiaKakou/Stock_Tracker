@@ -19,7 +19,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-from trend_bot import earnings, fundamentals, model, short_interest
+from trend_bot import earnings, fundamentals, model, sectors, short_interest
 from trend_bot.company_info import fund_tickers
 
 
@@ -115,6 +115,7 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
     month_ends = panel["close"].index
     months = [m for m in month_ends[: None if include_latest else -1] if m >= pd.Timestamp(since)]
     gone = gone_companies(con, set(tickers))
+    industry = sectors.ticker_sectors(con)
     rows = []
     for k, month in enumerate(months):
         feat = pd.DataFrame({f: panel[f].loc[month] for f in model.FEATURES})
@@ -139,6 +140,7 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
             vals["mom1"] = last1.loc[month, vals.index]
         vals["ret"] = nxt.loc[month, vals.index]
         vals["month"] = month
+        vals["sector"] = industry.reindex(vals.index).to_numpy()
         if not (include_latest and month == month_ends[-1]):
             vals = vals.dropna(subset=["ret"])
             caps_t = pd.Series(caps.to_numpy(), index=[tickers[c] for c in caps.index])
@@ -175,11 +177,26 @@ def _gone_rows(gone: pd.DataFrame, f_all: pd.DataFrame, ev: pd.DataFrame, month:
     return out
 
 
-def composite(df: pd.DataFrame, names: list[str]) -> pd.Series:
+MIN_PEERS = 10  # fewer companies than this in an industry that month: compare with the whole market
+
+
+def group_rank(df: pd.DataFrame, col: str, by_sector: bool = False) -> pd.Series:
+    """0-1 rank within each month; with by_sector, within the company's industry that month
+    (falling back to the whole market when the industry is unknown or has under MIN_PEERS companies)."""
+    r = df.groupby("month")[col].rank(pct=True)
+    if not by_sector or "sector" not in df or df["sector"].isna().all():
+        return r
+    keys = [df["month"], df["sector"]]
+    rs = df[col].groupby(keys).rank(pct=True)
+    n = df[col].groupby(keys).transform("count")
+    return rs.where((n >= MIN_PEERS) & df["sector"].notna(), r)
+
+
+def composite(df: pd.DataFrame, names: list[str], by_sector: bool = False) -> pd.Series:
     """Average of each factor's within-month rank, flipped so higher is always 'better'."""
     ranks = []
     for n in names:
-        r = df.groupby("month")[n].rank(pct=True)
+        r = group_rank(df, n, by_sector)
         ranks.append(r if fundamentals.EXPECTED[n] > 0 else 1 - r)
     return pd.concat(ranks, axis=1).mean(axis=1, skipna=True)
 
@@ -235,7 +252,19 @@ def study(df: pd.DataFrame, split_year: int = 2018) -> dict[str, pd.DataFrame]:
             cmp[n] = {"ic_listed_only": a["mean_ic"], "ic_with_gone": b["mean_ic"],
                       "tmb_listed_only": a["top_minus_bottom"], "tmb_with_gone": b["top_minus_bottom"]}
         out[GONE_TABLE] = pd.DataFrame(cmp).T
+    if "sector" in df and df["sector"].notna().any():
+        cmp = {}
+        for n in [n for n in fundamentals.EXPECTED if n in df]:
+            sign = fundamentals.EXPECTED[n]
+            a = out["all"].loc[n]
+            b = evaluate(df.assign(**{n: group_rank(df, n, by_sector=True)}), n, sign)
+            cmp[n] = {"ic_whole_market": a["mean_ic"], "ic_within_industry": b["mean_ic"],
+                      "t_within_industry": b["ic_t"], "tmb_within_industry": b["top_minus_bottom"]}
+        out[INDUSTRY_TABLE] = pd.DataFrame(cmp).T
     return out
+
+
+INDUSTRY_TABLE = "ranked against the whole market vs within each industry (all years)"
 
 
 GONE_TABLE = "listed today only vs with companies that disappeared (all years)"

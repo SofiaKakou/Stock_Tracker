@@ -58,6 +58,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date +%d)" -le 3 ]; then
             python -m trend_bot study forecast || echo "::warning::study forecast failed"
             python -m trend_bot study ml || echo "::warning::study ml failed"
+            python -m trend_bot study ideas || echo "::warning::study ideas failed"
             python -m trend_bot ideas || echo "::warning::ideas failed"
           fi
 
