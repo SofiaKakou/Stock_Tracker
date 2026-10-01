@@ -1044,7 +1044,7 @@ def make_parser() -> argparse.ArgumentParser:
     fc.add_argument("--no-record", action="store_true", help="don't save the ideas for 'track'")
     fc.set_defaults(func=cmd_forecast)
 
-    sr = sub.add_parser("send-report", help="post the HTML report to Discord as a file")
+    sr = sub.add_parser("send-report", help="post a file (the HTML report by default) to Discord")
     sr.add_argument("--path", default="reports/latest.html")
     sr.add_argument("--message", default="📄 Today's market report (open the file in your browser)")
     sr.add_argument("--webhook", help="Discord webhook URL (default: DISCORD_WEBHOOK_URL)")
