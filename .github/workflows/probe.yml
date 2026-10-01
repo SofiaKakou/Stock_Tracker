@@ -1,0 +1,27 @@
+name: Probe data sources (temporary)
+on:
+  push:
+    branches: [claude/stock-trend-bot-r1ou90]
+    paths: [.github/workflows/probe.yml]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe FINRA
+        run: |
+          get() { echo "===== $1"; curl -sS -L -m 60 -A "Mozilla/5.0 trend-bot" -o out -w "HTTP %{http_code} bytes %{size_download} type %{content_type}\n" "$@"; head -c 700 out; echo; echo "..."; tail -c 300 out; echo; }
+          get "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20260915.csv"
+          get "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20140115.csv"
+          get "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20190115.csv"
+          get "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20220114.csv"
+          get "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest?limit=3" -H "Accept: application/json"
+          get "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest" -H "Accept: text/plain" -H "Content-Type: application/json" -X POST -d '{"limit":5,"compareFilters":[{"compareType":"EQUAL","fieldName":"symbolCode","fieldValue":"AAPL"}]}'
+          get "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest" -H "Accept: text/plain" -H "Content-Type: application/json" -X POST -d '{"limit":5,"compareFilters":[{"compareType":"EQUAL","fieldName":"settlementDate","fieldValue":"2015-01-15"}]}'
+          get "https://api.finra.org/metadata/group/otcMarket/name/consolidatedShortInterest" -H "Accept: application/json"
+          get "https://cdn.finra.org/equity/regsho/daily/CNMSshvol20260930.txt"
+          get "https://cdn.finra.org/equity/regsho/daily/CNMSshvol20100104.txt"
+          get "https://cdn.finra.org/equity/regsho/daily/CNMSshvol20180802.txt"
+          get "https://cdn.finra.org/equity/regsho/daily/FNSQshvol20100104.txt"
+          get "https://www.finra.org/finra-data/browse-catalog/equity-short-interest/files"
+          grep -o 'https\?://[^" ]*cdn.finra.org[^" ]*' out | sort -u | head -40 || true
+          grep -o '[^" ]*shrt[0-9]*[^" ]*' out | sort -u | head -20 || true
