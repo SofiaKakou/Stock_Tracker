@@ -3,6 +3,8 @@ rem Runs the daily update + Discord alert. Windows Task Scheduler calls this eve
 rem Output (including errors) is appended to alerts.log in this folder.
 cd /d "%~dp0"
 set PYTHONUTF8=1
+rem Write each log line right away, so alerts.log shows live progress.
+set PYTHONUNBUFFERED=1
 echo ==== %date% %time% ==== >> alerts.log
 if exist market.db (
     python -m trend_bot db update >> alerts.log 2>&1
