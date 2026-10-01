@@ -425,6 +425,10 @@ def cmd_db(args: argparse.Namespace) -> int:
             checked = con.execute("SELECT COUNT(DISTINCT cik) FROM tickers WHERE info_checked_at IS NOT NULL").fetchone()[0]
             print(f"Industry codes: {checked:,} companies looked up; {len(fund_tickers(con)):,} tickers are funds/ETFs "
                   f"(left out of the screen)")
+            si = con.execute("SELECT COUNT(DISTINCT settle), MIN(settle), MAX(settle) FROM short_interest").fetchone()
+            if si[0]:
+                print(f"Short interest: {si[0]:,} FINRA reports, {si[1]} to {si[2]}; short volume up to "
+                      f"{db.get_meta(con, 'short_volume_last') or 'not loaded'}")
             picks = con.execute("SELECT COUNT(*), MIN(date) FROM picks").fetchone()
             if picks[0]:
                 print(f"Tracked picks:  {picks[0]:,} since {picks[1]}")
@@ -437,7 +441,7 @@ def cmd_db(args: argparse.Namespace) -> int:
 
         if args.fundamentals_only:
             args.insiders_only = True  # same SEC step, but only the fundamentals part matters
-        everything = not (args.universe_only or args.prices_only or args.insiders_only)
+        everything = not (args.universe_only or args.prices_only or args.insiders_only or args.short_only)
         if everything or args.universe_only or args.prices_only:
             n = market_data.update_universe(con, include_otc=args.include_otc, all_securities=args.all_securities)
             print(f"[universe] {n:,} tickers")
@@ -448,6 +452,15 @@ def cmd_db(args: argparse.Namespace) -> int:
             print(f"[prices] new {counts['new']:,}, updated {counts['updated']:,}, "
                   f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}")
             market_data.backfill_splits(con, pause=args.pause)
+        if (everything and not args.no_short) or args.short_only:
+            from trend_bot import short_interest
+
+            try:
+                short_interest.update(con)
+            except RuntimeError as e:
+                print(f"[short] stopped: {e} (progress is saved; the next run continues)", file=sys.stderr)
+            if args.short_only:
+                return 0
         if everything or args.insiders_only:
             paused = db.get_meta(con, "sec_paused_until")
             if paused and dt.datetime.now().isoformat() < paused and not args.ignore_sec_pause:
@@ -573,8 +586,8 @@ def _study_factors(con, args: argparse.Namespace) -> None:
     print("\nWhat each signal is:")
     for n, d in fundamentals.DESCRIPTIONS.items():
         print(f"  {n:<20} {d}")
-    print(f"  {'quality_value_combo':<20} average rank of {', '.join(factors.QUALITY_VALUE)}")
-    print(f"  {'earnings_combo':<20} average rank of {', '.join(factors.EARNINGS)}")
+    for name, parts in factors.COMBOS.items():
+        print(f"  {name:<20} average rank of {', '.join(parts)}")
 
 
 def _study_forecast(con, args: argparse.Namespace) -> None:
@@ -973,6 +986,7 @@ def make_parser() -> argparse.ArgumentParser:
     dbp.add_argument("--sec-lookups", type=int, default=1500,
                      help="max company lookups per run for the one-time catch-ups (default 1500)")
     dbp.add_argument("--no-fundamentals", action="store_true", help="skip the weekly company-financials refresh")
+    dbp.add_argument("--no-short", action="store_true", help="skip the FINRA short selling data")
     dbp.add_argument("--ignore-sec-pause", action="store_true",
                      help="try the SEC even if it asked us to slow down in the last 24 hours")
     dbp.add_argument("--insiders-all-companies", action="store_true",
@@ -981,6 +995,7 @@ def make_parser() -> argparse.ArgumentParser:
     only.add_argument("--universe-only", action="store_true")
     only.add_argument("--prices-only", action="store_true")
     only.add_argument("--insiders-only", action="store_true")
+    only.add_argument("--short-only", action="store_true", help="only update FINRA short selling data")
     only.add_argument("--fundamentals-only", action="store_true",
                       help="refresh company financials now (normally weekly, as part of db update)")
     dbp.set_defaults(func=cmd_db)

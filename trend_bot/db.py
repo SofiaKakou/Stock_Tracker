@@ -108,6 +108,23 @@ CREATE TABLE IF NOT EXISTS facts (
 );
 CREATE INDEX IF NOT EXISTS facts_item ON facts(item, cik);
 
+-- FINRA short interest, twice a month (see short_interest.py).
+CREATE TABLE IF NOT EXISTS short_interest (
+    ticker     TEXT NOT NULL,
+    settle     TEXT NOT NULL,    -- report ("settlement") date; public about 7 business days later
+    short      REAL NOT NULL,    -- shares sold short and not yet bought back
+    avg_volume REAL,             -- FINRA's average daily volume, for days to cover
+    PRIMARY KEY (ticker, settle)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS short_interest_files (target TEXT PRIMARY KEY, settle TEXT);  -- NULL: not on FINRA's site
+
+-- FINRA daily short volume, summed per month.
+CREATE TABLE IF NOT EXISTS short_volume (
+    ticker TEXT NOT NULL, month TEXT NOT NULL,   -- YYYY-MM
+    short REAL NOT NULL, total REAL NOT NULL, days INTEGER NOT NULL,
+    PRIMARY KEY (ticker, month)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 

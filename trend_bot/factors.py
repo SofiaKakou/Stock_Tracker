@@ -19,7 +19,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-from trend_bot import earnings, fundamentals, model
+from trend_bot import earnings, fundamentals, model, short_interest
 from trend_bot.company_info import fund_tickers
 
 
@@ -84,6 +84,8 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
     splits = pd.read_sql_query("SELECT * FROM splits", con)
     log("[factors] working out quarterly earnings surprises...")
     ev = earnings.events(con, facts, tickers)
+    si = short_interest.load_short_interest(con)
+    sv = pd.read_sql_query("SELECT * FROM short_volume", con)
     nxt = panel["close"].shift(-1) / panel["close"] - 1
     months = [m for m in panel["close"].index[:-1] if m >= pd.Timestamp(since)]
     rows = []
@@ -98,6 +100,10 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
                            f["shares"], f["shares_date"], splits, tickers)
         vals = fundamentals.factor_values(f, caps).join(earnings.latest(ev, month), how="left")
         vals.index = [tickers[c] for c in vals.index]
+        if len(si) or len(sv):
+            by_t = lambda col: pd.Series(f[col].to_numpy(), index=[tickers[c] for c in f.index])
+            short = short_interest.factor_values(si, sv, month, by_t("shares"), by_t("shares_date"), splits)
+            vals = vals.join(short, how="left")
         vals = vals[vals.index.isin(feat.index)]
         vals["ret"] = nxt.loc[month, vals.index]
         vals["month"] = month
@@ -140,15 +146,17 @@ def evaluate(df: pd.DataFrame, factor: str, sign: int = 1, min_stocks: int = 50)
 
 QUALITY_VALUE = ["gross_profitability", "earnings_yield", "book_to_market", "accruals", "asset_growth"]
 EARNINGS = ["sue", "revenue_sue", "ear"]
+SHORT = ["short_ratio", "days_to_cover", "short_change"]
+COMBOS = {"quality_value_combo": QUALITY_VALUE, "earnings_combo": EARNINGS, "short_combo": SHORT}
 
 
 def study(df: pd.DataFrame, split_year: int = 2018) -> dict[str, pd.DataFrame]:
     df = df.copy()
-    df["quality_value_combo"] = composite(df, QUALITY_VALUE)
-    df["earnings_combo"] = composite(df, EARNINGS)
+    for name, parts in COMBOS.items():
+        df[name] = composite(df, [p for p in parts if p in df]) if any(p in df for p in parts) else np.nan
     periods = {"all": df, f"before {split_year}": df[df["month"].dt.year < split_year],
                f"{split_year} on": df[df["month"].dt.year >= split_year]}
-    names = list(fundamentals.EXPECTED) + ["quality_value_combo", "earnings_combo"]
+    names = [n for n in list(fundamentals.EXPECTED) + list(COMBOS) if n in df]
     out = {}
     for label, part in periods.items():
         rows = {}
