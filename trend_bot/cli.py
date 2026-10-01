@@ -294,6 +294,17 @@ def cmd_alert(args: argparse.Namespace) -> int:
         e = alerts.model_embed(res)
         if e:
             embeds.append(e)
+    if (args.model or args.forecast) and Path(args.db).exists():
+        from trend_bot import db as idb, ideas as iideas
+
+        with closing(idb.connect(args.db)) as con:
+            port = iideas.load_portfolio(con)
+            # Once per monthly update: the buys and sells of the top-ideas portfolio.
+            if port and idb.get_meta(con, "ideas_portfolio_sent") != port["date"]:
+                embeds.append(alerts.ideas_portfolio_embed(port, iideas.reliability_note(con)))
+                if not args.dry_run:
+                    idb.set_meta(con, "ideas_portfolio_sent", port["date"])
+                    con.commit()
     if args.forecast and Path(args.db).exists():
         from trend_bot import db as fdb, forecast, track as ftrack
 
@@ -1013,10 +1024,13 @@ def cmd_ideas(args: argparse.Namespace) -> int:
         if ranked.empty:
             print("Not enough data.")
             return 1
+        ws = model.weather_status(con)
+        port = None
         if not args.no_record:
             ideas.save(con, ranked, date, top=args.top, bottom=args.bottom)
             new = track.record_ml(con, ranked, date, prefix="mix")
-        ws = model.weather_status(con)
+            port = ideas.update_portfolio(con, ranked, date, ws, hold=args.hold, buffer=args.buffer)
+            track.record_ideas_trades(con, port)
         note = ideas.reliability_note(con)
     from trend_bot.model import weather_text
 
@@ -1026,6 +1040,14 @@ def cmd_ideas(args: argparse.Namespace) -> int:
     print(f"\nTop ideas · {date} · {len(ranked):,} stocks ranked\n\nMarket weather: {weather_text(ws)}\n")
     print(f"== ⚠️  Most likely to lag ==\n{show(ranked.tail(args.bottom).iloc[::-1])}")
     print(f"\n== 💡 Top ideas ==\n{show(ranked.head(args.top))}")
+    if port:
+        print(f"\n== 📋 The portfolio to follow (top {args.hold}, sell below rank {args.buffer}) ==")
+        print("  🟢 Buy:  " + (", ".join(p["ticker"] for p in port["buys"]) or "nothing new"))
+        print("  🔴 Sell: " + (", ".join(p["ticker"] for p in port["sells"]) or "nothing"))
+        print("  Hold:    " + (", ".join(p["ticker"] for p in port["holds"]) or "-"))
+        if not port["invest"]:
+            print("  The weather filter says cash: the tested version held cash while the S&P 500 is below its "
+                  "200-day average.")
     print(f"\nHow reliable is this? {note}")
     if not args.no_record:
         print(f"Recorded {len(new)} new picks (top and bottom 10%) for forward tracking ('track').")
@@ -1236,7 +1258,10 @@ def make_parser() -> argparse.ArgumentParser:
     ide.add_argument("--universe", type=int, default=1000, help="most traded stocks to rank (default 1000)")
     ide.add_argument("--top", type=int, default=15, help="top ideas to list")
     ide.add_argument("--bottom", type=int, default=10, help="most-likely-to-lag stocks to list")
-    ide.add_argument("--no-record", action="store_true", help="don't save the list or record picks for 'track'")
+    ide.add_argument("--hold", type=int, default=20, help="stocks in the portfolio to follow (default 20)")
+    ide.add_argument("--buffer", type=int, default=40, help="sell a holding once it falls below this rank")
+    ide.add_argument("--no-record", action="store_true",
+                     help="don't save the list, update the portfolio or record picks for 'track'")
     ide.set_defaults(func=cmd_ideas)
 
     sr = sub.add_parser("send-report", help="post a file (the HTML report by default) to Discord")

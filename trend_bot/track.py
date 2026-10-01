@@ -19,6 +19,8 @@ SIGNALS = {
     "model_sell": "📉 Model sell",
     "forecast_top": "🔮 Likely to beat the market",
     "forecast_bottom": "🔮 Likely to lag the market",
+    "ideas_buy": "🟢 Top-ideas portfolio: buy",
+    "ideas_sell": "🔴 Top-ideas portfolio: sell",
     "mix_top": "💡 Top ideas (simple mix): top 10%",
     "mix_bottom": "⚠️ Most likely to lag (simple mix): bottom 10%",
     "ml_top": "🤖 All-signal model: top 10%",
@@ -72,6 +74,19 @@ def record_ml(con: sqlite3.Connection, ranking: pd.DataFrame, date: str, top: fl
         for t, r in part.iterrows():
             if pd.notna(r.get("close")):
                 rows.append((date, t, signal, r["close"], f"rank {r['pct']:.0%}"))
+    return _insert(con, rows)
+
+
+def record_ideas_trades(con: sqlite3.Connection, port: dict) -> set[tuple[str, str]]:
+    """Save the top-ideas portfolio's monthly buys and sells (graded like every other pick)."""
+    rows = [(port["date"], p["ticker"], "ideas_buy", p["close"], f"rank {p['rank']}: {p['why']}")
+            for p in port["buys"]]
+    for p in port["sells"]:
+        price = con.execute("SELECT close FROM prices WHERE ticker = ? AND date <= ? ORDER BY date DESC LIMIT 1",
+                            (p["ticker"], port["date"] + "T99")).fetchone()
+        if price:
+            rows.append((port["date"], p["ticker"], "ideas_sell", price[0],
+                         f"fell to rank {p['rank']}" if p.get("rank") else "no longer ranked"))
     return _insert(con, rows)
 
 

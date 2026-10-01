@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS facts (
 );
 CREATE INDEX IF NOT EXISTS facts_item ON facts(item, cik);
 
+-- The top-ideas portfolio (see ideas.py): the top 20, kept while in the top 40.
+CREATE TABLE IF NOT EXISTS ideas_holdings (
+    ticker      TEXT PRIMARY KEY,
+    rank        INTEGER,
+    since       TEXT,            -- date it entered the portfolio
+    entry_price REAL,
+    score       REAL,            -- score at the last monthly check
+    sector      TEXT,
+    why         TEXT
+);
+
 -- FINRA short interest, twice a month (see short_interest.py).
 CREATE TABLE IF NOT EXISTS short_interest (
     ticker     TEXT NOT NULL,

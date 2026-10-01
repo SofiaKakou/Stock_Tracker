@@ -289,6 +289,13 @@ In the walk-forward test (`study ml`), this simple mix was steadier than the mac
 
 **Within each industry.** A bank and a software company look very different on debt, margins and price-to-book. So `study ml` also tests an **industry_mix**, where company signals are ranked against the company's own industry instead of the whole market. It uses about 15 groups built from SEC industry codes (`sectors.py`); an industry with fewer than 10 companies that month falls back to the whole market. The top ideas switch to the industry version **only if it ranked stocks better in both halves of the test**. Otherwise they stay with the plain mix, and the note says which one is used. `study factors` also shows each signal ranked against the whole market and within its industry.
 
+**The portfolio to follow.** Each time `ideas` runs (monthly in the cloud), it also updates a 20-stock portfolio using exactly the rule the test below measures:
+- **🟢 Buy:** stocks that enter the top 20.
+- **🔴 Sell:** only stocks that drop out of the top 40 (or disappear), so trades stay rare.
+- **Keep:** everything else.
+
+Discord gets a "📋 Top-ideas portfolio" message once per update with the buys (and why), the sells (with their return since bought) and the holds. When the weather filter says caution, the message says so: the tested version held cash. Buys and sells are also recorded for `track`. Options: `--hold`, `--buffer`.
+
 **Would it have made money?**
 
 ```bash

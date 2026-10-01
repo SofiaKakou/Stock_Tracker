@@ -127,3 +127,62 @@ def test_study_ideas_end_to_end(model_db, tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Top ideas + weather filter" in out and "S&P 500 (buy & hold)" in out and "Year by year" in out
     assert json.loads(db.get_meta(model_db, "ideas_backtest"))["hold"] == 5
+
+
+def ranking(order, closes=None):
+    """A ranking in the shape rank_month returns, best first."""
+    n = len(order)
+    return pd.DataFrame({"score": np.linspace(1, 0, n), "pct": np.linspace(1, 0, n),
+                         "close": [closes.get(t, 10.0) if closes else 10.0 for t in order],
+                         "signals": 12, "sector": "Technology", "why": "cheap vs sales"}, index=order)
+
+
+def test_portfolio_buys_top_and_sells_only_below_the_buffer(tmp_path):
+    from trend_bot import track
+
+    con = db.connect(tmp_path / "m.db")
+    sunny, rainy = {"invest": True}, {"invest": False}
+    names = [f"S{i:02d}" for i in range(60)]
+    first = ideas.update_portfolio(con, ranking(names), "2026-09-30", sunny, hold=5, buffer=10)
+    assert first["first"] and [p["ticker"] for p in first["buys"]] == names[:5] and first["sells"] == []
+
+    # Next month: S00 slips to rank 8 (inside the buffer: kept), S01 to rank 30 (sold), S02 disappears.
+    order = [n for n in names if n not in ("S00", "S01", "S02")]
+    order.insert(7, "S00")
+    order.insert(29, "S01")
+    port = ideas.update_portfolio(con, ranking(order, {"S01": 12.0}), "2026-10-31", rainy, hold=5, buffer=10)
+    assert not port["first"] and not port["invest"]
+    assert {p["ticker"] for p in port["sells"]} == {"S01", "S02"}
+    s01 = next(p for p in port["sells"] if p["ticker"] == "S01")
+    assert s01["rank"] == 30 and s01["return"] == pytest.approx(0.2) and s01["since"] == "2026-09-30"
+    held = [t for (t,) in con.execute("SELECT ticker FROM ideas_holdings ORDER BY rank")]
+    assert "S00" in held and len(held) == 5
+    assert {p["ticker"] for p in port["holds"]} == {"S00", "S03", "S04"}
+    assert len(port["buys"]) == 2
+    assert con.execute("SELECT since FROM ideas_holdings WHERE ticker = 'S00'").fetchone()[0] == "2026-09-30"
+    assert ideas.load_portfolio(con)["date"] == "2026-10-31"
+
+    con.execute("INSERT INTO prices(ticker, date, close) VALUES ('S01', '2026-10-30', 12.0)")
+    new = track.record_ideas_trades(con, port)
+    assert ("S01", "ideas_sell") in new and all((p["ticker"], "ideas_buy") in new for p in port["buys"])
+
+    e = alerts.ideas_portfolio_embed(port, "note")
+    assert "Caution" in e["description"] and "S01" in e["description"] and "+20%" in e["description"]
+
+
+def test_monthly_portfolio_message_is_sent_once(model_db, tmp_path, monkeypatch):
+    from trend_bot import alerts as a
+    from trend_bot.cli import main
+
+    ideas.update_portfolio(model_db, ranking([f"S{i:02d}" for i in range(30)]), "2026-09-30", {"invest": True},
+                           hold=5, buffer=10)
+    sent = []
+    monkeypatch.setattr(a, "send", lambda url, payload, timeout=15: sent.append(payload))
+    args = ["alert", "S01", "--from-db", "--db", str(tmp_path / "market.db"), "--webhook", "https://h",
+            "--state", str(tmp_path / "s.json"), "--no-news", "--no-insiders", "--model"]
+    assert main(args) == 0
+    titles = [e["title"] for p in sent for e in p["embeds"]]
+    assert titles.count("📋 Top-ideas portfolio - monthly update") == 1
+    sent.clear()
+    assert main(args) == 0
+    assert not any(e["title"].startswith("📋") for p in sent for e in p["embeds"])
