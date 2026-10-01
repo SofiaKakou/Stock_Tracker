@@ -264,6 +264,13 @@ Market value is price × shares outstanding. Past stock splits are recorded (and
 
 Results are shown for all years, before 2018 and from 2018 on (`--split-year`), and a real signal should hold up in both.
 
+**Companies that disappeared.** Yahoo only has prices for companies listed today, so a plain study never sees the ones that went bankrupt or were bought out. That makes weak, risky companies look better than they were. To correct this, the bot keeps the financials of every company whose public float ever reached $500M, including ones with no prices today. The nightly update then looks up how each one ended in its SEC filings, a batch each night. Each such company is put back for the month it disappeared:
+- bankrupt: **−100%**,
+- delisted for another reason: **−30%** (the research average),
+- bought out: the average stock's return.
+
+It only goes back in if its public float was at least as big as the universe's smaller members. Price-based signals can't be measured for these companies. The main tables include them, and a last table shows each signal with and without them, so you can see how much the bias mattered.
+
 ### One model over every signal (machine learning)
 
 ```bash
@@ -277,9 +284,13 @@ So it's tested the honest way: each year is predicted by a model trained only on
 - **simple_mix:** the equal-weight average rank of every signal plus momentum (nothing fitted),
 - **quality_value** and **momentum** on their own.
 
-For each it shows the IC, top-minus-bottom, and a portfolio holding the top 10% each month after trading costs, vs the average stock. The **verdict** only says PASSED if the model beat the simple mix on unseen years in both halves (before and from `--split-year`) with an `ic_t` above 2. Otherwise treat its rankings as no better than the simple mix. The last lines show what the model relies on most and today's top and bottom 15 (also saved, with the verdict, for later use in the alerts).
+For each it shows the IC, top-minus-bottom, and a portfolio holding the top 10% each month after trading costs, vs the average stock. The **verdict** only says PASSED if the model beat the simple mix on unseen years in both halves (before and from `--split-year`) with an `ic_t` above 2. Otherwise treat its rankings as no better than the simple mix. The last lines show what the model relies on most and today's top and bottom 15.
 
-Stocks delisted in the middle of a month are left out of the returns, which flatters every approach a little (most for small, weak stocks).
+**In the cloud** the nightly run re-tests the model on the first run of each month. Then:
+- **Weekly outlook and report:** they show its top and most-likely-to-lag ideas **only if it passed**. Otherwise the outlook says in one line that it's not shown.
+- **Forward tracking, either way:** its top and bottom 10% are recorded as picks (`🤖 All-signal model` in `track` and the report). Grading picks on prices that didn't exist yet when they were made is the one test a model can't fool.
+
+Companies that disappeared are handled as in `study factors` (below). The model is never trained on them, because their price inputs are missing and it mustn't learn "missing prices = bankrupt". It is scored on them, though. Momentum can't be measured for them, so its row still leaves them out.
 
 ### Short selling (FINRA)
 

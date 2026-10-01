@@ -44,7 +44,13 @@ ITEMS: dict[str, list[tuple[str, str, str]]] = {
                ("us-gaap", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", "USD")],
     "shares": [("dei", "EntityCommonStockSharesOutstanding", "shares"),
                ("us-gaap", "CommonStockSharesOutstanding", "shares")],
+    # Market value of shares held by outsiders, from each 10-K cover page (finds companies
+    # big enough to have been in the universe, even after they disappeared).
+    "public_float": [("dei", "EntityPublicFloat", "USD")],
 }
+# Companies we don't track (no prices today) are still kept if they were at least this big,
+# so the studies can put back the ones that went bankrupt or were delisted.
+GONE_MIN_FLOAT = 500e6
 FLOWS = {"revenue", "gross_profit", "cost_of_revenue", "operating_income", "net_income", "cfo"}
 
 
@@ -77,8 +83,12 @@ def parse_company(doc: dict) -> list[tuple]:
 
 
 def load_bulk(con: sqlite3.Connection, data: bytes | Path, ciks: set[int] | None = None,
-              log: Callable[[str], None] = print) -> int:
-    """Replace the facts table from a companyfacts.zip (bytes or a path). Returns rows stored."""
+              log: Callable[[str], None] = print, min_float: float | None = None) -> int:
+    """Replace the facts table from a companyfacts.zip (bytes or a path). Returns rows stored.
+
+    ciks: companies to keep. min_float: also keep any other company whose public float
+    ever reached this many dollars.
+    """
     zf = zipfile.ZipFile(io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else data)
     con.execute("DELETE FROM facts")
     total, batch = 0, []
@@ -88,12 +98,16 @@ def load_bulk(con: sqlite3.Connection, data: bytes | Path, ciks: set[int] | None
             cik = int(Path(name).stem.removeprefix("CIK"))
         except ValueError:
             continue
-        if ciks is not None and cik not in ciks:
+        tracked = ciks is None or cik in ciks
+        if not tracked and min_float is None:
             continue
         try:
-            batch.extend(parse_company(json.loads(zf.read(name))))
+            rows = parse_company(json.loads(zf.read(name)))
         except (ValueError, KeyError):
             continue
+        if not tracked and max((r[6] for r in rows if r[1] == "public_float"), default=0) < min_float:
+            continue
+        batch.extend(rows)
         if len(batch) > 200_000:
             con.executemany("INSERT INTO facts VALUES (?, ?, ?, ?, ?, ?, ?)", batch)
             total += len(batch)
@@ -135,7 +149,7 @@ def update_fundamentals(con: sqlite3.Connection, max_age_days: int = 7, force: b
     started = time.time()
     (download or (lambda p: download_bulk(p, log)))(path)
     ciks = {c for (c,) in con.execute("SELECT DISTINCT cik FROM tickers WHERE cik IS NOT NULL")}
-    n = load_bulk(con, path, ciks, log)
+    n = load_bulk(con, path, ciks, log, min_float=GONE_MIN_FLOAT)
     try:
         path.unlink()  # 1.3 GB we don't need to keep
     except OSError:

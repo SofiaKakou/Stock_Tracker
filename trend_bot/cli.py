@@ -309,9 +309,16 @@ def cmd_alert(args: argparse.Namespace) -> int:
                         ftrack.record_forecast(con, preds, date)
                         fdb.set_meta(con, "forecast_week", week)
                         con.commit()
-                    embeds.append(alerts.forecast_embed(
-                        preds, date, fmodel.weather_status(con),
-                        forecast.reliability_note(forecast.load_scorecard(con))))
+                    from trend_bot import ml as fml
+
+                    verdict, ranking = fml.load(con)
+                    note = forecast.reliability_note(forecast.load_scorecard(con))
+                    extra = alerts.ml_status_line(verdict)
+                    embeds.append(alerts.forecast_embed(preds, date, fmodel.weather_status(con),
+                                                        f"{note} {extra}".strip()))
+                    e = alerts.ml_embed(verdict, ranking)
+                    if e:
+                        embeds.append(e)
     if args.market:
         embeds.extend(_market_embeds(args, strategy))
     if args.summary:
@@ -576,7 +583,10 @@ def _study_factors(con, args: argparse.Namespace) -> None:
         return
     tables = factors.study(df, split_year=args.split_year)
     fmt = {"months": "{:.0f}".format, "stocks": "{:.0f}".format, "mean_ic": "{:+.3f}".format,
-           "ic_t": "{:+.1f}".format, "ic_positive": "{:.0%}".format, "top_minus_bottom": "{:+.2%}".format}
+           "ic_t": "{:+.1f}".format, "ic_positive": "{:.0%}".format, "top_minus_bottom": "{:+.2%}".format,
+           "ic_listed_only": "{:+.3f}".format, "ic_with_gone": "{:+.3f}".format,
+           "tmb_listed_only": "{:+.2%}".format, "tmb_with_gone": "{:+.2%}".format}
+    print(_gone_note(df))
     print(f"\n{df['month'].min():%Y-%m} to {df['month'].max():%Y-%m}, up to {args.universe:,} most traded stocks a month")
     for label, table in tables.items():
         print(f"\n== {label} ==\n" + table.to_string(formatters=fmt))
@@ -590,8 +600,20 @@ def _study_factors(con, args: argparse.Namespace) -> None:
         print(f"  {name:<20} average rank of {', '.join(parts)}")
 
 
+def _gone_note(df: pd.DataFrame) -> str:
+    """One line on the companies that disappeared and were put back into the study."""
+    gone = df["gone"].dropna() if "gone" in df else pd.Series(dtype=str)
+    if gone.empty:
+        return ("Note: only companies listed today have prices, so ones that went bankrupt or were bought out "
+                "are missing (their fates are looked up a little each night; results improve as that fills in).")
+    c = gone.value_counts()
+    return (f"Companies that disappeared, put back for their last month: {c.get('bankrupt', 0):,} bankrupt (-100%), "
+            f"{c.get('delisted', 0):,} delisted (-30%), {c.get('acquired', 0):,} bought out (average stock). "
+            "Price-based signals can't be measured for them.")
+
+
 def _study_ml(con, args: argparse.Namespace) -> None:
-    from trend_bot import db, ml
+    from trend_bot import ml, track
 
     if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
         print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
@@ -602,6 +624,7 @@ def _study_ml(con, args: argparse.Namespace) -> None:
     if df.empty:
         print("Not enough data.")
         return
+    print(_gone_note(df))
     first = max(args.first_year, df["month"].dt.year.min() + 2)
     preds = ml.walk_forward(df, first_year=first, trees=args.trees)
     if preds.empty:
@@ -621,21 +644,22 @@ def _study_ml(con, args: argparse.Namespace) -> None:
           "(no fitting). quality_value / momentum: single-idea baselines.\n"
           "mean_ic: rank correlation with next month's return (0.02-0.05 is useful). ic_t above ~2: unlikely luck. "
           "top10_per_year: holding the top 10% each month, after 0.1% trading costs each way, vs average_stock "
-          "(every stock in the universe, equal weight). Stocks that were delisted mid-month are left out, "
-          "which flatters every approach a little.")
+          "(every stock in the universe, equal weight). Momentum can't be measured for companies that disappeared, "
+          "so its numbers still leave them out.")
     passed, text = ml.verdict(card, args.split_year)
     print(f"\nVerdict: {text}")
     ranking, imp = ml.today(df, trees=args.trees)
     print("\nWhat the model leans on most (share of its total gain):")
     print("  " + ", ".join(f"{k} {v:.0%}" for k, v in imp.head(12).items()))
-    latest = df["month"].max()
-    print(f"\nRanking as of {latest:%Y-%m-%d} ({'model passed' if passed else 'model NOT passed - research only'}):")
+    # The last month in the table can be a partial one; the ranking uses its latest trading day.
+    latest = con.execute("SELECT MAX(date) FROM prices WHERE ticker IN (SELECT ticker FROM tickers "
+                         "WHERE last_date IS NOT NULL)").fetchone()[0][:10]
+    print(f"\nRanking as of {latest} ({'model passed' if passed else 'model NOT passed - research only'}):")
     print("  Top 15:    " + ", ".join(ranking.index[:15]))
     print("  Bottom 15: " + ", ".join(ranking.index[-15:]))
-    db.set_meta(con, "ml_verdict", json.dumps({"passed": passed, "date": f"{latest:%Y-%m-%d}", "text": text,
-                                                "ic": float(card["all"].loc["model", "mean_ic"]),
-                                                "mix_ic": float(card["all"].loc["simple_mix", "mean_ic"])}))
-    con.commit()
+    ml.save(con, ranking, latest, card, passed, text)
+    new = track.record_ml(con, ranking, latest)
+    print(f"\nRecorded {len(new)} new picks (top and bottom 10%) for forward tracking: see 'python -m trend_bot track'.")
 
 
 def _study_forecast(con, args: argparse.Namespace) -> None:

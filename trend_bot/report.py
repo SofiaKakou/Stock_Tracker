@@ -108,6 +108,22 @@ def _table(headers: list[str], rows: list[list[str]], left: set[int] = frozenset
     return f'<div class="scroll"><table><thead><tr>{th}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
+def _ml_section(con: sqlite3.Connection, esc) -> list[str]:
+    """The all-signal model's ideas, only if it passed its walk-forward test."""
+    from trend_bot import ml
+
+    verdict, ranking = ml.load(con)
+    if not verdict or not verdict.get("passed"):
+        return []
+    row = lambda p: [f"<b>{esc(p['ticker'])}</b>", f"{p['close']:,.2f}" if p.get("close") else "–"]
+    return ["<h2>🤖 All-signal model</h2>",
+            f'<p class="sub">Passed its honesty test: on years it never saw, it ranked stocks better than a simple '
+            f"mix of the same signals (IC {verdict['ic']:+.3f} vs {verdict['mix_ic']:+.3f}). "
+            f"Ranking from {esc(ranking['date'])}, refreshed monthly.</p>",
+            "<h3>⚠️ Most likely to lag</h3>", _table(["Ticker", "Close"], [row(p) for p in ranking["bottom"]]),
+            "<h3>💡 Top ideas</h3>", _table(["Ticker", "Close"], [row(p) for p in ranking["top"]])]
+
+
 def _outlook(con: sqlite3.Connection, esc) -> list[str]:
     """Warnings first, then ideas, with how reliable they've been."""
     try:
@@ -176,6 +192,7 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
                                         for n, l in tiles) + "</div>",
     ]
     parts += _outlook(con, esc)
+    parts += _ml_section(con, esc)
     parts.append("<h2>🔔 Strong insider buying in an uptrend</h2>")
     if len(strong):
         cards = []

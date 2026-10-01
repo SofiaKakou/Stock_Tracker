@@ -20,7 +20,7 @@ from typing import Callable
 
 import requests
 
-from trend_bot import insiders
+from trend_bot import fundamentals, insiders
 
 DEREGISTRATION = {"15-12B", "15-12G", "15-15D", "15F-12B", "15F-12G", "15F-15D", "25", "25-NSE"}
 MERGER_FORMS = {"DEFM14A", "DEFM14C", "PREM14A", "PREM14C", "SC 14D9", "SC 14D9/A", "SC TO-T", "SC 13E3"}
@@ -52,22 +52,35 @@ def classify(doc: dict) -> tuple[str, str | None]:
 
 
 def companies_to_check(con: sqlite3.Connection, recheck_days: int = 90) -> list[int]:
-    """Companies with insider buying by 2+ people but no price data, not checked recently.
+    """Companies without price data whose fate we need, not checked recently:
+
+    - insider buying by 2+ people (for the insider study), then
+    - companies big enough to have been in the universe (from their filings; for the factor
+      and model studies).
 
     A final outcome (bankrupt/acquired/delisted) is never re-checked.
     """
     cutoff = (dt.datetime.now() - dt.timedelta(days=recheck_days)).isoformat(timespec="seconds")
-    rows = con.execute(
-        """SELECT cik FROM insider_trades
-           WHERE code = 'P' AND cik IS NOT NULL
-             AND cik NOT IN (SELECT cik FROM tickers WHERE cik IS NOT NULL AND last_date IS NOT NULL)
-             AND cik NOT IN (SELECT cik FROM company_fates
-                             WHERE status IN ('bankrupt', 'acquired', 'delisted') OR checked_at >= ?)
-           GROUP BY cik HAVING COUNT(DISTINCT insider) >= 2
-           ORDER BY cik""",
+    skip = """cik NOT IN (SELECT cik FROM tickers WHERE cik IS NOT NULL AND last_date IS NOT NULL)
+              AND cik NOT IN (SELECT cik FROM company_fates
+                              WHERE status IN ('bankrupt', 'acquired', 'delisted') OR checked_at >= ?)"""
+    insider = con.execute(
+        f"""SELECT cik FROM insider_trades
+            WHERE code = 'P' AND cik IS NOT NULL AND {skip}
+            GROUP BY cik HAVING COUNT(DISTINCT insider) >= 2
+            ORDER BY cik""",
         (cutoff,),
     )
-    return [r[0] for r in rows]
+    out = [r[0] for r in insider]
+    big = con.execute(
+        f"""SELECT DISTINCT cik FROM facts
+            WHERE item = 'public_float' AND val >= ? AND {skip}
+            ORDER BY cik""",
+        (fundamentals.GONE_MIN_FLOAT, cutoff),
+    )
+    seen = set(out)
+    return out + [r[0] for r in big if r[0] not in seen]
+
 
 
 def update_fates(con: sqlite3.Connection, fetch: Callable[[str], bytes] | None = None,
