@@ -446,6 +446,11 @@ def cmd_db(args: argparse.Namespace) -> int:
             print(f"[prices] new {counts['new']:,}, updated {counts['updated']:,}, "
                   f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}")
         if everything or args.insiders_only:
+            paused = db.get_meta(con, "sec_paused_until")
+            if paused and dt.datetime.now().isoformat() < paused and not args.ignore_sec_pause:
+                print(f"[sec] paused until {paused[:16].replace('T', ' ')} because the SEC asked us to slow down; "
+                      "skipping insider data today (prices, alerts and the report still update)")
+                return 0
             try:
                 added = sec_bulk.load_quarters(con, since_year=args.insider_since)
                 print(f"[insiders] {added} quarterly file(s) loaded")
@@ -454,14 +459,21 @@ def cmd_db(args: argparse.Namespace) -> int:
                 print(f"[insiders] {filings:,} recent filing(s) loaded")
                 from trend_bot import fates
 
-                found = fates.update_fates(con)
+                # One-time catch-ups are spread over several nights to stay well under the SEC's limits.
+                found = fates.update_fates(con, limit=args.sec_lookups)
                 if found:
                     print("[fates] " + ", ".join(f"{k} {v:,}" for k, v in sorted(found.items())))
                 from trend_bot import company_info
 
-                company_info.update_company_info(con)
+                company_info.update_company_info(con, limit=args.sec_lookups)
             except RuntimeError as e:
                 print(f"[insiders] stopped: {e}", file=sys.stderr)
+                if "limiting" in str(e):
+                    until = (dt.datetime.now() + dt.timedelta(hours=24)).isoformat(timespec="minutes")
+                    db.set_meta(con, "sec_paused_until", until)
+                    con.commit()
+                    print(f"[sec] pausing all SEC downloads until {until.replace('T', ' ')} "
+                          "(use --ignore-sec-pause to try sooner)", file=sys.stderr)
                 return 1
     return 0
 
@@ -899,6 +911,10 @@ def make_parser() -> argparse.ArgumentParser:
     dbp.add_argument("--insider-since", type=int, default=2006, help="first year of SEC insider data")
     dbp.add_argument("--insider-days", type=int, default=30,
                      help="max days of recent filings to fetch one by one (default 30)")
+    dbp.add_argument("--sec-lookups", type=int, default=1500,
+                     help="max company lookups per run for the one-time catch-ups (default 1500)")
+    dbp.add_argument("--ignore-sec-pause", action="store_true",
+                     help="try the SEC even if it asked us to slow down in the last 24 hours")
     dbp.add_argument("--insiders-all-companies", action="store_true",
                      help="read recent filings for every company, not just ones the screen can show")
     only = dbp.add_mutually_exclusive_group()

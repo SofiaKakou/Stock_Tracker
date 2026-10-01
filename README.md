@@ -122,6 +122,8 @@ What `db update` does:
 | Insider trades | SEC quarterly bulk files (2006 onwards) | Complete and fast. Each quarter is published a few weeks after it ends. Only open-market buys and sales are stored. |
 | Recent insider trades | SEC daily filing index | Fills the weeks since the last published quarter, one filing at a time (`--insider-days`, default 30). Only filings for companies the screen can show are downloaded; add `--insiders-all-companies` for everyone. |
 
+If the SEC keeps refusing requests after the bot's waits (1, 3 and 10 minutes), the bot **pauses all SEC downloads for 24 hours**, so it doesn't extend the block. Prices, alerts and the report keep updating; use `--ignore-sec-pause` to try sooner. The one-time catch-ups (what happened to delisted companies, and industry codes) are spread over several nights, at most `--sec-lookups` (default 1,500) per run.
+
 Useful flags: `--prices-only`, `--insiders-only`, `--insider-since 2015`, `--retry-failed` (retry tickers that returned no data), and `--pause 2` (go slower if Yahoo starts refusing).
 
 ### Screen the whole market

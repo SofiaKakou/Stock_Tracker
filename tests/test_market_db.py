@@ -520,3 +520,23 @@ def test_etf_flags_fall_back_to_ftp(full_db, monkeypatch):
     monkeypatch.setattr(market_data, "_http_fetch", lambda url: b"<html>blocked</html>")
     monkeypatch.setattr(market_data, "_ftp_fetch", lambda url: ("﻿" + listing[url.rsplit("/", 1)[-1]]).encode())
     assert market_data.update_etf_flags(full_db, log=lambda *_: None) == 1
+
+
+def test_sec_pause_after_rate_limit(full_db, tmp_path, monkeypatch, capsys):
+    calls = []
+
+    def blocked(*a, **k):
+        calls.append(1)
+        raise RuntimeError("The SEC is still limiting requests. Progress is saved - run the same command again later.")
+
+    monkeypatch.setattr(sec_bulk, "load_quarters", blocked)
+    args = ["db", "update", "--insiders-only", "--db", str(tmp_path / "market.db")]
+    assert main(args) == 1
+    assert "pausing all SEC downloads" in capsys.readouterr().err
+    assert db.get_meta(full_db, "sec_paused_until") is not None
+
+    assert main(args) == 0  # paused: doesn't knock again
+    assert len(calls) == 1 and "paused until" in capsys.readouterr().out
+
+    assert main(args + ["--ignore-sec-pause"]) == 1  # unless asked to
+    assert len(calls) == 2
