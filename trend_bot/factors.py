@@ -73,8 +73,12 @@ def market_caps(close: pd.Series, shares: pd.Series, shares_date: pd.Series, spl
 
 def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe: int = 1000,
                     min_price: float = 5, panel: dict[str, pd.DataFrame] | None = None,
-                    log=print) -> pd.DataFrame:
-    """One row per (month, stock): every factor and next month's return."""
+                    log=print, extras: bool = False, include_latest: bool = False) -> pd.DataFrame:
+    """One row per (month, stock): every factor and next month's return.
+
+    extras: also the price features, last month's return and market value (for the ML model).
+    include_latest: also the latest month, whose next-month return isn't known yet (ret = NaN).
+    """
     facts = fundamentals.load_facts(con)
     if facts.empty:
         return pd.DataFrame()
@@ -87,7 +91,8 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
     si = short_interest.load_short_interest(con)
     sv = pd.read_sql_query("SELECT * FROM short_volume", con)
     nxt = panel["close"].shift(-1) / panel["close"] - 1
-    months = [m for m in panel["close"].index[:-1] if m >= pd.Timestamp(since)]
+    last1 = panel["close"] / panel["close"].shift(1) - 1
+    months = [m for m in panel["close"].index[: None if include_latest else -1] if m >= pd.Timestamp(since)]
     rows = []
     for k, month in enumerate(months):
         feat = pd.DataFrame({f: panel[f].loc[month] for f in model.FEATURES})
@@ -99,15 +104,22 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
         caps = market_caps(raw.loc[month] if month in raw.index else pd.Series(dtype=float),
                            f["shares"], f["shares_date"], splits, tickers)
         vals = fundamentals.factor_values(f, caps).join(earnings.latest(ev, month), how="left")
+        if extras:
+            vals["market_cap"] = caps
         vals.index = [tickers[c] for c in vals.index]
         if len(si) or len(sv):
             by_t = lambda col: pd.Series(f[col].to_numpy(), index=[tickers[c] for c in f.index])
             short = short_interest.factor_values(si, sv, month, by_t("shares"), by_t("shares_date"), splits)
             vals = vals.join(short, how="left")
         vals = vals[vals.index.isin(feat.index)]
+        if extras:
+            vals = vals.join(feat.drop(columns="close"), how="left")
+            vals["mom1"] = last1.loc[month, vals.index]
         vals["ret"] = nxt.loc[month, vals.index]
         vals["month"] = month
-        rows.append(vals.dropna(subset=["ret"]).rename_axis("ticker").reset_index())
+        if not (include_latest and month == panel["close"].index[-1]):
+            vals = vals.dropna(subset=["ret"])
+        rows.append(vals.rename_axis("ticker").reset_index())
         if (k + 1) % 24 == 0:
             log(f"[factors] {k + 1}/{len(months)} months")
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
