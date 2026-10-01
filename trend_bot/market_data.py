@@ -68,31 +68,64 @@ def parse_symbol_list(text: str, symbol_col: str) -> dict[str, tuple[bool, str]]
     return out
 
 
+FTP_HOST = "ftp.nasdaqtrader.com"
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) trend_bot"
+
+
+def _http_fetch(url: str) -> bytes:
+    import requests
+
+    resp = requests.get(url, timeout=30, headers={"User-Agent": BROWSER_UA})
+    resp.raise_for_status()
+    return resp.content
+
+
+def _ftp_fetch(url: str) -> bytes:
+    """Same file from Nasdaq's FTP server (SymbolDirectory/<name>)."""
+    import ftplib
+    import io
+
+    buf = io.BytesIO()
+    with ftplib.FTP(FTP_HOST, timeout=30) as ftp:
+        ftp.login()
+        ftp.retrbinary(f"RETR SymbolDirectory/{url.rsplit('/', 1)[-1]}", buf.write)
+    return buf.getvalue()
+
+
 def update_etf_flags(con: sqlite3.Connection, fetch: Callable[[str], bytes] | None = None,
                      log: Callable[[str], None] = print) -> int:
     """Mark ETFs/ETNs (e.g. leveraged products filed under a bank) using Nasdaq's symbol lists.
 
-    Best effort: if the lists can't be downloaded, nothing changes.
+    Tries the website, then Nasdaq's FTP server. Always reports what happened;
+    if neither works, nothing changes.
     """
-    def default_fetch(url: str) -> bytes:
-        import requests
-
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        return resp.content
-
-    fetch = fetch or default_fetch
+    sources = [fetch] if fetch else [_http_fetch, _ftp_fetch]
     flags: dict[str, tuple[bool, str]] = {}
     for url, col in SYMBOL_LISTS.values():
-        try:
-            flags.update(parse_symbol_list(fetch(url).decode("utf-8", "replace"), col))
-        except Exception as e:
-            log(f"[universe] couldn't read {url.rsplit('/', 1)[-1]} ({e}); ETF/ETN flags not updated")
+        name = url.rsplit("/", 1)[-1]
+        problems = []
+        for source in sources:
+            try:
+                raw = source(url).decode("utf-8-sig", "replace")
+            except Exception as e:
+                problems.append(f"{e}")
+                continue
+            parsed = parse_symbol_list(raw, col)
+            if parsed:
+                flags.update(parsed)
+                break
+            first = raw.strip().splitlines()[0][:60] if raw.strip() else "(empty)"
+            problems.append(f"unexpected content: {first!r}")
+        else:
+            log(f"[universe] couldn't read Nasdaq's {name} ({'; '.join(problems)}); ETF/ETN flags not updated")
             return 0
-    rows = [(int(is_etf), name, t) for t, (is_etf, name) in flags.items()]
+    rows = [(int(is_etf), sec_name, t) for t, (is_etf, sec_name) in flags.items()]
     con.executemany("UPDATE tickers SET is_etf = ?, security_name = ? WHERE ticker = ?", rows)
     con.commit()
-    return sum(1 for is_etf, _, _ in rows if is_etf)
+    matched = con.execute("SELECT COUNT(*), SUM(is_etf) FROM tickers WHERE is_etf IS NOT NULL").fetchone()
+    log(f"[universe] Nasdaq lists: {len(flags):,} securities read; {matched[0]:,} of our tickers matched, "
+        f"{matched[1] or 0:,} are ETFs/ETNs (left out of screens and models)")
+    return int(matched[1] or 0)
 
 
 def update_universe(con: sqlite3.Connection, include_otc: bool = False, all_securities: bool = False) -> int:

@@ -497,12 +497,26 @@ File Creation Time: 1001202608:00|||||||"""
     full_db.execute("INSERT INTO tickers(ticker, cik, name, exchange, sic) VALUES ('GDXU', 9, 'BANK OF MONTREAL', 'NYSE', 6029)")
     assert "GDXU" not in company_info.fund_tickers(full_db)
     pages = {"nasdaqlisted.txt": nasdaq, "otherlisted.txt": other}
-    n = market_data.update_etf_flags(full_db, fetch=lambda url: pages[url.rsplit("/", 1)[-1]].encode(), log=lambda *_: None)
+    logs = []
+    n = market_data.update_etf_flags(full_db, fetch=lambda url: pages[url.rsplit("/", 1)[-1]].encode(), log=logs.append)
     assert n == 1 and "GDXU" in company_info.fund_tickers(full_db)
+    assert "are ETFs/ETNs" in logs[-1]
     assert "FLIP" not in company_info.fund_tickers(full_db)
 
     # A failed download changes nothing.
-    logs = []
     assert market_data.update_etf_flags(full_db, fetch=lambda url: 1 / 0, log=logs.append) == 0
-    assert "GDXU" in company_info.fund_tickers(full_db) and "couldn't read" in logs[0]
+    assert "GDXU" in company_info.fund_tickers(full_db) and "couldn't read" in logs[-1]
+
+    # A web page instead of the list (e.g. a block page) is reported, not silently ignored.
+    logs.clear()
+    assert market_data.update_etf_flags(full_db, fetch=lambda url: b"<html>Access denied</html>", log=logs.append) == 0
+    assert "unexpected content" in logs[-1] and "Access denied" in logs[-1]
     assert company_info.is_fund("Some Bank", 6029, "NYSE", None, "Direxion Daily 2X Bull Shares")
+
+
+def test_etf_flags_fall_back_to_ftp(full_db, monkeypatch):
+    listing = {"nasdaqlisted.txt": "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares\nFLIP|Flip Corp|Q|N|N|100|N|N",
+               "otherlisted.txt": "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol\nUPPY|Uppy 2X Leveraged ETN|P|UPPY|Y|100|N|UPPY"}
+    monkeypatch.setattr(market_data, "_http_fetch", lambda url: b"<html>blocked</html>")
+    monkeypatch.setattr(market_data, "_ftp_fetch", lambda url: ("﻿" + listing[url.rsplit("/", 1)[-1]]).encode())
+    assert market_data.update_etf_flags(full_db, log=lambda *_: None) == 1
