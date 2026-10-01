@@ -221,6 +221,38 @@ For every stock in the model universe, the bot estimates two chances for the nex
 
 The nightly alert (`--forecast`) posts this as a **weekly outlook** to Discord. The report page opens with the same sections, and `track` records the lists so their live record builds up.
 
+### Company fundamentals (factor study)
+
+```bash
+python -m trend_bot db update --fundamentals-only   # download company financials now (also weekly in db update)
+python -m trend_bot study factors                   # which fundamental signals predicted returns?
+```
+
+The bot reads the SEC's free **company facts** file: every number each company has reported in its 10-K and 10-Q filings since about 2009 (around 1.3 GB, refreshed weekly). It keeps revenue, gross profit, net income, operating cash flow, assets, liabilities, equity and shares outstanding, **with the date each number was filed**. Every lookup uses only what had been filed by then, so the tests never use numbers that weren't public yet.
+
+From these it builds classic signals from finance research:
+
+| Signal | Meaning | Better when |
+|---|---|---|
+| gross_profitability | gross profit / assets | higher |
+| roe | net income / equity | higher |
+| accruals | (net income − operating cash flow) / assets | lower |
+| leverage | liabilities / assets | lower |
+| revenue_growth | sales vs a year earlier | higher |
+| asset_growth | assets vs a year earlier | lower |
+| earnings_yield | net income / market value | higher |
+| book_to_market | book equity / market value | higher |
+| sales_to_price | sales / market value | higher |
+| quality_value_combo | average rank of profitability, earnings yield, book-to-market, accruals, asset growth | higher |
+
+Market value is price × shares outstanding. Past stock splits are recorded (and back-filled once by `db update`), so old share counts and Yahoo's split-adjusted prices line up.
+
+`study factors` ranks the ~1,000 most traded stocks by each signal every month. It then reports:
+- **IC (information coefficient):** how well the ranking matched next month's returns. 0.02–0.05 is useful; an `ic_t` above about 2 means it's unlikely to be luck.
+- **Top minus bottom:** the best 10% minus the worst 10%, per month.
+
+Results are shown for all years, before 2018 and from 2018 on (`--split-year`), and a real signal should hold up in both.
+
 ### Momentum
 
 ```bash
@@ -323,6 +355,8 @@ trend_bot/
   momentum.py    monthly momentum backtest
   model.py       Trend Score model: scores, model portfolio, weather, backtest
   forecast.py    30-day outlook: logistic regression, walk-forward test, live odds
+  fundamentals.py SEC company facts: download, point-in-time lookups, factor values
+  factors.py     factor study (IC and top-minus-bottom per signal)
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs

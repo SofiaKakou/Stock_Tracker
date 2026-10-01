@@ -89,6 +89,25 @@ CREATE TABLE IF NOT EXISTS model_holdings (
     score       REAL             -- score at the last monthly check
 );
 
+-- Stock splits (Yahoo prices are split-adjusted; these undo it for market values).
+CREATE TABLE IF NOT EXISTS splits (
+    ticker TEXT NOT NULL, date TEXT NOT NULL, ratio REAL NOT NULL,   -- 4.0 = 4-for-1
+    PRIMARY KEY (ticker, date)
+) WITHOUT ROWID;
+
+-- Reported financials from SEC XBRL filings (see fundamentals.py). One row per value
+-- per filing, so the value known on any past date can be looked up (no hindsight).
+CREATE TABLE IF NOT EXISTS facts (
+    cik      INTEGER NOT NULL,
+    item     TEXT NOT NULL,      -- revenue, net_income, assets, shares, ...
+    priority INTEGER NOT NULL,   -- which XBRL tag it came from (0 = preferred)
+    start    TEXT,               -- NULL for point-in-time values (balance sheet, shares)
+    end      TEXT NOT NULL,
+    filed    TEXT NOT NULL,
+    val      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS facts_item ON facts(item, cik);
+
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -106,7 +125,7 @@ def connect(path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
 # Columns added after the first release; ALTER TABLE adds them to older databases.
 EXTRA_COLUMNS = {
     "tickers": {"sic": "INTEGER", "sic_desc": "TEXT", "info_checked_at": "TEXT",
-                "is_etf": "INTEGER", "security_name": "TEXT"},
+                "is_etf": "INTEGER", "security_name": "TEXT", "splits_checked": "INTEGER"},
 }
 
 
