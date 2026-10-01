@@ -19,6 +19,8 @@ SIGNALS = {
     "model_sell": "📉 Model sell",
     "forecast_top": "🔮 Likely to beat the market",
     "forecast_bottom": "🔮 Likely to lag the market",
+    "mix_top": "💡 Top ideas (simple mix): top 10%",
+    "mix_bottom": "⚠️ Most likely to lag (simple mix): bottom 10%",
     "ml_top": "🤖 All-signal model: top 10%",
     "ml_bottom": "🤖 All-signal model: bottom 10%",
     "strong_insider": "🔔 3+ insiders, $250k+, uptrend",
@@ -28,7 +30,8 @@ SIGNALS = {
 }
 # These stay on the lists for weeks; only record them once per stretch.
 REPEAT_AFTER_DAYS = 30
-REPEATING = {"insider_cluster", "strong_insider", "forecast_top", "forecast_bottom", "ml_top", "ml_bottom"}
+REPEATING = {"insider_cluster", "strong_insider", "forecast_top", "forecast_bottom", "ml_top", "ml_bottom",
+             "mix_top", "mix_bottom"}
 
 
 def _money(v: float) -> str:
@@ -59,12 +62,13 @@ def record_forecast(con: sqlite3.Connection, preds: pd.DataFrame, date: str, n: 
     return _insert(con, rows)
 
 
-def record_ml(con: sqlite3.Connection, ranking: pd.DataFrame, date: str, top: float = 0.1) -> set[tuple[str, str]]:
-    """Save the all-signal model's top and bottom 10% (whether or not it passed its test:
-    tracking it forward is the test it can't fool)."""
+def record_ml(con: sqlite3.Connection, ranking: pd.DataFrame, date: str, top: float = 0.1,
+              prefix: str = "ml") -> set[tuple[str, str]]:
+    """Save a ranking's top and bottom 10% (for the model: whether or not it passed its test;
+    tracking it forward is the test it can't fool). prefix "mix" for the simple mix's ideas."""
     k = max(1, int(len(ranking) * top))
     rows = []
-    for signal, part in (("ml_top", ranking.head(k)), ("ml_bottom", ranking.tail(k))):
+    for signal, part in ((f"{prefix}_top", ranking.head(k)), (f"{prefix}_bottom", ranking.tail(k))):
         for t, r in part.iterrows():
             if pd.notna(r.get("close")):
                 rows.append((date, t, signal, r["close"], f"rank {r['pct']:.0%}"))
