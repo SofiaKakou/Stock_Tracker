@@ -194,13 +194,17 @@ def load_models(con: sqlite3.Connection, retrain: bool = False, universe: int = 
     return models, trained_on
 
 
-def _reasons(contrib: np.ndarray, values: pd.Series, n: int = 2) -> str:
-    order = np.argsort(-np.abs(contrib))[:n]
+def _reasons(contrib: np.ndarray, z: np.ndarray, n: int = 2) -> str:
+    """The signals that moved this stock's odds most, described by what they show.
+
+    The market weather is left out: it's the same for every stock on a given day,
+    so it never explains why one stock ranks above another.
+    """
+    order = [i for i in np.argsort(-np.abs(contrib)) if INPUTS[i] != "weather"][:n]
     out = []
     for i in order:
-        name = INPUTS[i]
-        good, bad = REASONS[name]
-        out.append(good if contrib[i] > 0 else bad)
+        high, low = REASONS[INPUTS[i]]
+        out.append(high if z[i] > 0 else low)  # above or below the average stock
     return ", ".join(out)
 
 
@@ -217,5 +221,44 @@ def predict_today(con: sqlite3.Connection, models: dict[str, Logit], universe: i
     out["p_up"] = models["up"].predict(X)
     out["p_beat"] = models["beat"].predict(X)
     contrib = models["beat"].contributions(X)
-    out["why"] = [_reasons(c, scores.iloc[i]) for i, c in enumerate(contrib)]
+    z = (X - models["beat"].mean) / models["beat"].std
+    out["why"] = [_reasons(c, z[i]) for i, c in enumerate(contrib)]
     return out.sort_values("p_beat", ascending=False), latest, invest
+
+
+# --- Remembering how reliable the outlook has been ------------------------------------------------
+
+def save_scorecard(con: sqlite3.Connection, preds: pd.DataFrame, card: dict) -> dict:
+    s, ideas = card["summary"], card["ideas"]
+    beat = s.loc["30 days: beats the S&P 500"]
+    up = s.loc["30 days: goes up"]
+    sc = {
+        "tested": f"{preds['month'].min():%Y}-{preds['month'].max():%Y}",
+        "beat_accuracy": float(beat["accuracy"]), "beat_naive": float(beat["naive_accuracy"]),
+        "up_accuracy": float(up["accuracy"]), "up_naive": float(up["naive_accuracy"]),
+        "top_vs_all": float(ideas.loc["Top 10% ideas", "avg_month"] - ideas.loc["All eligible", "avg_month"]),
+        "bottom_vs_all": float(ideas.loc["Bottom 10%", "avg_month"] - ideas.loc["All eligible", "avg_month"]),
+        "top_beat_bottom": float(card["top_beat_bottom"]),
+    }
+    set_meta(con, "forecast_scorecard", json.dumps(sc))
+    con.commit()
+    return sc
+
+
+def load_scorecard(con: sqlite3.Connection) -> dict | None:
+    raw = get_meta(con, "forecast_scorecard")
+    return json.loads(raw) if raw else None
+
+
+def reliability_note(sc: dict | None) -> str:
+    """One plain sentence on how the outlook did in its honesty check."""
+    if not sc:
+        return "Not tested yet: run 'python -m trend_bot study forecast' to see how reliable these lists have been."
+    skill = sc["beat_accuracy"] > sc["beat_naive"]
+    parts = [f"Tested {sc['tested']}: 'beats the S&P 500' was right {sc['beat_accuracy']:.0%} of the time "
+             f"(always guessing the common outcome: {sc['beat_naive']:.0%})" + ("" if skill else ", so no real skill"),
+             f"the 'likely to lag' group trailed the average stock by {-sc['bottom_vs_all']:.1%} a month"
+             if sc["bottom_vs_all"] < 0 else "the 'likely to lag' group did NOT trail the average stock",
+             f"the top ideas {'beat' if sc['top_vs_all'] > 0 else 'did not beat'} the average stock "
+             f"({sc['top_vs_all']:+.1%} a month)"]
+    return "; ".join(parts) + "."

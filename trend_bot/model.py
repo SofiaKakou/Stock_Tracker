@@ -148,6 +148,27 @@ def spy_weather(spy: pd.Series) -> pd.Series:
     return (spy > spy.rolling(200).mean()).where(spy.rolling(200).mean().notna(), True)
 
 
+def weather_status(con: sqlite3.Connection, benchmark: str = "SPY") -> dict:
+    """Today's market weather and how long it has lasted."""
+    spy = load_prices(con, benchmark)["Close"]
+    w = spy_weather(spy)
+    invest = bool(w.iloc[-1])
+    changed = w[w != invest]
+    since = w.index[w.index > changed.index[-1]][0] if len(changed) else w.index[0]
+    sma = spy.rolling(200).mean().iloc[-1]
+    return {"invest": invest, "since": since.date(), "days": (w.index[-1] - since).days,
+            "close": float(spy.iloc[-1]), "sma200": float(sma), "gap": float(spy.iloc[-1] / sma - 1),
+            "benchmark": benchmark}
+
+
+def weather_text(ws: dict, markdown: bool = False) -> str:
+    b = (lambda s: f"**{s}**") if markdown else (lambda s: s)
+    state = b("☀️ Invest") if ws["invest"] else b("🌧️ Caution")
+    where = "above" if ws["invest"] else "below"
+    return (f"{state} for {ws['days']} days (since {ws['since']}): the S&P 500 is {abs(ws['gap']):.1%} {where} "
+            f"its 200-day average." + ("" if ws["invest"] else " Historically, cash has been safer in these spells."))
+
+
 # --- Backtest ---------------------------------------------------------------------------------
 
 def backtest(con: sqlite3.Connection, hold: int = 20, universe: int = 1000, buffer: int = 40,

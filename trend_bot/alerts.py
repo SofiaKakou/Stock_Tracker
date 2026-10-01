@@ -224,11 +224,14 @@ def model_embed(res: dict) -> dict | None:
     return None
 
 
-def forecast_embed(preds, date: str, invest: bool, n: int = 10) -> dict:
-    line = lambda t, r: f"`{t:<6}` {r['p_beat']:.0%} to beat, {r['p_up']:.0%} up · {r['why']}"
-    lines = [("☀️ Market in an uptrend" if invest else "🌧️ Market in a downtrend") + f" · as of {date}", "",
-             "**Most likely to beat the S&P 500 (next 30 days)**",
-             *[line(t, r) for t, r in preds.head(n).iterrows()], "",
-             "**Most likely to lag**", *[line(t, r) for t, r in preds.tail(5).iloc[::-1].iterrows()], "",
-             "Odds from 20 years of history, not certainties. See `study forecast` for how reliable they've been."]
-    return {"title": "🔮 Weekly 30-day outlook", "description": "\n".join(lines)[:4000], "color": GRAY}
+def forecast_embed(preds, date: str, weather: dict, note: str, n: int = 10) -> dict:
+    """Weekly outlook: market weather first, then warnings, then ideas, with how reliable they've been."""
+    from trend_bot.model import weather_text
+
+    line = lambda t, r: f"`{t:<6}` {r['p_beat']:.0%} chance to beat the S&P 500 · {r['why']}"
+    lines = [weather_text(weather, markdown=True), "",
+             "**⚠️ Most likely to lag (next 30 days)**", *[line(t, r) for t, r in preds.tail(n).iloc[::-1].iterrows()], "",
+             "**💡 Ideas to research**", *[line(t, r) for t, r in preds.head(5).iterrows()], "",
+             f"_How reliable is this? {note}_", f"As of {date}. Odds, not certainties."]
+    return {"title": "🌦️ Weekly outlook", "description": "\n".join(lines)[:4000],
+            "color": GREEN if weather["invest"] else RED}

@@ -210,7 +210,14 @@ For every stock in the model universe, the bot estimates two chances for the nex
 - whether "60% chance" really happened about 60% of the time,
 - how the top 10% of ideas did each month compared with the bottom 10% and the S&P 500.
 
-The nightly alert (`--forecast`) posts a 🔮 **weekly outlook** to Discord. The report page lists the top and bottom ideas, and `track` records them. Predicting single stocks a month ahead is close to a coin flip, so treat this as a ranked idea list, not a certainty.
+**What the test found on the full database:** the up/down odds were no more accurate than always guessing the common outcome. The ranking did spot laggards: the bottom 10% trailed the average stock. The top 10% did not beat the market. The outputs are built around that result:
+
+1. **🌦️ Market weather first:** invest or caution, for how many days, and how far the S&P 500 is from its 200-day average. This was the one signal that held up, roughly halving the worst crash.
+2. **⚠️ Most likely to lag:** stocks to be careful with.
+3. **💡 Ideas to research:** the highest odds, clearly marked as a starting point rather than a buy list.
+4. **"How reliable is this?":** one sentence from the latest `study forecast` run, shown with every outlook.
+
+The nightly alert (`--forecast`) posts this as a **weekly outlook** to Discord. The report page opens with the same sections, and `track` records the lists so their live record builds up.
 
 ### Momentum
 

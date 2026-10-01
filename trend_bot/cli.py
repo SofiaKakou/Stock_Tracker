@@ -300,14 +300,18 @@ def cmd_alert(args: argparse.Namespace) -> int:
         with closing(fdb.connect(args.db)) as con:
             week = f"{dt.date.today().isocalendar()[0]}-W{dt.date.today().isocalendar()[1]:02d}"
             if fdb.get_meta(con, "forecast_week") != week:
+                from trend_bot import model as fmodel
+
                 models, _ = forecast.load_models(con)
-                preds, date, invest = forecast.predict_today(con, models)
+                preds, date, _ = forecast.predict_today(con, models)
                 if len(preds):
                     if not args.dry_run:
                         ftrack.record_forecast(con, preds, date)
                         fdb.set_meta(con, "forecast_week", week)
                         con.commit()
-                    embeds.append(alerts.forecast_embed(preds, date, invest))
+                    embeds.append(alerts.forecast_embed(
+                        preds, date, fmodel.weather_status(con),
+                        forecast.reliability_note(forecast.load_scorecard(con))))
     if args.market:
         embeds.extend(_market_embeds(args, strategy))
     if args.summary:
@@ -533,6 +537,7 @@ def _study_forecast(con, args: argparse.Namespace) -> None:
         print("Not enough history before the first test year.")
         return
     card = forecast.scorecard(preds)
+    sc = forecast.save_scorecard(con, preds, card)
     pct = lambda v: f"{v:.1%}"
     print(f"\n30-day outlook, tested year by year from {preds['month'].min():%Y} to {preds['month'].max():%Y}: "
           f"{len(preds):,} predictions, each made with only the years before it.\n")
@@ -549,6 +554,7 @@ def _study_forecast(con, args: argparse.Namespace) -> None:
     ideas["beat_spy_months"] = ideas["beat_spy_months"].map(lambda v: "–" if pd.isna(v) else f"{v:.0%}")
     print(ideas.to_string(formatters={"avg_month": "{:+.2%}".format}))
     print(f"The top 10% did better than the bottom 10% in {card['top_beat_bottom']:.0%} of months.")
+    print("\nIn one sentence (shown with every outlook from now on):\n" + forecast.reliability_note(sc))
     print("\nNote: only companies still listed today are included (survivorship bias).")
 
 
@@ -773,31 +779,32 @@ def _print_model(res: dict, top: int) -> None:
 
 
 def cmd_forecast(args: argparse.Namespace) -> int:
-    from trend_bot import db, forecast, track
+    from trend_bot import db, forecast, model, track
 
     with closing(db.connect(args.db)) as con:
         models, trained_on = forecast.load_models(con, retrain=args.retrain)
-        preds, date, invest = forecast.predict_today(con, models)
+        preds, date, _ = forecast.predict_today(con, models)
         if preds.empty:
             print("No stocks to score yet.")
             return 1
         if not args.no_record:
             track.record_forecast(con, preds, date)
-    _print_forecast(preds, date, invest, trained_on, args.top)
+        ws = model.weather_status(con)
+        note = forecast.reliability_note(forecast.load_scorecard(con))
+    _print_forecast(preds, date, ws, trained_on, note, args.top)
     return 0
 
 
-def _print_forecast(preds: pd.DataFrame, date: str, invest: bool, trained_on: str, top: int) -> None:
-    weather = "☀️  market in an uptrend" if invest else "🌧️  market in a downtrend (S&P 500 below its 200-day average)"
-    print(f"30-day outlook · {date} · {weather}")
-    print(f"Learned from {trained_on}. These are odds, not certainties.\n")
+def _print_forecast(preds: pd.DataFrame, date: str, ws: dict, trained_on: str, note: str, top: int) -> None:
+    from trend_bot.model import weather_text
+
+    print(f"Outlook · {date}\n\nMarket weather: {weather_text(ws)}\n")
     show = lambda df: df.assign(p_up=df["p_up"].map("{:.0%}".format), p_beat=df["p_beat"].map("{:.0%}".format))[
-        ["close", "p_up", "p_beat", "why"]].to_string(float_format="{:,.2f}".format)
-    print(f"== Most likely to beat the S&P 500 over the next 30 days ==\n{show(preds.head(top))}")
-    print(f"\n== Most likely to lag the S&P 500 ==\n{show(preds.tail(top).iloc[::-1])}")
-    print(f"\nAcross all {len(preds):,} stocks: average chance to go up {preds['p_up'].mean():.0%}, "
-          f"to beat the S&P 500 {preds['p_beat'].mean():.0%}. "
-          "Check 'study forecast' for how reliable these odds have been.")
+        ["close", "p_beat", "p_up", "why"]].to_string(float_format="{:,.2f}".format)
+    print(f"== ⚠️  Most likely to lag the S&P 500 over the next 30 days ==\n{show(preds.tail(top).iloc[::-1])}")
+    print(f"\n== 💡 Ideas to research (highest odds, but see below) ==\n{show(preds.head(top))}")
+    print(f"\nHow reliable is this? {note}")
+    print(f"Learned from {trained_on}. Odds, not certainties; not financial advice.")
 
 
 # --- argument parsing ---------------------------------------------------------
