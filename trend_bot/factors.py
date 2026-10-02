@@ -130,7 +130,8 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
         caps = market_caps(raw.loc[month] if month in raw.index else pd.Series(dtype=float),
                            f["shares"], f["shares_date"], splits, tickers)
         vals = fundamentals.factor_values(f, caps).join(earnings.latest(ev, month), how="left")
-        vals["report_change"] = text_changes.latest(report_changes, month).reindex(vals.index)
+        for sig in text_changes.SIGNALS:
+            vals[sig] = text_changes.latest(report_changes, month, column=sig).reindex(vals.index)
         if extras:
             vals["market_cap"] = caps
         vals.index = [tickers[c] for c in vals.index]
@@ -199,7 +200,7 @@ def group_rank(df: pd.DataFrame, col: str, by_sector: bool = False) -> pd.Series
 # --- Build the table once, reuse it --------------------------------------------------------------
 
 TABLE_START = "2009-06-30"  # XBRL filings start in 2009
-TABLE_VERSION = 2           # bump when monthly_factors changes what it computes
+TABLE_VERSION = 3           # bump when monthly_factors changes what it computes
 
 
 def _table_key(con: sqlite3.Connection, universe: int, min_price: float) -> str:
@@ -210,7 +211,7 @@ def _table_key(con: sqlite3.Connection, universe: int, min_price: float) -> str:
              q("SELECT COUNT(*) FROM tickers WHERE sic IS NOT NULL"), get_meta(con, "facts_updated"),
              q("SELECT COUNT(*) FROM short_interest_files"), get_meta(con, "short_volume_last"),
              q("SELECT COUNT(*) FROM company_fates WHERE status IN ('bankrupt', 'acquired', 'delisted')"),
-             q("SELECT COUNT(*) FROM doc_vectors"),
+             q("SELECT COUNT(*) FROM doc_vectors"), q("SELECT SUM(tone_version) FROM doc_vectors"),
              universe, min_price]
     return hashlib.sha1(repr(parts).encode()).hexdigest()[:16]
 

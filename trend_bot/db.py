@@ -194,6 +194,10 @@ def connect(path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
 EXTRA_COLUMNS = {
     "tickers": {"sic": "INTEGER", "sic_desc": "TEXT", "info_checked_at": "TEXT",
                 "is_etf": "INTEGER", "security_name": "TEXT", "splits_checked": "INTEGER"},
+    # Tone word counts and the risk factors section (see text_changes.py)
+    "doc_vectors": {"negative": "INTEGER", "uncertainty": "INTEGER", "litigious": "INTEGER",
+                    "positive": "INTEGER", "risk_words": "INTEGER", "risk_vec": "BLOB",
+                    "tone_version": "INTEGER"},
 }
 
 
