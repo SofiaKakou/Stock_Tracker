@@ -312,7 +312,7 @@ def cmd_alert(args: argparse.Namespace) -> int:
             port = iideas.load_portfolio(con)
             # Once per monthly update: the buys and sells of the top-ideas portfolio.
             if port and idb.get_meta(con, "ideas_portfolio_sent") != port["date"]:
-                embeds.append(alerts.ideas_portfolio_embed(port, iideas.reliability_note(con)))
+                embeds.append(alerts.ideas_portfolio_embed(port, iideas.reliability_note(con), iideas.live_line(con)))
                 if not args.dry_run:
                     idb.set_meta(con, "ideas_portfolio_sent", port["date"])
                     con.commit()
@@ -333,7 +333,8 @@ def cmd_alert(args: argparse.Namespace) -> int:
                         con.commit()
                     from trend_bot import ideas as fideas, ml as fml
 
-                    e = alerts.ideas_embed(fideas.load(con), fmodel.weather_status(con), fideas.reliability_note(con))
+                    e = alerts.ideas_embed(fideas.load(con), fmodel.weather_status(con), fideas.reliability_note(con),
+                                           fideas.live_line(con))
                     if e:
                         embeds.append(e)
 
@@ -1076,6 +1077,10 @@ def cmd_ideas(args: argparse.Namespace) -> int:
         if not port["invest"]:
             print("  The weather filter says cash: the tested version held cash while the S&P 500 is below its "
                   "200-day average.")
+        with closing(db.connect(args.db)) as con:
+            live = ideas.live_line(con)
+        if live:
+            print("  " + live.replace("**", ""))
     print(f"\nHow reliable is this? {note}")
     if not args.no_record:
         print(f"Recorded {len(new)} new picks (top and bottom 10%) for forward tracking ('track').")
@@ -1113,6 +1118,36 @@ def cmd_health(args: argparse.Namespace) -> int:
             alerts.send(webhook, {"username": "Trend Bot", "embeds": [health.embed(kind, problems, args.run_url)]})
             print(f"Sent the health {'warning' if kind == 'problems' else 'all-clear'} to Discord.")
     return 0  # never fail the run over this
+
+
+def cmd_send_guide(args: argparse.Namespace) -> int:
+    """Post GUIDE.md (how to read the bot's messages) to Discord; with --once, only when it changed."""
+    import hashlib
+
+    from trend_bot import alerts, db
+
+    path = Path(args.path)
+    if not path.exists():
+        print(f"{path} not found.", file=sys.stderr)
+        return 1
+    digest = hashlib.sha1(path.read_bytes()).hexdigest()
+    if args.once and Path(args.db).exists():
+        with closing(db.connect(args.db)) as con:
+            if db.get_meta(con, "guide_sent") == digest:
+                print("The guide hasn't changed since it was last posted.")
+                return 0
+    webhook = alerts.load_webhook()
+    if not webhook:
+        print("No Discord webhook set (DISCORD_WEBHOOK_URL).", file=sys.stderr)
+        return 2
+    alerts.send_file(webhook, path, "📖 **How to read the bot's messages** (pin this one). "
+                                    "Open the file for the full guide.")
+    if Path(args.db).exists():
+        with closing(db.connect(args.db)) as con:
+            db.set_meta(con, "guide_sent", digest)
+            con.commit()
+    print(f"Sent {path.name} to Discord.")
+    return 0
 
 
 def cmd_send_report(args: argparse.Namespace) -> int:
@@ -1322,6 +1357,12 @@ def make_parser() -> argparse.ArgumentParser:
     hp.add_argument("--job-status", help="the cloud run's status so far (success/failure)")
     hp.add_argument("--run-url", help="link to the cloud run, shown in the warning")
     hp.set_defaults(func=cmd_health)
+
+    sg = sub.add_parser("send-guide", help="post GUIDE.md (how to read the bot's messages) to Discord")
+    sg.add_argument("--path", default="GUIDE.md")
+    sg.add_argument("--db", default="market.db", help="database file (remembers what was posted)")
+    sg.add_argument("--once", action="store_true", help="only if the guide changed since it was last posted")
+    sg.set_defaults(func=cmd_send_guide)
 
     sr = sub.add_parser("send-report", help="post a file (the HTML report by default) to Discord")
     sr.add_argument("--path", default="reports/latest.html")

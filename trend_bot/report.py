@@ -123,6 +123,7 @@ def _ideas_section(con: sqlite3.Connection, esc) -> list[str]:
             "refreshed monthly.</p>",
             "<h3>⚠️ Most likely to lag</h3>", _table(heads, [row(p) for p in r["bottom"]], left={0, 2, 3}),
             "<h3>💡 Top ideas</h3>", _table(heads, [row(p) for p in r["top"]], left={0, 2, 3}),
+            *([f'<p class="note">{esc(ideas.live_line(con).replace("**", ""))}</p>'] if ideas.live_line(con) else []),
             f'<p class="note"><b>How reliable is this?</b> {esc(ideas.reliability_note(con))}</p>']
 
 

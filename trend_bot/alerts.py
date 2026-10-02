@@ -172,7 +172,8 @@ def send_file(webhook: str, path: str | Path, message: str = "", timeout: float 
     path = Path(path)
     with path.open("rb") as f:
         resp = requests.post(webhook, data={"payload_json": json.dumps({"username": "Trend Bot", "content": message})},
-                             files={"files[0]": (path.name, f, "text/html" if path.suffix == ".html" else "text/plain")},
+                             files={"files[0]": (path.name, f, {".html": "text/html", ".md": "text/markdown"}.get(
+                                 path.suffix, "text/plain"))},
                              timeout=timeout)
     if resp.status_code >= 400:
         raise RuntimeError(f"Discord returned {resp.status_code}: {resp.text[:200]}")
@@ -270,7 +271,7 @@ def ml_status_line(verdict: dict | None) -> str:
     return ""
 
 
-def ideas_embed(ranking: dict | None, weather: dict, note: str) -> dict | None:
+def ideas_embed(ranking: dict | None, weather: dict, note: str, live: str = "") -> dict | None:
     """Monthly top ideas from the simple mix (every signal ranked and averaged), with its track record."""
     if not ranking:
         return None
@@ -281,13 +282,14 @@ def ideas_embed(ranking: dict | None, weather: dict, note: str) -> dict | None:
     lines = [weather_text(weather, markdown=True), "",
              "**⚠️ Most likely to lag**", *[line(p) for p in ranking["bottom"]], "",
              "**💡 Top ideas**", *[line(p) for p in ranking["top"]], "",
+             *([live, ""] if live else []),
              f"_How reliable is this? {note}_",
              f"Ranked {ranking['stocks']:,} stocks on {ranking['date']}; refreshed monthly. Not financial advice."]
     return {"title": "💡 Top ideas (every signal, simple mix)", "description": "\n".join(lines)[:4000],
             "color": GREEN if weather.get("invest") else RED}
 
 
-def ideas_portfolio_embed(port: dict, note: str) -> dict:
+def ideas_portfolio_embed(port: dict, note: str, live: str = "") -> dict:
     """Monthly: what to buy, sell and keep in the top-ideas portfolio (the rule study ideas tests)."""
     buy = lambda p: (f"`{p['ticker']:<6}` {p['close']:,.2f}" + (f" · {p['sector']}" if p.get("sector") else "")
                      + f" · {p['why']}")
@@ -301,6 +303,7 @@ def ideas_portfolio_embed(port: dict, note: str) -> dict:
              *([buy(p) for p in port["buys"]] or ["nothing new"]), "",
              f"**🔴 Sell ({len(port['sells'])})**", *([sell(p) for p in port["sells"]] or ["nothing"]), "",
              f"**Keep ({len(port['holds'])})**: " + (", ".join(f"`{p['ticker']}`" for p in port["holds"]) or "-"), "",
+             *([live, ""] if live else []),
              "Equal amounts in each. A stock is only sold once it drops out of the top 40, so trades stay rare.",
              f"_How reliable is this? {note}_", f"As of {port['date']}. Not financial advice."]
     return {"title": "📋 Top-ideas portfolio - monthly update", "description": "\n".join(lines)[:4000],
