@@ -11,7 +11,6 @@ were bought out, using what their SEC filings say happened to them.
 
 from __future__ import annotations
 
-import datetime as dt
 import sqlite3
 
 import numpy as np
