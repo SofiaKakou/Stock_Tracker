@@ -4,12 +4,18 @@ New signals start as candidates: measured, but kept out of the simple mix and th
 a month the bot checks each one against the same bar every signal has had to clear:
 
 1. On its own, it ranked stocks the expected way (positive IC) in **both halves** of its
-   history, and the whole-history IC is unlikely to be luck (t-stat of 2 or more).
+   history, and the whole-history IC is unlikely to be luck: a t-stat of 3 or more.
 2. Added to the simple mix, it made the mix rank better in **both halves**.
 
 Halves are split at the middle of the candidate's own history, since some signals start
 later than others (short selling data from 2018, reports as they are read). A candidate
 that passes is flagged in Discord; it joins the mix only after the user agrees.
+
+Why 3 and not the textbook 2: test enough signals and some clear t = 2 by luck alone (at 2,
+about 1 in 40 pure-noise signals looks like it works the expected way). With 14+ candidates
+at once that's expected to happen. Harvey, Liu and Zhu ("...and the Cross-Section of Expected
+Returns", 2016) argue new signals should clear about 3. Signals that pass everything except
+that bar (t between 2 and 3) are shown as "promising": worth watching, not yet trusted.
 """
 
 from __future__ import annotations
@@ -25,7 +31,8 @@ from trend_bot import factors, fundamentals, ml
 from trend_bot.db import get_meta, set_meta
 
 MIN_MONTHS = 24          # per half: less than two years each way is too little to judge
-MIN_T = 2.0
+MIN_T = 3.0             # the bar for many signals tested at once (Harvey-Liu-Zhu)
+PROMISING_T = 2.0       # the classic bar: good enough to watch, not to trust
 
 
 def _mix_ic(df: pd.DataFrame, signals: list[str]) -> float:
@@ -50,15 +57,22 @@ def scoreboard(df: pd.DataFrame) -> pd.DataFrame:
             row[f"ic_{name}"] = factors.evaluate(h, c, sign)["mean_ic"]
             row[f"mix_gain_{name}"] = _mix_ic(h, ml.SIGNALS + [c]) - _mix_ic(h, ml.SIGNALS)
             row[f"months_{name}"] = h["month"].nunique()
-        if min(row["months_first"], row["months_second"]) < MIN_MONTHS:
-            row["verdict"] = "not enough history yet"
-        elif (row["ic_first"] > 0 and row["ic_second"] > 0 and row["ic_t"] >= MIN_T
-              and row["mix_gain_first"] > 0 and row["mix_gain_second"] > 0):
-            row["verdict"] = "PASSES"
-        else:
-            row["verdict"] = "not proven"
+        row["verdict"] = verdict(row)
         rows[c] = row
     return pd.DataFrame(rows).T
+
+
+def verdict(row: dict) -> str:
+    if min(row["months_first"], row["months_second"]) < MIN_MONTHS:
+        return "not enough history yet"
+    both = (row["ic_first"] > 0 and row["ic_second"] > 0
+            and row["mix_gain_first"] > 0 and row["mix_gain_second"] > 0)
+    t = row["ic_t"] if row["ic_t"] == row["ic_t"] else 0.0   # NaN -> 0
+    if both and t >= MIN_T:
+        return "PASSES"
+    if both and t >= PROMISING_T:
+        return "promising"
+    return "not proven"
 
 
 def save(con: sqlite3.Connection, board: pd.DataFrame) -> None:

@@ -340,9 +340,11 @@ def candidates_embed(board: dict) -> dict:
     """The monthly scoreboard of signals on probation (see candidates.py)."""
     rows = board["rows"]
     passing = [n for n, r in rows.items() if r.get("verdict") == "PASSES"]
-    icon = {"PASSES": "✅", "not proven": "❌", "not enough history yet": "⏳", "no data yet": "⏳"}
+    icon = {"PASSES": "✅", "promising": "🔶", "not proven": "❌", "not enough history yet": "⏳",
+            "no data yet": "⏳"}
     lines = []
-    for n, r in sorted(rows.items(), key=lambda kv: (kv[1].get("verdict") != "PASSES", kv[0])):
+    order = {"PASSES": 0, "promising": 1}
+    for n, r in sorted(rows.items(), key=lambda kv: (order.get(kv[1].get("verdict"), 2), kv[0])):
         ic = r.get("ic")
         detail = f" IC {ic:+.3f}, t {r['ic_t']:+.1f}" if ic is not None and r.get("ic_t") is not None else ""
         lines.append(f"{icon.get(r.get('verdict'), '•')} **{n}**: {r.get('verdict')}{detail}")
@@ -352,6 +354,8 @@ def candidates_embed(board: dict) -> dict:
     return {
         "title": "🧪 Signals on probation: monthly check",
         "description": "\n".join(lines) + ask + "\n\nPassing means: worked the expected way in both halves of "
-                       "its history, and made the simple mix better in both halves.",
+                       "its history (t-stat 3+, a high bar because many signals are tested at once), and made the "
+                       "simple mix better in both halves. 🔶 promising: all of that but t between 2 and 3; "
+                       "watched, not trusted yet.",
         "color": 0x9B59B6 if passing else 0x95A5A6,
     }
