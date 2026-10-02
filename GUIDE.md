@@ -86,6 +86,10 @@ healthy**. "✅ all fine again" means it cleared.
   with the same report a year earlier. Research found big rewrites tend to come before weaker
   stock returns. The bot reads a batch of reports from the SEC each night; this signal is still
   a *candidate*: it is tested in research runs but only joins the mix if it proves itself.
+- **Tone / uncertainty / legal words**: the share of negative, uncertain ("may", "unpredictable")
+  and legal ("lawsuit", "plaintiff") words in the latest report, and whether it got more negative
+  than a year earlier. **Risk change / risk growth**: how much the "risk factors" section was
+  rewritten or grew. Same reports, no AI, also candidates until they prove themselves.
 
 ## What it can't do
 

@@ -245,6 +245,9 @@ EXPECTED = {
     "short_ratio": -1, "days_to_cover": -1, "short_change": -1, "short_volume_ratio": -1,
     # How much the latest annual/quarterly report was rewritten vs a year earlier (see text_changes.py)
     "report_change": -1,
+    # Tone and the risk factors section of the same reports (see text_changes.py)
+    "tone_negative": -1, "tone_change": -1, "uncertainty": -1, "litigious": -1,
+    "risk_change": -1, "risk_growth": -1,
 }
 DESCRIPTIONS = {
     "gross_profitability": "gross profit / assets (Novy-Marx)",
@@ -264,4 +267,10 @@ DESCRIPTIONS = {
     "short_change": "change in shares sold short vs a month earlier; lower is better",
     "short_volume_ratio": "share of last month's off-exchange volume that was short sales; lower is better",
     "report_change": "how much the latest 10-K/10-Q wording changed vs a year earlier; lower is better (Lazy Prices)",
+    "tone_negative": "share of negative finance words in the latest report; lower is better (Loughran-McDonald style)",
+    "tone_change": "how much more negative (minus positive) the wording got vs a year earlier; lower is better",
+    "uncertainty": "share of uncertain words (may, depend, unpredictable...); lower is better",
+    "litigious": "share of legal words (lawsuit, plaintiff, court...); lower is better",
+    "risk_change": "how much the risk factors section was rewritten vs a year earlier; lower is better",
+    "risk_growth": "how much longer the risk factors section got vs a year earlier; lower is better",
 }

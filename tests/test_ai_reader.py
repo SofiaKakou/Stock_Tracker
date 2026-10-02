@@ -69,7 +69,7 @@ def test_sample_send_collect_and_grade(model_db, tmp_path):  # noqa: F811
             for i in range(1, 41)]
     con.executemany("INSERT INTO filings VALUES (?, ?, ?, ?, ?, ?)", rows)
     vec = text_changes.pack(np.ones(text_changes.BUCKETS))
-    con.executemany("INSERT INTO doc_vectors VALUES (?, 5000, ?)", [(r[0], vec) for r in rows])
+    con.executemany("INSERT INTO doc_vectors(accession, words, vec) VALUES (?, 5000, ?)", [(r[0], vec) for r in rows])
     con.commit()
     picks = ai_reader.sample(con, 30, since=str(start.date()), until=str(DATES[-1].date()))
     assert len(picks) == 30 and picks["accession"].is_unique

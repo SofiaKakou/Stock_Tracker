@@ -30,7 +30,8 @@ PRICE = ["trend", "mom12", "mom6", "mom1", "high52", "vol", "dollar_vol", "marke
 INSIDERS = ["insider_buyers", "insider_sellers"]
 # Signals still on probation: measured in study factors, but kept out of the mix and the model
 # until they've shown they work (each one is decided with the user after its test).
-CANDIDATES = {"report_change"}
+CANDIDATES = {"report_change", "tone_negative", "tone_change", "uncertainty", "litigious",
+              "risk_change", "risk_growth"}
 SIGNALS = [s for s in fundamentals.EXPECTED if s not in CANDIDATES]
 FEATURES = PRICE + INSIDERS + SIGNALS
 
