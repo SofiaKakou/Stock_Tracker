@@ -298,6 +298,17 @@ def cmd_alert(args: argparse.Namespace) -> int:
         from trend_bot import db as idb, ideas as iideas
 
         with closing(idb.connect(args.db)) as con:
+            # Once a month: how every kind of pick has really done since it was made.
+            month = dt.date.today().strftime("%Y-%m")
+            if idb.get_meta(con, "scorecard_month") != month:
+                from trend_bot import track as itrack
+
+                card = itrack.scorecard(con)
+                if len(card):
+                    embeds.append(alerts.scorecard_embed(card))
+                    if not args.dry_run:
+                        idb.set_meta(con, "scorecard_month", month)
+                        con.commit()
             port = iideas.load_portfolio(con)
             # Once per monthly update: the buys and sells of the top-ideas portfolio.
             if port and idb.get_meta(con, "ideas_portfolio_sent") != port["date"]:
@@ -1084,6 +1095,26 @@ def _print_forecast(preds: pd.DataFrame, date: str, ws: dict, trained_on: str, n
     print(f"Learned from {trained_on}. Odds, not certainties; not financial advice.")
 
 
+def cmd_health(args: argparse.Namespace) -> int:
+    """Check the bot's own health; with --discord, warn there (only when something changed)."""
+    from trend_bot import alerts, db, health
+
+    if not Path(args.db).exists():
+        problems, kind = [f"{args.db} not found: the database didn't carry over to this run."], "problems"
+    else:
+        with closing(db.connect(args.db)) as con:
+            problems = health.check(con, failed_steps=health.read_problems_file(args.problems),
+                                    job_status=args.job_status)
+            kind = health.to_send(con, problems) if args.discord else None
+    print("Bot health: all fine." if not problems else "Bot health problems:\n" + "\n".join(f"  - {p}" for p in problems))
+    if args.discord and kind:
+        webhook = alerts.load_webhook()
+        if webhook:
+            alerts.send(webhook, {"username": "Trend Bot", "embeds": [health.embed(kind, problems, args.run_url)]})
+            print(f"Sent the health {'warning' if kind == 'problems' else 'all-clear'} to Discord.")
+    return 0  # never fail the run over this
+
+
 def cmd_send_report(args: argparse.Namespace) -> int:
     from trend_bot import alerts
 
@@ -1283,6 +1314,14 @@ def make_parser() -> argparse.ArgumentParser:
     ide.add_argument("--no-record", action="store_true",
                      help="don't save the list, update the portfolio or record picks for 'track'")
     ide.set_defaults(func=cmd_ideas)
+
+    hp = sub.add_parser("health", help="check the bot's own health (fresh prices, data, SEC pause)")
+    hp.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    hp.add_argument("--discord", action="store_true", help="post a warning (or all-clear) when something changed")
+    hp.add_argument("--problems", help="file listing steps that didn't finish (one per line)")
+    hp.add_argument("--job-status", help="the cloud run's status so far (success/failure)")
+    hp.add_argument("--run-url", help="link to the cloud run, shown in the warning")
+    hp.set_defaults(func=cmd_health)
 
     sr = sub.add_parser("send-report", help="post a file (the HTML report by default) to Discord")
     sr.add_argument("--path", default="reports/latest.html")

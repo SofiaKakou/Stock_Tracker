@@ -364,6 +364,11 @@ Backtests can read from the database too: `python -m trend_bot backtest NVDA --f
 
 ## Running in the cloud (GitHub Actions)
 
+**Keeping an eye on itself:**
+- **Tests on every pull request** (`.github/workflows/tests.yml`): a ✅ or ❌ shows next to the merge button.
+- **Bot health:** at the end of each nightly run, `python -m trend_bot health` checks that prices are fresh, the SEC isn't asking us to slow down, the financials, SEC bulk file, short data and monthly ideas are up to date, and every step finished. Discord gets a "⚠️ Bot health" message only when something is wrong (repeated after 3 days if it isn't fixed), and one "✅ all fine again" when it clears. Silence means healthy.
+- **Monthly pick scorecard:** on the first run of each month, Discord gets "📊 Pick scorecard". Every kind of pick the bot has recorded (top ideas, buys and sells, model picks, insider clusters, trend flips) is graded against the S&P 500 over the same days. Only picks at least 20 days old count, and for picks meant to lag (sells, laggards, downtrends), lagging counts as working.
+
 `.github/workflows/nightly.yml` runs everything on GitHub's servers every weekday at 22:30 UTC, so your PC doesn't need to be on. Each run updates the database, sends the Discord messages, builds the report and posts it to Discord as a file. Each report is also kept for 30 days under the run's "Artifacts".
 
 1. On GitHub, open the repository, then **Settings → Secrets and variables → Actions → New repository secret**, and add:
@@ -463,6 +468,7 @@ trend_bot/
   ideas.py       monthly top ideas from the simple mix, with reasons
   sectors.py     industry groups from SEC industry codes
   sec_submissions.py the SEC's weekly bulk file: industry codes and company fates for everyone
+  health.py      the bot's own health check (fresh data, SEC pause, failed steps)
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs
