@@ -126,6 +126,20 @@ CREATE TABLE IF NOT EXISTS doc_vectors (
     vec       BLOB                   -- word counts, hashed into buckets, compressed
 ) WITHOUT ROWID;
 
+-- Claude's reading of reports (see ai_reader.py): a paid trial on a sample.
+CREATE TABLE IF NOT EXISTS ai_scores (
+    accession     TEXT PRIMARY KEY,
+    model         TEXT NOT NULL,
+    outlook       INTEGER NOT NULL,  -- -5 likely to lag the market .. +5 likely to beat it
+    confidence    TEXT,
+    reasons       TEXT,              -- JSON list
+    recognized    TEXT,              -- which company the model thought it was, or 'unknown'
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    scored_at     TEXT
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS ai_batches (batch_id TEXT PRIMARY KEY, created TEXT, requests INTEGER, status TEXT);
+
 -- The top-ideas portfolio (see ideas.py): the top 20, kept while in the top 40.
 CREATE TABLE IF NOT EXISTS ideas_holdings (
     ticker      TEXT PRIMARY KEY,
