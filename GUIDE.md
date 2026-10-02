@@ -82,6 +82,10 @@ or the SEC asking it to slow down. It fixes itself on later runs in most cases; 
 healthy**. "✅ all fine again" means it cleared.
 
 **📄 Daily report (HTML file)**: open it in your browser for everything above with charts.
+It opens with **📋 At a glance**: the portfolio to follow, how it's really doing vs the S&P 500,
+red flags in its stocks, and the signals on probation. It can also be published as a web page
+you open on your phone (optional, see the end of `.github/workflows/nightly.yml`; the page is
+public, like this repository).
 
 **🔬 Research run**: results of a test run started from the Actions tab (attached as a file).
 
