@@ -300,6 +300,8 @@ In the walk-forward test (`study ml`), this simple mix was steadier than the mac
 
 Discord gets a "📋 Top-ideas portfolio" message once per update with the buys (and why), the sells (with their return since bought) and the holds. When the weather filter says caution, the message says so: the tested version held cash. Buys and sells are also recorded for `track`. Options: `--hold`, `--buffer`.
 
+**Two more signals, only if they earn their place.** Research has also found that calmer stocks (low volatility) and stocks near their 52-week high tend to do a bit better. `study ml` tests a "+" version of the mix with both added (`simple_mix_plus` / `industry_mix_plus`). The top ideas use it only if it ranked stocks better in both halves of the test; the note says when it's on, and the reasons can then say "calm stock" or "near its 52-week high".
+
 **Would it have made money?**
 
 ```bash

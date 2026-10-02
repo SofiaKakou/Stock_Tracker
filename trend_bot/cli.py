@@ -671,6 +671,7 @@ def _study_ml(con, args: argparse.Namespace) -> None:
         print(f"\n== {label} ==\n" + table[cols].to_string(formatters=fmt))
     print("\nmodel: the machine-learning model. simple_mix: equal-weight average rank of every signal plus momentum "
           "(no fitting). industry_mix: the same, with company signals ranked within each industry. "
+          "..._plus: also low volatility and nearness to the 52-week high. "
           "quality_value / momentum: single-idea baselines.\n"
           "mean_ic: rank correlation with next month's return (0.02-0.05 is useful). ic_t above ~2: unlikely luck. "
           "top10_per_year: holding the top 10% each month, after 0.1% trading costs each way, vs average_stock "
@@ -691,7 +692,8 @@ def _study_ml(con, args: argparse.Namespace) -> None:
     from trend_bot import ideas
 
     ideas.save_scorecard(con, card, preds)
-    print(f"Top ideas will use: {ideas.method(con)} (industry_mix only if it beat simple_mix in both halves).")
+    print(f"Top ideas will use: {ideas.method(con)}{' + calm stocks and 52-week high' if ideas.extra(con) else ''} "
+          "(each change only if it ranked better in both halves).")
     new = track.record_ml(con, ranking, latest)
     print(f"\nRecorded {len(new)} new picks (top and bottom 10%) for forward tracking: see 'python -m trend_bot track'.")
 
@@ -711,7 +713,8 @@ def _study_ideas(con, args: argparse.Namespace) -> None:
         print("Not enough data.")
         return
     print(_gone_note(df))
-    monthly = ideas.backtest(df, spy, hold=args.hold, buffer=args.buffer, cash_rate=args.cash_rate)
+    monthly = ideas.backtest(df, spy, hold=args.hold, buffer=args.buffer, cash_rate=args.cash_rate,
+                             extra=ideas.extra(con))
     if monthly.empty:
         print("Not enough data.")
         return

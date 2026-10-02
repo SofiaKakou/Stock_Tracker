@@ -35,6 +35,7 @@ GOOD = {
     "ear": "market liked last report", "short_ratio": "few short sellers",
     "days_to_cover": "shorts can exit easily", "short_change": "short sellers backing off",
     "short_volume_ratio": "little short selling", "mom12": "strong past year",
+    "vol": "calm stock", "high52": "near its 52-week high",
 }
 BAD = {
     "gross_profitability": "weak profitability", "roe": "low return on equity",
@@ -45,10 +46,11 @@ BAD = {
     "ear": "market disliked last report", "short_ratio": "heavily shorted",
     "days_to_cover": "crowded short", "short_change": "short sellers piling in",
     "short_volume_ratio": "lots of short selling", "mom12": "weak past year",
+    "vol": "jumpy stock", "high52": "far below its 52-week high",
 }
 
 
-def oriented_ranks(df: pd.DataFrame, by_sector: bool = False) -> pd.DataFrame:
+def oriented_ranks(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -> pd.DataFrame:
     """Each signal as a 0-1 rank within the month (or industry), flipped so 1 is always 'good'."""
     out = {}
     for c in ml.SIGNALS:
@@ -56,6 +58,11 @@ def oriented_ranks(df: pd.DataFrame, by_sector: bool = False) -> pd.DataFrame:
             r = factors.group_rank(df, c, by_sector)
             out[c] = r if fundamentals.EXPECTED[c] > 0 else 1 - r
     out["mom12"] = df.groupby("month")["mom12"].rank(pct=True)
+    if extra:
+        for c, sign in ml.EXTRA.items():
+            if c in df and df[c].notna().any():
+                r = df.groupby("month")[c].rank(pct=True)
+                out[c] = r if sign > 0 else 1 - r
     return pd.DataFrame(out, index=df.index)
 
 
@@ -67,14 +74,14 @@ def reasons(ranks: pd.Series, best: bool = True, n: int = 3) -> str:
     return ", ".join(words.get(k, k) for k in r.index[:n]) or "a bit of everything"
 
 
-def rank_month(df: pd.DataFrame, by_sector: bool = False) -> pd.DataFrame:
+def rank_month(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -> pd.DataFrame:
     """Score every stock in the table's latest month; best first. Columns: score, pct, close, sector, why."""
     df = df[df["gone"].isna()] if "gone" in df else df
     df = df.assign(**{c: np.nan for c in ml.FEATURES if c not in df})  # e.g. no short data loaded yet
     month = df["month"].max()
     now = df[df["month"] == month].copy()
-    ranks = oriented_ranks(now, by_sector)
-    now["score"] = ml.simple_mix(now, by_sector)
+    ranks = oriented_ranks(now, by_sector, extra)
+    now["score"] = ml.simple_mix(now, by_sector, extra)
     now["signals"] = ranks.notna().sum(axis=1)
     now = now[now["signals"] >= MIN_SIGNALS].dropna(subset=["score"])
     now["pct"] = now["score"].rank(pct=True)
@@ -99,7 +106,7 @@ def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd
         return pd.DataFrame(), ""
     date = con.execute("SELECT MAX(date) FROM prices WHERE ticker IN (SELECT ticker FROM tickers "
                        "WHERE last_date IS NOT NULL)").fetchone()[0][:10]
-    return rank_month(df, by_sector=method(con) == "industry_mix"), date
+    return rank_month(df, by_sector=method(con) == "industry_mix", extra=extra(con)), date
 
 
 def save(con: sqlite3.Connection, ranked: pd.DataFrame, date: str, top: int = 15, bottom: int = 10) -> None:
@@ -133,15 +140,24 @@ def save_scorecard(con: sqlite3.Connection, card: dict[str, pd.DataFrame], preds
                                 if method in card[label].index else np.nan)
     better = bool(halves) and all(ic("industry_mix", h) > ic("simple_mix", h) for h in halves)
     method = "industry_mix" if better else "simple_mix"
-    out = {"method": method, "from": f"{preds['month'].min():%Y}", "to": f"{preds['month'].max():%Y}"}
-    a = card["all"].loc[method]
+    # Then the two extra price signals, kept only if they improve the chosen version in both halves.
+    plus = bool(halves) and all(ic(f"{method}_plus", h) > ic(method, h) for h in halves)
+    out = {"method": method, "extra": plus, "from": f"{preds['month'].min():%Y}", "to": f"{preds['month'].max():%Y}"}
+    tested = f"{method}_plus" if plus else method
+    a = card["all"].loc[tested]
     for k in ("months", "mean_ic", "ic_t", "ic_positive", "top10_per_year", "average_stock_per_year"):
         out[k] = float(a[k]) if k in a and pd.notna(a[k]) else None
-    out["halves_positive"] = all(ic(method, h) > 0 for h in halves)
+    out["halves_positive"] = all(ic(tested, h) > 0 for h in halves)
     out["other_ic"] = float(card["all"].loc["simple_mix" if better else "industry_mix", "mean_ic"]) \
         if "industry_mix" in card["all"].index else None
     set_meta(con, "mix_scorecard", json.dumps(out))
     con.commit()
+
+
+def extra(con: sqlite3.Connection) -> bool:
+    """True if the last test kept the two extra signals (calm stocks, near the 52-week high)."""
+    raw = get_meta(con, "mix_scorecard")
+    return bool(json.loads(raw).get("extra")) if raw else False
 
 
 def method(con: sqlite3.Connection) -> str:
@@ -160,6 +176,8 @@ def reliability_note(con: sqlite3.Connection) -> str:
     steady = "in both halves of the test" if s.get("halves_positive") else "but not in both halves of the test"
     how = ("Company signals are compared within each industry (that tested better than against the whole market). "
            if s.get("method") == "industry_mix" else "")
+    if s.get("extra"):
+        how += "It also counts calm stocks and stocks near their 52-week high (that tested better too). "
     months = f", {s['months']:.0f} months" if s.get("months") else ""
     return (f"{how}Tested {s['from']}-{s['to']}{months} (nothing is fitted, so there's no hindsight in how it adds up the "
             f"signals): the top 10% returned "
@@ -171,11 +189,11 @@ def reliability_note(con: sqlite3.Connection) -> str:
 
 # --- Would it have made money? A portfolio test ---------------------------------------------------
 
-def scores(df: pd.DataFrame, by_sector: bool = False) -> pd.Series:
+def scores(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -> pd.Series:
     """The mix score for every row of a monthly table (NaN where too few signals are known)."""
     df = df.assign(**{c: np.nan for c in ml.FEATURES if c not in df})
     known = oriented_ranks(df, by_sector).notna().sum(axis=1)
-    return ml.simple_mix(df, by_sector).where(known >= MIN_SIGNALS)
+    return ml.simple_mix(df, by_sector, extra).where(known >= MIN_SIGNALS)
 
 
 MAX_PER_INDUSTRY = 5  # at most this many of the top 20 from one industry (when the cap is used)
@@ -212,7 +230,7 @@ def rebalance_capped(ranked: pd.Series, sectors: pd.Series, held: list[str], hol
 
 
 def backtest(df: pd.DataFrame, spy: pd.Series, hold: int = 20, buffer: int = 40, cost_bps: float = 10,
-             cash_rate: float = 2.0, cap: int = MAX_PER_INDUSTRY) -> pd.DataFrame:
+             cash_rate: float = 2.0, cap: int = MAX_PER_INDUSTRY, extra: bool = False) -> pd.DataFrame:
     """Monthly returns of holding the top `hold` ideas (equal weight), for both mixes, with and without
     the weather filter (cash when the S&P 500 is below its 200-day average), against SPY.
 
@@ -233,7 +251,7 @@ def backtest(df: pd.DataFrame, spy: pd.Series, hold: int = 20, buffer: int = 40,
     variants = [("mix", False, False), ("mix_capped", False, True),
                 ("industry_mix", True, False), ("industry_mix_capped", True, True)]
     for name, by_sector, capped in variants:
-        s = scores(df, by_sector)
+        s = scores(df, by_sector, extra)
         held: list[str] = []
         rows = {}
         for month, g in df.assign(score=s).dropna(subset=["score"]).groupby("month"):

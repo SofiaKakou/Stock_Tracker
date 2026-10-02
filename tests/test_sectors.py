@@ -77,3 +77,39 @@ def test_factor_study_shows_the_industry_comparison():
     t = out[factors.INDUSTRY_TABLE]
     # Returns follow cheapness *within* the industry, so the within-industry ranking does better.
     assert t.loc["book_to_market", "ic_within_industry"] > t.loc["book_to_market", "ic_whole_market"] > 0
+
+
+def card4(rows):
+    """{method: (before, after, all)} -> a study-ml-like scorecard."""
+    mk = lambda i: pd.DataFrame({"mean_ic": [v[i] for v in rows.values()], "months": 60, "ic_t": 3.0,
+                                 "ic_positive": 0.6, "top10_per_year": 0.15, "average_stock_per_year": 0.12},
+                                index=list(rows))
+    return {"all": mk(2), "before 2018": mk(0), "2018 on": mk(1)}
+
+
+def test_extra_signals_kept_only_if_better_in_both_halves(tmp_path):
+    con = db.connect(tmp_path / "m.db")
+    preds = pd.DataFrame({"month": pd.to_datetime(["2011-01-31", "2026-08-31"])})
+    base = {"simple_mix": (0.02, 0.03, 0.025), "industry_mix": (0.01, 0.02, 0.015)}
+    ideas.save_scorecard(con, card4(base | {"simple_mix_plus": (0.03, 0.025, 0.03),
+                                            "industry_mix_plus": (0.0, 0.0, 0.0)}), preds)
+    assert ideas.method(con) == "simple_mix" and not ideas.extra(con)   # worse in the second half
+    ideas.save_scorecard(con, card4(base | {"simple_mix_plus": (0.03, 0.04, 0.035),
+                                            "industry_mix_plus": (0.0, 0.0, 0.0)}), preds)
+    assert ideas.extra(con) and "52-week high" in ideas.reliability_note(con)
+    assert json.loads(db.get_meta(con, "mix_scorecard"))["mean_ic"] == pytest.approx(0.035)  # the version used
+
+
+def test_mix_plus_rewards_calm_stocks_near_their_high():
+    from trend_bot import ml
+
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(rng.normal(size=(100, len(ml.FEATURES))), columns=ml.FEATURES)
+    df["month"] = pd.Timestamp("2026-09-30")
+    df.loc[0, "vol"], df.loc[0, "high52"] = -9, 9      # calmest, closest to its high
+    df.loc[1, "vol"], df.loc[1, "high52"] = 9, -9
+    plain, plus = ml.simple_mix(df), ml.simple_mix(df, extra=True)
+    assert plus[0] - plain[0] > 0 > plus[1] - plain[1]
+    r = ideas.oriented_ranks(df, extra=True)
+    assert r.loc[0, "vol"] == r["vol"].max() and r.loc[0, "high52"] == 1.0
+    assert ideas.reasons(pd.Series({"vol": 0.95, "high52": 0.9})) == "calm stock, near its 52-week high"
