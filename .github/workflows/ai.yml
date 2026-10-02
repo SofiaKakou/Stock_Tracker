@@ -1,0 +1,86 @@
+# Claude reads a sample of company reports (a paid trial; needs the ANTHROPIC_API_KEY secret).
+# Actions tab -> "AI report reader" -> Run workflow.
+
+name: AI report reader
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "sample = score new reports (costs money); collect = finish a batch an earlier run left; summary = results so far (free)"
+        type: choice
+        default: sample
+        options: [sample, collect, summary]
+      n:
+        description: "How many reports to score (sample only)"
+        type: string
+        default: "100"
+      max_dollars:
+        description: "Refuse to send if the worst-case cost is above this many dollars"
+        type: string
+        default: "12"
+
+concurrency:
+  group: nightly-market-run    # shares the database with the nightly run, so never at the same time
+  cancel-in-progress: false
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+
+      - name: Read reports
+        run: |
+          mkdir -p reports
+          python -m trend_bot ai ${{ inputs.action }} --n "${{ inputs.n }}" --max-dollars "${{ inputs.max_dollars }}" \
+            2>&1 | tee reports/ai-reader.txt
+          { echo '```'; cat reports/ai-reader.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post results to Discord
+        if: always()
+        run: |
+          python -m trend_bot send-report --path reports/ai-reader.txt \
+            --message "🧠 AI report reader: ${{ inputs.action }} (results attached)" || true
+
+      - name: Save database
+        if: always() && inputs.action != 'summary'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-reader-${{ github.run_id }}
+          path: reports/ai-reader.txt
+          if-no-files-found: ignore
+          retention-days: 90

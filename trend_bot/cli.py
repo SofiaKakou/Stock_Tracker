@@ -27,6 +27,7 @@ from trend_bot.commands.watchlist import (
 )
 from trend_bot.commands.data import cmd_db, cmd_screen
 from trend_bot.commands.studies import cmd_study
+from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
     cmd_track,
     cmd_report,
@@ -262,6 +263,16 @@ def make_parser() -> argparse.ArgumentParser:
     ins.add_argument("--cluster-days", type=int, default=30, help="window for an insider buying cluster")
     ins.add_argument("--cluster-min", type=int, default=2, help="different insiders needed for a cluster")
     ins.set_defaults(func=cmd_insiders)
+
+    ai = sub.add_parser("ai", help="Claude reads a sample of company reports (paid trial; needs ANTHROPIC_API_KEY)")
+    ai.add_argument("action", choices=["sample", "collect", "summary"],
+                    help="sample = score N new reports; collect = finish earlier batches; summary = results so far")
+    ai.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    ai.add_argument("--n", type=int, default=100, help="reports to score (default 100)")
+    ai.add_argument("--wait", type=int, default=7200, help="seconds to wait for the batch to finish (default 2 h)")
+    ai.add_argument("--max-dollars", type=float, default=12.0,
+                    help="refuse to send if the worst-case cost is above this (default $12)")
+    ai.set_defaults(func=cmd_ai)
     return p
 
 

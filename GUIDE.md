@@ -58,6 +58,13 @@ recently. Interesting to research; on its own it didn't beat the market either.
 **🤖 All-signal model**: a machine-learning model over every signal. **Only shown if it passes
 its honesty test** (beating the simple mix on years it never saw). So far it hasn't.
 
+**🧠 AI report reader**, only when started by hand (it costs money): Claude reads a sample of
+company reports (the management's discussion), with the company's name and the years hidden,
+and scores each from -5 (likely to lag the market) to +5 (likely to beat it). The message shows
+the real cost, how the scores lined up with what the stocks did next, and how often Claude
+recognized the company anyway. On past reports it may half-remember what happened, so only
+reports filed from now on are a fair test.
+
 **⚠️ Bot health**: something is wrong with the bot itself, such as stale prices, a failed step,
 or the SEC asking it to slow down. It fixes itself on later runs in most cases; **silence means
 healthy**. "✅ all fine again" means it cleared.
