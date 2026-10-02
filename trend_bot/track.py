@@ -30,6 +30,8 @@ SIGNALS = {
     "uptrend": "New uptrend",
     "downtrend": "New downtrend",
 }
+# Picks that are meant to do worse than the market: for these, lagging means the signal worked.
+LAG_SIGNALS = {"downtrend", "forecast_bottom", "mix_bottom", "ml_bottom", "model_sell", "ideas_sell"}
 # These stay on the lists for weeks; only record them once per stretch.
 REPEAT_AFTER_DAYS = 30
 REPEATING = {"insider_cluster", "strong_insider", "forecast_top", "forecast_bottom", "ml_top", "ml_bottom",
@@ -157,3 +159,30 @@ def summary(perf: pd.DataFrame) -> pd.DataFrame:
     order = list(SIGNALS.values())
     df = pd.DataFrame(rows).set_index("signal")
     return df.loc[[s for s in order if s in df.index] + [s for s in df.index if s not in order]]
+
+
+def scorecard(con: sqlite3.Connection, min_days: int = 20, min_picks: int = 5,
+              benchmark: str = "SPY") -> pd.DataFrame:
+    """How each kind of pick has done since it was made, vs the S&P 500 over the same days.
+
+    Only picks at least `min_days` old count (younger ones are mostly noise), and only signals
+    with `min_picks` such picks are shown. 'worked': beat the market on average (or, for picks
+    meant to lag, lagged it).
+    """
+    perf = performance(con, benchmark=benchmark)
+    if perf.empty:
+        return pd.DataFrame()
+    perf = perf[(perf["days"] >= min_days) & perf["vs_bench"].notna()]
+    rows = []
+    for sig, g in perf.groupby("signal"):
+        if len(g) < min_picks:
+            continue
+        lag = sig in LAG_SIGNALS
+        avg = g["vs_bench"].mean()
+        rows.append({"signal": sig, "label": SIGNALS.get(sig, sig), "picks": len(g), "avg_days": g["days"].mean(),
+                     "avg_vs_bench": avg, "beat_rate": (g["vs_bench"] > 0).mean(), "meant_to_lag": lag,
+                     "worked": avg < 0 if lag else avg > 0})
+    if not rows:
+        return pd.DataFrame()
+    order = {k: i for i, k in enumerate(SIGNALS)}
+    return pd.DataFrame(rows).sort_values("signal", key=lambda c: c.map(order).fillna(99)).reset_index(drop=True)

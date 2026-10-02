@@ -305,3 +305,18 @@ def ideas_portfolio_embed(port: dict, note: str) -> dict:
              f"_How reliable is this? {note}_", f"As of {port['date']}. Not financial advice."]
     return {"title": "📋 Top-ideas portfolio - monthly update", "description": "\n".join(lines)[:4000],
             "color": GREEN if port["invest"] else RED}
+
+
+def scorecard_embed(card) -> dict:
+    """Monthly: how every kind of pick has really done since it was made, vs the S&P 500."""
+    lines = []
+    for r in card.itertuples(index=False):
+        mark = "✅" if r.worked else "❌"
+        aim = "should lag" if r.meant_to_lag else "should beat"
+        lines.append(f"{mark} **{r.label}** ({aim}): {r.picks} picks, avg {r.avg_days:.0f} days, "
+                     f"**{r.avg_vs_bench:+.1%}** vs S&P 500, beat it {r.beat_rate:.0%} of the time")
+    lines += ["", "Every pick the bot made, graded on prices that came after it, the one test nobody can "
+              "tune. Only picks at least 20 days old count; early numbers swing a lot."]
+    worked = int(card["worked"].sum())
+    return {"title": f"📊 Pick scorecard: {worked} of {len(card)} signals working so far",
+            "description": "\n".join(lines)[:4000], "color": GREEN if worked * 2 >= len(card) else RED}

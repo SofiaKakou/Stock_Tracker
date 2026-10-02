@@ -298,6 +298,17 @@ def cmd_alert(args: argparse.Namespace) -> int:
         from trend_bot import db as idb, ideas as iideas
 
         with closing(idb.connect(args.db)) as con:
+            # Once a month: how every kind of pick has really done since it was made.
+            month = dt.date.today().strftime("%Y-%m")
+            if idb.get_meta(con, "scorecard_month") != month:
+                from trend_bot import track as itrack
+
+                card = itrack.scorecard(con)
+                if len(card):
+                    embeds.append(alerts.scorecard_embed(card))
+                    if not args.dry_run:
+                        idb.set_meta(con, "scorecard_month", month)
+                        con.commit()
             port = iideas.load_portfolio(con)
             # Once per monthly update: the buys and sells of the top-ideas portfolio.
             if port and idb.get_meta(con, "ideas_portfolio_sent") != port["date"]:
