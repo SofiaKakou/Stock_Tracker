@@ -323,3 +323,14 @@ def scorecard_embed(card) -> dict:
     worked = int(card["worked"].sum())
     return {"title": f"📊 Pick scorecard: {worked} of {len(card)} signals working so far",
             "description": "\n".join(lines)[:4000], "color": GREEN if worked * 2 >= len(card) else RED}
+
+
+def red_flags_embed(flags: list[tuple[str, str, str, str]]) -> dict:
+    """flags: (ticker, where it's from, filing date, what happened)."""
+    lines = [f"**{t}** ({where}), {filed}: {what}" for t, where, filed, what in flags[:15]]
+    return {
+        "title": "🚩 8-K red flags",
+        "description": "\n".join(lines) + "\n\nWarning signs a company reported to the SEC. In past research these "
+                       "came before weaker returns on average; worth a look before buying more. (Checked weekly.)",
+        "color": 0xE67E22,
+    }

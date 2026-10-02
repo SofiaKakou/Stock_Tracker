@@ -128,6 +128,31 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     return 0
 
 
+def _red_flag_embed(con, watch: list[str], dry_run: bool = False) -> dict | None:
+    """One message listing red flags filed in the last 30 days that weren't sent before."""
+    from trend_bot import alerts, db, events
+
+    watched = {w.upper() for w in watch}
+    held = [t for (t,) in con.execute("SELECT ticker FROM ideas_holdings")]
+    names = {t.upper(): "watchlist" if t.upper() in watched else "top-ideas portfolio" for t in held + watch}
+    if not names:
+        return None
+    cik_of = {}   # cik -> ticker
+    for t, c in con.execute(f"SELECT ticker, cik FROM tickers WHERE cik IS NOT NULL AND ticker IN "
+                            f"({','.join('?' * len(names))})", list(names)):
+        cik_of.setdefault(c, t)
+    flags = events.recent_flags(con, list(cik_of))
+    sent = set(json.loads(db.get_meta(con, "red_flags_sent", "[]")))
+    flags = flags[~flags["accession"].isin(sent)]
+    if flags.empty:
+        return None
+    if not dry_run:
+        db.set_meta(con, "red_flags_sent", json.dumps((sorted(sent) + list(flags["accession"]))[-1000:]))
+        con.commit()
+    return alerts.red_flags_embed([(cik_of[r.cik], names[cik_of[r.cik]], r.filed, events.describe(r.items))
+                                   for r in flags.itertuples(index=False)])
+
+
 def cmd_alert(args: argparse.Namespace) -> int:
     from trend_bot import alerts
     from trend_bot.news import earnings_note, headlines, next_earnings
@@ -219,6 +244,10 @@ def cmd_alert(args: argparse.Namespace) -> int:
                 if not args.dry_run:
                     idb.set_meta(con, "ideas_portfolio_sent", port["date"])
                     con.commit()
+            # New 8-K red flags or late filing notices for the watchlist and the top-ideas portfolio.
+            e = _red_flag_embed(con, [r["ticker"] for r in rows], args.dry_run)
+            if e:
+                embeds.append(e)
     if args.forecast and Path(args.db).exists():
         from trend_bot import db as fdb, forecast, track as ftrack
 
