@@ -16,7 +16,7 @@ on:
         type: string
         default: ""
       refresh:
-        description: "Refresh data first? fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = look up every company that disappeared (catch-up, up to ~1 h); full = whole nightly update"
+        description: "Refresh data first? fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = industry codes and what happened to every company that disappeared, from the SEC's bulk file (~15 min); full = whole nightly update"
         type: choice
         default: none
         options: [none, fundamentals, short, fates, full]
