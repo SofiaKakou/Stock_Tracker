@@ -334,3 +334,24 @@ def red_flags_embed(flags: list[tuple[str, str, str, str]]) -> dict:
                        "came before weaker returns on average; worth a look before buying more. (Checked weekly.)",
         "color": 0xE67E22,
     }
+
+
+def candidates_embed(board: dict) -> dict:
+    """The monthly scoreboard of signals on probation (see candidates.py)."""
+    rows = board["rows"]
+    passing = [n for n, r in rows.items() if r.get("verdict") == "PASSES"]
+    icon = {"PASSES": "✅", "not proven": "❌", "not enough history yet": "⏳", "no data yet": "⏳"}
+    lines = []
+    for n, r in sorted(rows.items(), key=lambda kv: (kv[1].get("verdict") != "PASSES", kv[0])):
+        ic = r.get("ic")
+        detail = f" IC {ic:+.3f}, t {r['ic_t']:+.1f}" if ic is not None and r.get("ic_t") is not None else ""
+        lines.append(f"{icon.get(r.get('verdict'), '•')} **{n}**: {r.get('verdict')}{detail}")
+    ask = (f"\n\n**{', '.join(passing)}** passed both tests. Reply to Claude if you want "
+           f"{'it' if len(passing) == 1 else 'them'} added to the top ideas." if passing else
+           "\n\nNone has passed yet; they stay on probation and are re-checked next month.")
+    return {
+        "title": "🧪 Signals on probation: monthly check",
+        "description": "\n".join(lines) + ask + "\n\nPassing means: worked the expected way in both halves of "
+                       "its history, and made the simple mix better in both halves.",
+        "color": 0x9B59B6 if passing else 0x95A5A6,
+    }

@@ -188,7 +188,10 @@ def as_of(facts: pd.DataFrame, when: pd.Timestamp, max_age_days: int = 550) -> p
         gap = (prev["latest_end"] - prev["end"]).dt.days
         prev = prev[(gap >= 330) & (gap <= 400)]
         if len(prev):
-            out[f"{item}_prior"] = _pick_latest(prev)["val"]
+            prior = _pick_latest(prev)
+            out[f"{item}_prior"] = prior["val"]
+            if item == "shares":
+                out["shares_prior_date"] = prior["end"]
         if item == "shares":
             out["shares_date"] = latest["end"]
     return pd.DataFrame(out)
@@ -250,6 +253,8 @@ EXPECTED = {
     "risk_change": -1, "risk_growth": -1,
     # 8-K red flags and late filing notices (see events.py)
     "red_flags": -1, "late_filing": -1, "exec_changes": -1,
+    # Shares outstanding vs a year earlier, splits removed (see factors.net_issuance)
+    "net_issuance": -1,
 }
 DESCRIPTIONS = {
     "gross_profitability": "gross profit / assets (Novy-Marx)",
@@ -279,4 +284,6 @@ DESCRIPTIONS = {
                  "listing warning, restructuring); fewer is better",
     "late_filing": "notices that a 10-K/10-Q would be late, last 6 months; fewer is better",
     "exec_changes": "8-Ks about directors or officers leaving or arriving, last 6 months; fewer is better",
+    "net_issuance": "growth in shares outstanding over a year, splits removed; buybacks (negative) are better "
+                    "(Pontiff-Woodgate)",
 }

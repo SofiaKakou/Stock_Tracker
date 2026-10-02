@@ -61,7 +61,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date +%d)" -le 3 ]; then
             mkdir -p reports
-            for step in "study forecast" "study ml" "study ideas" "ideas"; do
+            for step in "study forecast" "study ml" "study ideas" "study candidates" "ideas"; do
               python -m trend_bot $step || { echo "::warning::$step failed"; echo "'$step' failed" >> reports/problems.txt; }
             done
           fi

@@ -116,3 +116,28 @@ def test_update_and_study(model_db, tmp_path, monkeypatch, capsys):
 def test_study_factors_without_data(model_db, tmp_path, capsys):
     assert main(["study", "factors", "--db", str(tmp_path / "market.db")]) == 0
     assert "No company financials yet" in capsys.readouterr().out
+
+
+def test_net_issuance_takes_out_splits_and_drops_bad_data():
+    f = pd.DataFrame({
+        "shares":            [1_000.0, 4_000.0, 900.0, 50_000.0],
+        "shares_prior":      [900.0, 1_000.0, 1_000.0, 1_000.0],
+        "shares_date":       pd.to_datetime(["2024-12-31"] * 4),
+        "shares_prior_date": pd.to_datetime(["2023-12-31"] * 4),
+    }, index=[1, 2, 3, 4])
+    splits = pd.DataFrame({"ticker": ["BBB", "BBB"], "date": ["2024-06-01", "2025-03-01"], "ratio": [4.0, 2.0]})
+    out = factors.net_issuance(f, splits, {1: "AAA", 2: "BBB", 3: "CCC", 4: "DDD"})
+    assert out[1] == pytest.approx(np.log(1000 / 900))     # issued 11% more shares
+    assert out[2] == pytest.approx(0.0)                    # a 4-for-1 split isn't issuance; the 2025 one is later
+    assert out[3] < 0                                      # bought back 10%
+    assert np.isnan(out[4])                                # 50x in a year: a data error
+
+
+def test_as_of_remembers_when_the_prior_share_count_was_reported():
+    rows = fundamentals.parse_company(company(1, [2020, 2021, 2022], 0.3))
+    facts = pd.DataFrame(rows, columns=["cik", "item", "priority", "start", "end", "filed", "val"])
+    for c in ("start", "end", "filed"):
+        facts[c] = pd.to_datetime(facts[c])
+    mar = fundamentals.as_of(facts, pd.Timestamp("2023-03-31"))
+    gap = (mar.loc[1, "shares_date"] - mar.loc[1, "shares_prior_date"]).days
+    assert 330 <= gap <= 400

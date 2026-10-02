@@ -76,6 +76,7 @@ def test_red_flags_are_studied_but_stay_out_of_the_mix(model_db, tmp_path, monke
     model_db.commit()
     df = factors.monthly_factors(model_db, since=str(DATES[260].date()), log=lambda *_: None)
     assert (df["red_flags"] > 0).any() and (df["red_flags"] == 0).any() and df["red_flags"].notna().all()
+    assert df["net_issuance"].notna().any()                       # share counts a year apart are in the fixture
     res = factors.study(df, split_year=int(df["month"].dt.year.max()))
     assert res["all"].loc["red_flags", "mean_ic"] > 0              # fewer red flags = the stronger stocks here
     assert main(["study", "factors", "--db", str(tmp_path / "market.db"), "--since", str(DATES[260].date())]) == 0

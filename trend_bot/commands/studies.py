@@ -77,6 +77,30 @@ def _gone_note(df: pd.DataFrame) -> str:
             "Price-based signals can't be measured for them.")
 
 
+def _study_candidates(con, args: argparse.Namespace) -> None:
+    from trend_bot import candidates, fundamentals, ml
+
+    if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
+        print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
+        return
+    since = args.since if args.since != "2006-01-01" else "2009-06-30"
+    print("Building the monthly table of every signal...")
+    df = ml.dataset(con, since=since, universe=args.universe)
+    if df.empty:
+        print("Not enough data.")
+        return
+    board = candidates.scoreboard(df)
+    candidates.save(con, board)
+    print(f"\nSignals on probation ({len(board)}), {df['month'].min():%Y-%m} to {df['month'].max():%Y-%m}:")
+    print(candidates.text(board))
+    print(f"\nTo pass, a signal must rank stocks the expected way in both halves of its own history (t-stat of "
+          f"{candidates.MIN_T:g}+ overall) AND make the simple mix rank better in both halves; at least "
+          f"{candidates.MIN_MONTHS} months per half. A passing signal is only added to the mix after you agree.")
+    print("\nWhat each one is:")
+    for n in sorted(ml.CANDIDATES):
+        print(f"  {n:<16} {fundamentals.DESCRIPTIONS.get(n, '')}")
+
+
 def _study_ml(con, args: argparse.Namespace) -> None:
     from trend_bot import ml, track
 
@@ -329,6 +353,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "ml":
             _study_ml(con, args)
+            return 0
+        if args.signal == "candidates":
+            _study_candidates(con, args)
             return 0
         if args.signal == "ideas":
             _study_ideas(con, args)
