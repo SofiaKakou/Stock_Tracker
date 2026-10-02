@@ -172,7 +172,8 @@ def send_file(webhook: str, path: str | Path, message: str = "", timeout: float 
     path = Path(path)
     with path.open("rb") as f:
         resp = requests.post(webhook, data={"payload_json": json.dumps({"username": "Trend Bot", "content": message})},
-                             files={"files[0]": (path.name, f, "text/html" if path.suffix == ".html" else "text/plain")},
+                             files={"files[0]": (path.name, f, {".html": "text/html", ".md": "text/markdown"}.get(
+                                 path.suffix, "text/plain"))},
                              timeout=timeout)
     if resp.status_code >= 400:
         raise RuntimeError(f"Discord returned {resp.status_code}: {resp.text[:200]}")

@@ -364,6 +364,8 @@ Backtests can read from the database too: `python -m trend_bot backtest NVDA --f
 
 ## Running in the cloud (GitHub Actions)
 
+**New to the messages?** [GUIDE.md](GUIDE.md) explains every Discord message in plain words, and what the bot can and can't do. The nightly run posts it to Discord once (pin it), and again only when it changes (`python -m trend_bot send-guide`).
+
 **Keeping an eye on itself:**
 - **Tests on every pull request** (`.github/workflows/tests.yml`): a ✅ or ❌ shows next to the merge button.
 - **Bot health:** at the end of each nightly run, `python -m trend_bot health` checks that prices are fresh, the SEC isn't asking us to slow down, the financials, SEC bulk file, short data and monthly ideas are up to date, and every step finished. Discord gets a "⚠️ Bot health" message only when something is wrong (repeated after 3 days if it isn't fixed), and one "✅ all fine again" when it clears. Silence means healthy.

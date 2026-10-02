@@ -65,3 +65,29 @@ def test_health_command_posts_to_discord(tmp_path, monkeypatch, capsys):
     assert main(args) == 0 and len(sent) == 1                                  # same problem: not again
     assert main(["health", "--db", str(tmp_path / "missing.db")]) == 0
     assert "didn't carry over" in capsys.readouterr().out
+
+
+def test_guide_posted_once_until_it_changes(tmp_path, monkeypatch, capsys):
+    from trend_bot import alerts
+    from trend_bot.cli import main
+
+    healthy(tmp_path).close()
+    guide = tmp_path / "GUIDE.md"
+    guide.write_text("# How to read the bot\n")
+    sent = []
+    monkeypatch.setattr(alerts, "send_file", lambda url, path, message="", timeout=60: sent.append((path.name, message)))
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://example.invalid/hook")
+    args = ["send-guide", "--once", "--path", str(guide), "--db", str(tmp_path / "m.db")]
+    assert main(args) == 0 and len(sent) == 1 and "pin" in sent[0][1]
+    assert main(args) == 0 and len(sent) == 1                 # unchanged: not again
+    guide.write_text("# How to read the bot (updated)\n")
+    assert main(args) == 0 and len(sent) == 2
+
+
+def test_real_guide_covers_every_message():
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / "GUIDE.md").read_text()
+    for title in ("Market weather", "Top ideas", "Top-ideas portfolio", "Pick scorecard", "Weekly outlook",
+                  "Insider buying", "Market screen", "All-signal model", "Bot health", "Research run"):
+        assert title in text

@@ -73,6 +73,7 @@ jobs:
         run: |
           python -m trend_bot report
           python -m trend_bot send-report
+          python -m trend_bot send-guide --once || true   # only when GUIDE.md changed
 
       - name: Bot health
         if: always()
