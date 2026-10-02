@@ -309,6 +309,8 @@ python -m trend_bot study ideas --hold 30 --split-year 2020
 
 This holds the top 20 ideas (`--hold`) in equal amounts and re-checks them monthly. A stock is kept while it stays in the top 40 (`--buffer`), which means fewer trades. Each trade costs 0.1%. It's shown with and without the **weather filter** (cash, earning 2% a year, while the S&P 500 is below its 200-day average). Both the plain and the industry version are compared with the S&P 500 and the average stock, for all years and for both halves, plus year by year.
 
+Each version is also run with **at most 5 stocks per industry** (so the 20 can't all be, say, energy stocks; stocks with an unknown industry aren't capped). The portfolio to follow uses the cap only if it gave more return per unit of risk in both halves of the test.
+
 The nightly run repeats this on the first run of each month, and the headline numbers (yearly growth and worst drop vs the S&P 500) join the "How reliable is this?" note. Companies that disappeared only count in their last month, so the real past was a little worse than this for any stock list.
 
 It's a starting point for your own research, not a buy list.

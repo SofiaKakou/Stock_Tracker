@@ -728,7 +728,7 @@ def _study_ideas(con, args: argparse.Namespace) -> None:
             continue
         s = model.summarize(part, cols).rename(index=ideas.NAMES)
         print(f"\n== {label}: {part.index[0]:%Y-%m} to {part.index[-1]:%Y-%m} ==\n" + s.to_string(formatters=fmt))
-    yearly = (1 + monthly[["mix", "mix_always", "industry_mix", "SPY"]]).groupby(monthly.index.year).prod(
+    yearly = (1 + monthly[["mix", "mix_always", "mix_capped_always", "SPY"]]).groupby(monthly.index.year).prod(
         min_count=1) - 1
     print("\nYear by year:\n" + yearly.rename(columns=ideas.NAMES).rename_axis("year").to_string(
         float_format=lambda v: f"{v:+.0%}", na_rep="–"))
@@ -739,6 +739,8 @@ def _study_ideas(con, args: argparse.Namespace) -> None:
     print("return_per_risk = yearly growth divided by volatility (higher is better). Companies that disappeared "
           "only count in their last month, so the real past was a little worse than this for every stock list.")
     ideas.save_backtest(con, monthly, args.hold)
+    print(f"The portfolio to follow will {'use' if ideas.use_cap(con) else 'not use'} the cap of "
+          f"{ideas.MAX_PER_INDUSTRY} per industry (used only if it gave more return per risk in both halves).")
 
 
 def _study_forecast(con, args: argparse.Namespace) -> None:

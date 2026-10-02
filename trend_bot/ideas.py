@@ -178,13 +178,47 @@ def scores(df: pd.DataFrame, by_sector: bool = False) -> pd.Series:
     return ml.simple_mix(df, by_sector).where(known >= MIN_SIGNALS)
 
 
+MAX_PER_INDUSTRY = 5  # at most this many of the top 20 from one industry (when the cap is used)
+
+
+def rebalance_capped(ranked: pd.Series, sectors: pd.Series, held: list[str], hold: int = 20, buffer: int = 40,
+                     cap: int = MAX_PER_INDUSTRY) -> tuple[list[str], list[str], list[str]]:
+    """Like model.rebalance (keep holdings still in the top `buffer`, fill up from the top), but with at
+    most `cap` stocks from one industry. Stocks with an unknown industry aren't capped.
+    Returns (new holdings, buys, sells)."""
+    from collections import Counter
+
+    pos = {t: i for i, t in enumerate(ranked.index)}
+    count: Counter = Counter()
+    sector = lambda t: sectors.get(t) if isinstance(sectors.get(t), str) else None
+
+    def room(t: str) -> bool:
+        return sector(t) is None or count[sector(t)] < cap
+
+    keep: list[str] = []
+    for t in sorted((t for t in held if t in pos and pos[t] < buffer), key=pos.get):
+        if len(keep) < hold and room(t):
+            keep.append(t)
+            count[sector(t)] += 1
+    buys: list[str] = []
+    for t in ranked.index:
+        if len(keep) + len(buys) >= hold:
+            break
+        if t not in keep and room(t):
+            buys.append(t)
+            count[sector(t)] += 1
+    new = keep + buys
+    return new, buys, [t for t in held if t not in new]
+
+
 def backtest(df: pd.DataFrame, spy: pd.Series, hold: int = 20, buffer: int = 40, cost_bps: float = 10,
-             cash_rate: float = 2.0) -> pd.DataFrame:
+             cash_rate: float = 2.0, cap: int = MAX_PER_INDUSTRY) -> pd.DataFrame:
     """Monthly returns of holding the top `hold` ideas (equal weight), for both mixes, with and without
     the weather filter (cash when the S&P 500 is below its 200-day average), against SPY.
 
     A holding is kept while it stays in the top `buffer` (fewer trades). 0.1% per trade each way.
     Companies that disappeared are included for their last month, at their fate's return.
+    Each version is also run with at most `cap` stocks per industry ("..._capped").
     """
     from trend_bot import model
 
@@ -194,23 +228,31 @@ def backtest(df: pd.DataFrame, spy: pd.Series, hold: int = 20, buffer: int = 40,
     cash_m = (1 + cash_rate / 100) ** (1 / 12) - 1
     cost = cost_bps / 10_000 * 2
     out = {}
-    for name, by_sector in (("mix", False), ("industry_mix", True)):
+    if "sector" not in df:
+        df = df.assign(sector=None)
+    variants = [("mix", False, False), ("mix_capped", False, True),
+                ("industry_mix", True, False), ("industry_mix_capped", True, True)]
+    for name, by_sector, capped in variants:
         s = scores(df, by_sector)
         held: list[str] = []
         rows = {}
         for month, g in df.assign(score=s).dropna(subset=["score"]).groupby("month"):
             if len(g) < hold * 3:
                 continue
-            ranked = g.set_index("ticker")["score"].sort_values(ascending=False)
-            new, buys, _ = model.rebalance(ranked, held, hold, buffer)
-            r = g.set_index("ticker")["ret"].reindex(new).dropna()
+            g = g.set_index("ticker")
+            ranked = g["score"].sort_values(ascending=False)
+            if capped:
+                new, buys, _ = rebalance_capped(ranked, g["sector"], held, hold, buffer, cap)
+            else:
+                new, buys, _ = model.rebalance(ranked, held, hold, buffer)
+            r = g["ret"].reindex(new).dropna()
             gross = (r.mean() if len(r) else 0.0) - cost * len(buys) / hold
             invest = bool(weather.get(month, True))
             rows[month + pd.offsets.MonthEnd(1)] = {name: gross if invest else cash_m, f"{name}_always": gross,
                                                     f"{name}_turnover": len(buys) / hold}
             held = new
         out[name] = pd.DataFrame(rows).T
-    res = out["mix"].join(out["industry_mix"], how="outer")
+    res = pd.concat([out[name] for name, *_ in variants], axis=1)
     months = res.index - pd.offsets.MonthEnd(1)
     spy_r = (spy_m.shift(-1) / spy_m - 1).reindex(months).to_numpy()
     invest = weather.reindex(months).fillna(True).astype(bool).to_numpy()
@@ -222,7 +264,10 @@ def backtest(df: pd.DataFrame, spy: pd.Series, hold: int = 20, buffer: int = 40,
 
 
 NAMES = {"mix": "Top ideas + weather filter", "mix_always": "Top ideas, always invested",
+         "mix_capped": "Top ideas, max 5/industry + weather", "mix_capped_always": "Top ideas, max 5/industry, always in",
          "industry_mix": "Industry top ideas + weather", "industry_mix_always": "Industry top ideas, always invested",
+         "industry_mix_capped": "Industry ideas, max 5/industry + weather",
+         "industry_mix_capped_always": "Industry ideas, max 5/industry, always in",
          "SPY": "S&P 500 (buy & hold)", "SPY_weather": "S&P 500 + weather filter",
          "average_stock": "Average stock (equal weight)"}
 
@@ -231,12 +276,20 @@ def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> 
     """Keep the headline numbers of the portfolio test for the reliability note."""
     from trend_bot import model
 
-    col = "industry_mix" if method(con) == "industry_mix" else "mix"
+    base = "industry_mix" if method(con) == "industry_mix" else "mix"
+    # The industry cap is used only if it gave more return per unit of risk in both halves of the
+    # test (compared always invested, so the weather filter doesn't blur it).
+    mid = monthly.index[len(monthly) // 2]
+    rpr = lambda part, c: model.summarize(part, [c]).loc[c, "return_per_risk"] if c in part else np.nan
+    halves = [monthly[monthly.index < mid], monthly[monthly.index >= mid]]
+    cap = f"{base}_capped_always" in monthly and all(
+        len(h) > 12 and rpr(h, f"{base}_capped_always") > rpr(h, f"{base}_always") for h in halves)
+    col = f"{base}_capped" if cap else base
     s = model.summarize(monthly, [col, "SPY"])
     if col not in s.index or "SPY" not in s.index:
         return
     set_meta(con, "ideas_backtest", json.dumps({
-        "hold": hold, "from": f"{monthly.index.min():%Y}", "to": f"{monthly.index.max():%Y}",
+        "hold": hold, "from": f"{monthly.index.min():%Y}", "to": f"{monthly.index.max():%Y}", "cap": bool(cap),
         "cagr": float(s.loc[col, "cagr"]), "max_drawdown": float(s.loc[col, "max_drawdown"]),
         "spy_cagr": float(s.loc["SPY", "cagr"]), "spy_max_drawdown": float(s.loc["SPY", "max_drawdown"])}))
     con.commit()
@@ -247,7 +300,8 @@ def backtest_note(con: sqlite3.Connection) -> str:
     if not raw:
         return ""
     b = json.loads(raw)
-    return (f"Holding the top {b['hold']} with the weather filter, {b['from']}-{b['to']}: {b['cagr']:+.1%} a year "
+    capped = f", at most {MAX_PER_INDUSTRY} per industry," if b.get("cap") else ""
+    return (f"Holding the top {b['hold']}{capped} with the weather filter, {b['from']}-{b['to']}: {b['cagr']:+.1%} a year "
             f"(worst drop {b['max_drawdown']:.0%}) vs the S&P 500's {b['spy_cagr']:+.1%} "
             f"(worst drop {b['spy_max_drawdown']:.0%}).")
 
@@ -266,7 +320,10 @@ def update_portfolio(con: sqlite3.Connection, ranked: pd.DataFrame, date: str, w
     held = [t for (t,) in con.execute("SELECT ticker FROM ideas_holdings ORDER BY rank")]
     old = {t: (since, price) for t, since, price in
            con.execute("SELECT ticker, since, entry_price FROM ideas_holdings")}
-    new, buys, sells = model.rebalance(ranked["score"], held, hold, buffer)
+    if use_cap(con):
+        new, buys, sells = rebalance_capped(ranked["score"], ranked["sector"], held, hold, buffer)
+    else:
+        new, buys, sells = model.rebalance(ranked["score"], held, hold, buffer)
     rank_of = {t: i for i, t in enumerate(ranked.index, 1)}
     sold = []
     for t in sells:
@@ -298,3 +355,9 @@ def update_portfolio(con: sqlite3.Connection, ranked: pd.DataFrame, date: str, w
 def load_portfolio(con: sqlite3.Connection) -> dict | None:
     raw = get_meta(con, "ideas_portfolio")
     return json.loads(raw) if raw else None
+
+
+def use_cap(con: sqlite3.Connection) -> bool:
+    """True if the last portfolio test chose the industry cap (better return per risk in both halves)."""
+    raw = get_meta(con, "ideas_backtest")
+    return bool(json.loads(raw).get("cap")) if raw else False
