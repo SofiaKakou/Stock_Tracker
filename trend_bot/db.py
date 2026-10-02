@@ -119,6 +119,16 @@ CREATE TABLE IF NOT EXISTS filings (
 );
 CREATE INDEX IF NOT EXISTS filings_cik ON filings(cik, form, filed);
 
+-- 8-K red flags and late filing notices (see events.py), from the SEC bulk file.
+CREATE TABLE IF NOT EXISTS events (
+    accession TEXT PRIMARY KEY,
+    cik       INTEGER NOT NULL,
+    form      TEXT NOT NULL,          -- 8-K, 8-K/A, NT 10-K, NT 10-Q
+    filed     TEXT NOT NULL,
+    items     TEXT NOT NULL           -- red-flag items, e.g. '4.02,5.02', or 'late'
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS events_cik ON events(cik, filed);
+
 -- How each report's text compares with the same report a year earlier (see text_changes.py).
 CREATE TABLE IF NOT EXISTS doc_vectors (
     accession TEXT PRIMARY KEY,

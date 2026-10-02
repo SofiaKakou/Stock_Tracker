@@ -20,7 +20,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
-from trend_bot import earnings, fundamentals, insiders, model, sectors, short_interest, text_changes
+from trend_bot import earnings, events, fundamentals, insiders, model, sectors, short_interest, text_changes
 from trend_bot.db import get_meta
 from trend_bot.company_info import fund_tickers
 
@@ -119,6 +119,7 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
     gone = gone_companies(con, set(tickers))
     industry = sectors.ticker_sectors(con)
     report_changes = text_changes.changes(con)
+    red_flags = events.load(con)
     rows = []
     for k, month in enumerate(months):
         feat = pd.DataFrame({f: panel[f].loc[month] for f in model.FEATURES})
@@ -132,6 +133,9 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
         vals = fundamentals.factor_values(f, caps).join(earnings.latest(ev, month), how="left")
         for sig in text_changes.SIGNALS:
             vals[sig] = text_changes.latest(report_changes, month, column=sig).reindex(vals.index)
+        # No event in the window means 0 events, not unknown.
+        if len(red_flags):
+            vals = vals.join(events.counts(red_flags, month), how="left").fillna({s: 0 for s in events.SIGNALS})
         if extras:
             vals["market_cap"] = caps
         vals.index = [tickers[c] for c in vals.index]
@@ -200,7 +204,7 @@ def group_rank(df: pd.DataFrame, col: str, by_sector: bool = False) -> pd.Series
 # --- Build the table once, reuse it --------------------------------------------------------------
 
 TABLE_START = "2009-06-30"  # XBRL filings start in 2009
-TABLE_VERSION = 3           # bump when monthly_factors changes what it computes
+TABLE_VERSION = 4           # bump when monthly_factors changes what it computes
 
 
 def _table_key(con: sqlite3.Connection, universe: int, min_price: float) -> str:
@@ -211,7 +215,7 @@ def _table_key(con: sqlite3.Connection, universe: int, min_price: float) -> str:
              q("SELECT COUNT(*) FROM tickers WHERE sic IS NOT NULL"), get_meta(con, "facts_updated"),
              q("SELECT COUNT(*) FROM short_interest_files"), get_meta(con, "short_volume_last"),
              q("SELECT COUNT(*) FROM company_fates WHERE status IN ('bankrupt', 'acquired', 'delisted')"),
-             q("SELECT COUNT(*) FROM doc_vectors"), q("SELECT SUM(tone_version) FROM doc_vectors"),
+             q("SELECT COUNT(*) FROM doc_vectors"), q("SELECT SUM(tone_version) FROM doc_vectors"), q("SELECT COUNT(*) FROM events"),
              universe, min_price]
     return hashlib.sha1(repr(parts).encode()).hexdigest()[:16]
 

@@ -248,6 +248,8 @@ EXPECTED = {
     # Tone and the risk factors section of the same reports (see text_changes.py)
     "tone_negative": -1, "tone_change": -1, "uncertainty": -1, "litigious": -1,
     "risk_change": -1, "risk_growth": -1,
+    # 8-K red flags and late filing notices (see events.py)
+    "red_flags": -1, "late_filing": -1, "exec_changes": -1,
 }
 DESCRIPTIONS = {
     "gross_profitability": "gross profit / assets (Novy-Marx)",
@@ -273,4 +275,8 @@ DESCRIPTIONS = {
     "litigious": "share of legal words (lawsuit, plaintiff, court...); lower is better",
     "risk_change": "how much the risk factors section was rewritten vs a year earlier; lower is better",
     "risk_growth": "how much longer the risk factors section got vs a year earlier; lower is better",
+    "red_flags": "8-K warning signs in the last 6 months (restatement, auditor change, impairment, default, "
+                 "listing warning, restructuring); fewer is better",
+    "late_filing": "notices that a 10-K/10-Q would be late, last 6 months; fewer is better",
+    "exec_changes": "8-Ks about directors or officers leaving or arriving, last 6 months; fewer is better",
 }

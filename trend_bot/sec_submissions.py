@@ -7,7 +7,9 @@ in one file (submissions.zip, refreshed nightly), so one download a week fills i
 
 - the industry code (SIC) of every company we track, and
 - what happened to every company without prices that the studies need
-  (bankrupt / bought out / delisted; see fates.classify).
+  (bankrupt / bought out / delisted; see fates.classify),
+- the 10-K / 10-Q reports of tracked companies (for text_changes.py), and
+- their 8-K red flags and late filing notices (events.py).
 """
 
 from __future__ import annotations
@@ -21,10 +23,11 @@ import zipfile
 from pathlib import Path
 from typing import Callable
 
-from trend_bot import fates, insiders
+from trend_bot import events, fates, insiders
 from trend_bot.db import get_meta, set_meta
 
 BULK_URL = "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip"
+CONTENTS_VERSION = 2   # bump when apply() starts reading something new, so the file is read again soon
 
 
 def download(path: Path, log: Callable[[str], None] = print) -> Path:
@@ -67,7 +70,7 @@ def apply(con: sqlite3.Connection, data: bytes | Path, log: Callable[[str], None
     # Every company without prices whose fate a study needs, final outcomes excepted.
     need_fate = set(fates.companies_to_check(con, recheck_days=0))
     now = dt.datetime.now().isoformat(timespec="seconds")
-    counts = {"industry": 0, "fates": 0, "reports": 0}
+    counts = {"industry": 0, "fates": 0, "reports": 0, "events": 0}
     all_names = [n for n in zf.namelist() if n.endswith(".json")]
     # Older filings of busy companies sit in extra pages (CIK..-submissions-001.json).
     for name in (n for n in all_names if "-submissions-" in n):
@@ -77,9 +80,11 @@ def apply(con: sqlite3.Connection, data: bytes | Path, log: Callable[[str], None
             continue
         if cik in tracked:
             try:
-                counts["reports"] += _save_reports(con, cik, json.loads(zf.read(name)))
+                page = json.loads(zf.read(name))
             except ValueError:
                 continue
+            counts["reports"] += _save_reports(con, cik, page)
+            counts["events"] += events.save(con, cik, page)
     names = [n for n in all_names if "-submissions-" not in n]
     for i, name in enumerate(names, 1):
         try:
@@ -97,7 +102,9 @@ def apply(con: sqlite3.Connection, data: bytes | Path, log: Callable[[str], None
             con.execute("UPDATE tickers SET sic = ?, sic_desc = ?, info_checked_at = ? WHERE cik = ?",
                         (sic, doc.get("sicDescription"), now, cik))
             counts["industry"] += sic is not None
-            counts["reports"] += _save_reports(con, cik, doc.get("filings", {}).get("recent", {}))
+            recent = doc.get("filings", {}).get("recent", {})
+            counts["reports"] += _save_reports(con, cik, recent)
+            counts["events"] += events.save(con, cik, recent)
         if cik in need_fate:
             status, date = fates.classify(doc)
             con.execute("INSERT OR REPLACE INTO company_fates VALUES (?, ?, ?, ?, ?)",
@@ -108,6 +115,7 @@ def apply(con: sqlite3.Connection, data: bytes | Path, log: Callable[[str], None
             con.commit()
             log(f"[sec] {i:,}/{len(names):,} companies read")
     set_meta(con, "submissions_updated", now)
+    set_meta(con, "submissions_version", str(CONTENTS_VERSION))
     con.commit()
     return counts
 
@@ -116,6 +124,8 @@ def update(con: sqlite3.Connection, max_age_days: int = 7, force: bool = False,
            fetch: Callable[[Path], Path] | None = None, log: Callable[[str], None] = print) -> dict[str, int]:
     """Weekly (the file is big): download submissions.zip, apply it, delete it."""
     last = get_meta(con, "submissions_updated")
+    if get_meta(con, "submissions_version") != str(CONTENTS_VERSION):
+        force = True   # the bot now reads more from the file than when it was last read
     if not force and last and dt.datetime.fromisoformat(last) > dt.datetime.now() - dt.timedelta(days=max_age_days):
         return {}
     path = insiders.CACHE_DIR / "submissions.zip"
@@ -129,7 +139,7 @@ def update(con: sqlite3.Connection, max_age_days: int = 7, force: bool = False,
         except OSError:
             pass
     log(f"[sec] industry codes for {counts['industry']:,} companies; {counts['reports']:,} annual/quarterly "
-        f"reports listed; fates for {counts['fates']:,} "
-        f"({', '.join(f'{k} {v:,}' for k, v in sorted(counts.items()) if k not in ('industry', 'fates', 'reports')) or 'none'}) "
+        f"reports and {counts['events']:,} 8-K red flags / late notices listed; fates for {counts['fates']:,} "
+        f"({', '.join(f'{k} {v:,}' for k, v in sorted(counts.items()) if k not in ('industry', 'fates', 'reports', 'events')) or 'none'}) "
         f"in {time.time() - started:.0f}s")
     return counts

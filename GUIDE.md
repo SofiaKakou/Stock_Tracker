@@ -51,6 +51,12 @@ crossed its long-term average). Trend-following alone hasn't beaten the market i
 **🔔 Insider buying**: several company insiders bought their own shares with their own money
 recently. Interesting to research; on its own it didn't beat the market either.
 
+**🚩 8-K red flags**: a stock on your watchlist or in the top-ideas portfolio reported a warning
+sign to the SEC: past results can't be relied on (a restatement), the auditor changed, assets were
+written down, a debt default, a stock exchange warning, bankruptcy, restructuring, or a notice
+that its report will be late. These have tended to come before weaker returns. Checked weekly
+(from the SEC's weekly bulk file), so it can be a few days late.
+
 **🌎 Market screen**: today's new uptrends and insider-buying clusters across the market.
 
 **📈 Trend Score model**, monthly: an older 20-stock model based on trend and momentum.
