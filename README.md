@@ -264,6 +264,8 @@ Market value is price × shares outstanding. Past stock splits are recorded (and
 
 Results are shown for all years, before 2018 and from 2018 on (`--split-year`), and a real signal should hold up in both.
 
+Building the monthly table of every signal takes about 10 minutes, so it's saved (in `data_cache/factors/`) and reused by `study factors`, `study ml`, `study ideas` and `ideas` until the data changes (new prices, financials, short data, company fates or industry codes).
+
 **Companies that disappeared.** Yahoo only has prices for companies listed today, so a plain study never sees the ones that went bankrupt or were bought out. That makes weak, risky companies look better than they were. To correct this, the bot keeps the financials of every company whose public float ever reached $500M, including ones with no prices today. The nightly update then looks up how each one ended in its SEC filings, a batch each night. Each such company is put back for the month it disappeared:
 - bankrupt: **−100%**,
 - delisted for another reason: **−30%** (the research average),
@@ -288,6 +290,13 @@ In the walk-forward test (`study ml`), this simple mix was steadier than the mac
 - The top and bottom 10% are recorded for forward tracking (`track`, `💡 Top ideas` / `⚠️ Most likely to lag`).
 
 **Within each industry.** A bank and a software company look very different on debt, margins and price-to-book. So `study ml` also tests an **industry_mix**, where company signals are ranked against the company's own industry instead of the whole market. It uses about 15 groups built from SEC industry codes (`sectors.py`); an industry with fewer than 10 companies that month falls back to the whole market. The top ideas switch to the industry version **only if it ranked stocks better in both halves of the test**. Otherwise they stay with the plain mix, and the note says which one is used. `study factors` also shows each signal ranked against the whole market and within its industry.
+
+**The portfolio to follow.** Each time `ideas` runs (monthly in the cloud), it also updates a 20-stock portfolio using exactly the rule the test below measures:
+- **🟢 Buy:** stocks that enter the top 20.
+- **🔴 Sell:** only stocks that drop out of the top 40 (or disappear), so trades stay rare.
+- **Keep:** everything else.
+
+Discord gets a "📋 Top-ideas portfolio" message once per update with the buys (and why), the sells (with their return since bought) and the holds. When the weather filter says caution, the message says so: the tested version held cash. Buys and sells are also recorded for `track`. Options: `--hold`, `--buffer`.
 
 **Would it have made money?**
 
@@ -357,7 +366,7 @@ Backtests can read from the database too: `python -m trend_bot backtest NVDA --f
 2. Open the **Actions** tab, then **Nightly market run → Run workflow**. The first run builds the database from scratch (about 1–2 hours). Later runs take a few minutes.
 3. Turn off the Windows task so you don't get messages twice: `Disable-ScheduledTask -TaskName "TrendBot Alerts"`.
 
-**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `ml`, `ideas`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
+**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `ml`, `ideas`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, **fates** to look up every company that disappeared in one go (instead of a batch per night; locally: `db update --fates-only --sec-lookups 20000`), or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
 
 The database is kept between runs in GitHub's Actions cache. If it's ever evicted (after 7 days without a run, or if the 10 GB cache limit is exceeded), the next run rebuilds it automatically. Public repositories run for free; private ones get about 2,000 free minutes a month, and the nightly run uses roughly 10–20 of them.
 

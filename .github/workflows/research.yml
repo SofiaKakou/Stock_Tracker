@@ -16,10 +16,10 @@ on:
         type: string
         default: ""
       refresh:
-        description: "Refresh data first? fundamentals = company financials now (~15 min); short = FINRA short selling data; full = whole nightly update"
+        description: "Refresh data first? fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = look up every company that disappeared (catch-up, up to ~1 h); full = whole nightly update"
         type: choice
         default: none
-        options: [none, fundamentals, short, full]
+        options: [none, fundamentals, short, fates, full]
 
 concurrency:
   group: nightly-market-run    # shares the database with the nightly run, so never at the same time
@@ -59,6 +59,8 @@ jobs:
         run: |
           if [ "${{ inputs.refresh }}" = "fundamentals" ]; then
             python -m trend_bot db update --fundamentals-only --ignore-sec-pause || echo "::warning::refresh did not finish"
+          elif [ "${{ inputs.refresh }}" = "fates" ]; then
+            python -m trend_bot db update --fates-only --sec-lookups 20000 || echo "::warning::refresh did not finish"
           elif [ "${{ inputs.refresh }}" = "short" ]; then
             python -m trend_bot db update --short-only || echo "::warning::refresh did not finish"
           else

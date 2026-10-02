@@ -89,7 +89,12 @@ def rank_month(df: pd.DataFrame, by_sector: bool = False) -> pd.DataFrame:
 def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd.DataFrame, str]:
     """Today's ranking and the date of the prices it uses."""
     since = (dt.date.today() - dt.timedelta(days=75)).isoformat()
-    df = factors.monthly_factors(con, since=since, universe=universe, log=log, extras=True, include_latest=True)
+    # Reuse the full table if a study already built it from today's data; otherwise build just
+    # the last few months (much faster).
+    df = factors.table(con, since=since, universe=universe, log=log, build=False)
+    if df is None:
+        df = factors.monthly_factors(con, since=since, universe=universe, log=log, extras=True,
+                                     include_latest=True)
     if df.empty:
         return pd.DataFrame(), ""
     date = con.execute("SELECT MAX(date) FROM prices WHERE ticker IN (SELECT ticker FROM tickers "
@@ -245,3 +250,51 @@ def backtest_note(con: sqlite3.Connection) -> str:
     return (f"Holding the top {b['hold']} with the weather filter, {b['from']}-{b['to']}: {b['cagr']:+.1%} a year "
             f"(worst drop {b['max_drawdown']:.0%}) vs the S&P 500's {b['spy_cagr']:+.1%} "
             f"(worst drop {b['spy_max_drawdown']:.0%}).")
+
+
+# --- The portfolio to follow: monthly buys and sells -------------------------------------------------
+
+def update_portfolio(con: sqlite3.Connection, ranked: pd.DataFrame, date: str, weather: dict,
+                     hold: int = 20, buffer: int = 40) -> dict:
+    """Apply this month's ranking to the held stocks, with the same rule study ideas tests.
+
+    Buy stocks that enter the top `hold`; sell only those that drop out of the top `buffer`
+    (fewer trades); keep the rest. Saved for the monthly Discord message.
+    """
+    from trend_bot import model
+
+    held = [t for (t,) in con.execute("SELECT ticker FROM ideas_holdings ORDER BY rank")]
+    old = {t: (since, price) for t, since, price in
+           con.execute("SELECT ticker, since, entry_price FROM ideas_holdings")}
+    new, buys, sells = model.rebalance(ranked["score"], held, hold, buffer)
+    rank_of = {t: i for i, t in enumerate(ranked.index, 1)}
+    sold = []
+    for t in sells:
+        since, price = old[t]
+        now = ranked["close"].get(t)
+        if now is None or pd.isna(now):  # no longer ranked (e.g. delisted): use its last close
+            row = con.execute("SELECT close FROM prices WHERE ticker = ? ORDER BY date DESC LIMIT 1", (t,)).fetchone()
+            now = row[0] if row else None
+        sold.append({"ticker": t, "since": since, "rank": rank_of.get(t),
+                     "return": (now / price - 1) if now and price else None})
+    con.execute("DELETE FROM ideas_holdings")
+    for i, t in enumerate(new, 1):
+        r = ranked.loc[t]
+        since, price = old.get(t, (date, float(r["close"])))
+        con.execute("INSERT INTO ideas_holdings VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (t, i, since, price, float(r["score"]),
+                     r["sector"] if isinstance(r["sector"], str) else None, r["why"]))
+    item = lambda t: {"ticker": t, "close": float(ranked.loc[t, "close"]), "rank": rank_of[t],
+                      "sector": ranked.loc[t, "sector"] if isinstance(ranked.loc[t, "sector"], str) else None,
+                      "why": ranked.loc[t, "why"]}
+    res = {"date": date, "invest": bool(weather.get("invest", True)), "first": not held,
+           "buys": [item(t) for t in buys], "sells": sold,
+           "holds": [item(t) for t in new if t not in buys]}
+    set_meta(con, "ideas_portfolio", json.dumps(res))
+    con.commit()
+    return res
+
+
+def load_portfolio(con: sqlite3.Connection) -> dict | None:
+    raw = get_meta(con, "ideas_portfolio")
+    return json.loads(raw) if raw else None

@@ -14,12 +14,15 @@ show up in both.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from trend_bot import earnings, fundamentals, model, sectors, short_interest
+from trend_bot import earnings, fundamentals, insiders, model, sectors, short_interest
+from trend_bot.db import get_meta
 from trend_bot.company_info import fund_tickers
 
 
@@ -190,6 +193,51 @@ def group_rank(df: pd.DataFrame, col: str, by_sector: bool = False) -> pd.Series
     rs = df[col].groupby(keys).rank(pct=True)
     n = df[col].groupby(keys).transform("count")
     return rs.where((n >= MIN_PEERS) & df["sector"].notna(), r)
+
+
+# --- Build the table once, reuse it --------------------------------------------------------------
+
+TABLE_START = "2009-06-30"  # XBRL filings start in 2009
+TABLE_VERSION = 1           # bump when monthly_factors changes what it computes
+
+
+def _table_key(con: sqlite3.Connection, universe: int, min_price: float) -> str:
+    """Changes whenever the data the table is built from changes."""
+    q = lambda sql: con.execute(sql).fetchone()[0]
+    parts = [TABLE_VERSION, con.execute("PRAGMA database_list").fetchone()[2],
+             q("SELECT MAX(last_date) FROM tickers"), q("SELECT COUNT(*) FROM tickers WHERE last_date IS NOT NULL"),
+             q("SELECT COUNT(*) FROM tickers WHERE sic IS NOT NULL"), get_meta(con, "facts_updated"),
+             q("SELECT COUNT(*) FROM short_interest_files"), get_meta(con, "short_volume_last"),
+             q("SELECT COUNT(*) FROM company_fates WHERE status IN ('bankrupt', 'acquired', 'delisted')"),
+             universe, min_price]
+    return hashlib.sha1(repr(parts).encode()).hexdigest()[:16]
+
+
+def table(con: sqlite3.Connection, since: str = TABLE_START, universe: int = 1000, min_price: float = 5,
+          log=print, build: bool = True) -> pd.DataFrame | None:
+    """monthly_factors with every column and the latest month, built once per data version.
+
+    The monthly cloud step runs several studies on the same table (factors, ml, ideas); building it
+    takes ~10 minutes, so it's saved and reused until prices, financials, short data, fates or
+    industry codes change. build=False: return None instead of building it.
+    """
+    folder = insiders.CACHE_DIR.parent / "factors"
+    path = folder / f"table_{_table_key(con, universe, min_price)}.pkl"
+    if path.exists():
+        log("[factors] reusing the monthly table built earlier from the same data")
+        df = pd.read_pickle(path)
+    elif not build:
+        return None
+    else:
+        df = monthly_factors(con, since=TABLE_START, universe=universe, min_price=min_price, log=log,
+                             extras=True, include_latest=True)
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in folder.glob("table_*.pkl"):
+            old.unlink()
+        tmp = path.with_suffix(".tmp")
+        df.to_pickle(tmp)
+        tmp.replace(path)
+    return df[df["month"] >= pd.Timestamp(since)].reset_index(drop=True) if len(df) else df
 
 
 def composite(df: pd.DataFrame, names: list[str], by_sector: bool = False) -> pd.Series:

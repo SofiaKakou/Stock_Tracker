@@ -285,3 +285,23 @@ def ideas_embed(ranking: dict | None, weather: dict, note: str) -> dict | None:
              f"Ranked {ranking['stocks']:,} stocks on {ranking['date']}; refreshed monthly. Not financial advice."]
     return {"title": "💡 Top ideas (every signal, simple mix)", "description": "\n".join(lines)[:4000],
             "color": GREEN if weather.get("invest") else RED}
+
+
+def ideas_portfolio_embed(port: dict, note: str) -> dict:
+    """Monthly: what to buy, sell and keep in the top-ideas portfolio (the rule study ideas tests)."""
+    buy = lambda p: (f"`{p['ticker']:<6}` {p['close']:,.2f}" + (f" · {p['sector']}" if p.get("sector") else "")
+                     + f" · {p['why']}")
+    sell = lambda p: (f"`{p['ticker']:<6}` " + (f"fell to rank {p['rank']}" if p.get("rank") else "no longer ranked")
+                      + (f", {p['return']:+.0%} since {p['since']}" if p.get("return") is not None else ""))
+    weather = ("☀️ **Invest**: the S&P 500 is above its 200-day average." if port["invest"] else
+               "🌧️ **Caution**: the S&P 500 is below its 200-day average. The tested version held **cash** "
+               "until it recovers; the list below is what it would hold otherwise.")
+    lines = [weather, "",
+             f"**🟢 Buy ({len(port['buys'])})**" + (" - starting the portfolio" if port.get("first") else ""),
+             *([buy(p) for p in port["buys"]] or ["nothing new"]), "",
+             f"**🔴 Sell ({len(port['sells'])})**", *([sell(p) for p in port["sells"]] or ["nothing"]), "",
+             f"**Keep ({len(port['holds'])})**: " + (", ".join(f"`{p['ticker']}`" for p in port["holds"]) or "-"), "",
+             "Equal amounts in each. A stock is only sold once it drops out of the top 40, so trades stay rare.",
+             f"_How reliable is this? {note}_", f"As of {port['date']}. Not financial advice."]
+    return {"title": "📋 Top-ideas portfolio - monthly update", "description": "\n".join(lines)[:4000],
+            "color": GREEN if port["invest"] else RED}

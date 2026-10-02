@@ -41,8 +41,9 @@ COST = 0.001  # per trade, each way
 def dataset(con: sqlite3.Connection, since: str = "2009-06-30", universe: int = 1000,
             include_latest: bool = False, log=print) -> pd.DataFrame:
     """One row per (month, stock) with every input and next month's return."""
-    df = factors.monthly_factors(con, since=since, universe=universe, log=log, extras=True,
-                                 include_latest=include_latest)
+    df = factors.table(con, since=since, universe=universe, log=log)
+    if df is not None and len(df) and not include_latest:
+        df = df.dropna(subset=["ret"]).reset_index(drop=True)
     if df.empty:
         return df
     months = pd.DatetimeIndex(sorted(df["month"].unique()))
