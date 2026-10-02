@@ -24,7 +24,7 @@ def test_scoreboard_passes_only_signals_that_work_in_both_halves(monkeypatch):
     monkeypatch.setattr(ml, "CANDIDATES", {"net_issuance", "litigious", "red_flags", "risk_change"})
     board = candidates.scoreboard(table())
     assert board.loc["net_issuance", "verdict"] == "PASSES"
-    assert board.loc["net_issuance", "mix_gain_first"] > 0 and board.loc["net_issuance", "ic_t"] > 2
+    assert board.loc["net_issuance", "mix_gain_first"] > 0 and board.loc["net_issuance", "ic_t"] > 3
     assert board.loc["litigious", "verdict"] == "not proven"
     assert board.loc["red_flags", "verdict"] == "not enough history yet"     # 15 months a half
     assert board.loc["risk_change", "verdict"] == "no data yet"
@@ -58,3 +58,17 @@ def test_study_candidates_runs_on_the_real_pipeline(model_db, tmp_path, monkeypa
     out = capsys.readouterr().out
     assert "Signals on probation" in out and "net_issuance" in out and "report_change" in out
     assert candidates.load(model_db)["rows"]["report_change"]["verdict"] == "no data yet"
+
+
+def test_a_t_stat_between_2_and_3_is_only_promising():
+    row = {"months_first": 40, "months_second": 40, "ic_first": 0.02, "ic_second": 0.01,
+           "mix_gain_first": 0.001, "mix_gain_second": 0.002, "ic_t": 2.5}
+    assert candidates.verdict(row) == "promising"
+    assert candidates.verdict({**row, "ic_t": 3.2}) == "PASSES"
+    assert candidates.verdict({**row, "ic_t": 1.5}) == "not proven"
+    assert candidates.verdict({**row, "ic_t": 3.2, "mix_gain_second": -0.001}) == "not proven"
+    assert candidates.verdict({**row, "ic_t": float("nan")}) == "not proven"
+    assert candidates.verdict({**row, "months_first": 10}) == "not enough history yet"
+    e = alerts.candidates_embed({"date": "2026-10-02", "rows": {"a": {**row, "verdict": "promising", "ic": 0.015},
+                                                                "b": {"verdict": "not proven", "ic": None}}})
+    assert e["description"].startswith("🔶 **a**: promising") and "None has passed yet" in e["description"]

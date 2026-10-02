@@ -98,3 +98,36 @@ jobs:
           path: reports/latest.html
           if-no-files-found: ignore
           retention-days: 30
+
+  # Optional: publish the report as a web page you can open on your phone. Off unless you turn it on,
+  # because the page is public (anyone with the link can see it, like this public repository):
+  #   Settings -> Pages -> Source: "GitHub Actions", then
+  #   Settings -> Secrets and variables -> Actions -> Variables -> New variable PUBLISH_DASHBOARD = true
+  # The page is then at https://<your-user>.github.io/<repository>/ and updates after every nightly run.
+  publish:
+    needs: run
+    if: always() && vars.PUBLISH_DASHBOARD == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Get the report
+        uses: actions/download-artifact@v4
+        with:
+          name: report-${{ github.run_id }}
+          path: site
+
+      - name: Make it the home page
+        run: mv site/latest.html site/index.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Publish
+        id: deploy
+        uses: actions/deploy-pages@v4
