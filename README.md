@@ -266,6 +266,8 @@ Results are shown for all years, before 2018 and from 2018 on (`--split-year`), 
 
 Building the monthly table of every signal takes about 10 minutes, so it's saved (in `data_cache/factors/`) and reused by `study factors`, `study ml`, `study ideas` and `ideas` until the data changes (new prices, financials, short data, company fates or industry codes).
 
+**Industry codes and fates in bulk.** Once a week `db update` downloads the SEC's bulk company file (`submissions.zip`, about 1.5 GB, deleted afterwards; `sec_submissions.py`). One request gives every tracked company's industry code and every vanished company's recent filings, so there's no need for thousands of one-by-one lookups (which stop entirely while the SEC asks us to slow down). The one-by-one lookups remain only for anything the file missed.
+
 **Companies that disappeared.** Yahoo only has prices for companies listed today, so a plain study never sees the ones that went bankrupt or were bought out. That makes weak, risky companies look better than they were. To correct this, the bot keeps the financials of every company whose public float ever reached $500M, including ones with no prices today. The nightly update then looks up how each one ended in its SEC filings, a batch each night. Each such company is put back for the month it disappeared:
 - bankrupt: **−100%**,
 - delisted for another reason: **−30%** (the research average),
@@ -366,7 +368,7 @@ Backtests can read from the database too: `python -m trend_bot backtest NVDA --f
 2. Open the **Actions** tab, then **Nightly market run → Run workflow**. The first run builds the database from scratch (about 1–2 hours). Later runs take a few minutes.
 3. Turn off the Windows task so you don't get messages twice: `Disable-ScheduledTask -TaskName "TrendBot Alerts"`.
 
-**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `ml`, `ideas`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, **fates** to look up every company that disappeared in one go (instead of a batch per night; locally: `db update --fates-only --sec-lookups 20000`), or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
+**Research runs in the cloud:** in the **Actions** tab, open **Research run → Run workflow** and pick a study (`factors`, `ml`, `ideas`, `forecast`, `model`, `insiders`, `momentum` or `trend`), with optional extra options. It uses the same cloud database. The results go to Discord as a file, appear on the run's summary page, and are kept as an artifact for 90 days. Pick **refresh: fundamentals** to download company financials first, **short** for FINRA short selling data, **fates** to fill in industry codes and what happened to every company that disappeared, straight away (locally: `db update --fates-only`), or **full** to do the whole nightly update first. Research runs and nightly runs wait for each other, so they never use the database at the same time.
 
 The database is kept between runs in GitHub's Actions cache. If it's ever evicted (after 7 days without a run, or if the 10 GB cache limit is exceeded), the next run rebuilds it automatically. Public repositories run for free; private ones get about 2,000 free minutes a month, and the nightly run uses roughly 10–20 of them.
 
@@ -456,6 +458,7 @@ trend_bot/
   ml.py          one LightGBM model over every signal, walk-forward tested
   ideas.py       monthly top ideas from the simple mix, with reasons
   sectors.py     industry groups from SEC industry codes
+  sec_submissions.py the SEC's weekly bulk file: industry codes and company fates for everyone
   alerts.py      Discord messages and the saved-trend state
   cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
 run_alerts.bat   what Windows Task Scheduler runs

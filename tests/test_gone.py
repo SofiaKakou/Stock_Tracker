@@ -100,9 +100,15 @@ def test_factor_and_model_studies_put_them_back(gone_db, tmp_path, monkeypatch, 
 def test_fates_catch_up_in_one_go(gone_db, tmp_path, monkeypatch, capsys):
     from trend_bot.cli import main
 
+    from conftest import submissions_zip
+    from trend_bot import sec_submissions
+
     doc = {"name": "Gone Co", "filings": {"recent": {"form": ["10-K", "8-K"], "filingDate": ["2024-02-15", "2025-06-10"],
                                                       "items": ["", "1.03"]}}}
-    monkeypatch.setattr(fates.insiders, "_get", lambda url: json.dumps(doc).encode())
+    # Everything comes from the bulk file: one-by-one lookups would fail.
+    monkeypatch.setattr(sec_submissions, "download",
+                        lambda path, log=print: (path.write_bytes(submissions_zip({GONE_CIK: doc})), path)[1])
+    monkeypatch.setattr(fates.insiders, "_get", lambda url: (_ for _ in ()).throw(AssertionError("no lookups")))
     assert main(["db", "update", "--fates-only", "--sec-lookups", "20000", "--db", str(tmp_path / "market.db")]) == 0
     out = capsys.readouterr().out
     assert "bankrupt 1" in out and "all caught up" in out

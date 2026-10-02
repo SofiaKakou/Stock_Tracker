@@ -496,10 +496,11 @@ def cmd_db(args: argparse.Namespace) -> int:
                     fundamentals.update_fundamentals(con, force=True)
                     return 0
                 if args.fates_only:
-                    from trend_bot import fates
+                    from trend_bot import fates, sec_submissions
 
-                    # Catch up in one go (the nightly run only does --sec-lookups a night).
-                    found = fates.update_fates(con, limit=args.sec_lookups)
+                    # Catch up in one go: the SEC's bulk file has every company's filings.
+                    sec_submissions.update(con, force=True)
+                    found = fates.update_fates(con, limit=args.sec_lookups)  # any the bulk file missed
                     print("[fates] " + (", ".join(f"{k} {v:,}" for k, v in sorted(found.items())) or "nothing new"))
                     left = len(fates.companies_to_check(con))
                     print(f"[fates] {left:,} companies still to check" if left else "[fates] all caught up")
@@ -509,9 +510,11 @@ def cmd_db(args: argparse.Namespace) -> int:
                 filings = sec_bulk.load_recent_days(con, max_days=args.insider_days,
                                                     all_companies=args.insiders_all_companies)
                 print(f"[insiders] {filings:,} recent filing(s) loaded")
-                from trend_bot import fates
+                from trend_bot import fates, sec_submissions
 
-                # One-time catch-ups are spread over several nights to stay well under the SEC's limits.
+                # Industry codes and fates for every company from one weekly bulk file; the one-by-one
+                # lookups below then only cover what it missed (spread over nights, well under the SEC's limits).
+                sec_submissions.update(con)
                 found = fates.update_fates(con, limit=args.sec_lookups)
                 if found:
                     print("[fates] " + ", ".join(f"{k} {v:,}" for k, v in sorted(found.items())))
