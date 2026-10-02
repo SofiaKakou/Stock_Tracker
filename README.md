@@ -300,6 +300,8 @@ In the walk-forward test (`study ml`), this simple mix was steadier than the mac
 
 Discord gets a "📋 Top-ideas portfolio" message once per update with the buys (and why), the sells (with their return since bought) and the holds. When the weather filter says caution, the message says so: the tested version held cash. Buys and sells are also recorded for `track`. Options: `--hold`, `--buffer`.
 
+**Two more signals, only if they earn their place.** Research has also found that calmer stocks (low volatility) and stocks near their 52-week high tend to do a bit better. `study ml` tests a "+" version of the mix with both added (`simple_mix_plus` / `industry_mix_plus`). The top ideas use it only if it ranked stocks better in both halves of the test; the note says when it's on, and the reasons can then say "calm stock" or "near its 52-week high".
+
 **Would it have made money?**
 
 ```bash
@@ -308,6 +310,8 @@ python -m trend_bot study ideas --hold 30 --split-year 2020
 ```
 
 This holds the top 20 ideas (`--hold`) in equal amounts and re-checks them monthly. A stock is kept while it stays in the top 40 (`--buffer`), which means fewer trades. Each trade costs 0.1%. It's shown with and without the **weather filter** (cash, earning 2% a year, while the S&P 500 is below its 200-day average). Both the plain and the industry version are compared with the S&P 500 and the average stock, for all years and for both halves, plus year by year.
+
+Each version is also run with **at most 5 stocks per industry** (so the 20 can't all be, say, energy stocks; stocks with an unknown industry aren't capped). The portfolio to follow uses the cap only if it gave more return per unit of risk in both halves of the test.
 
 The nightly run repeats this on the first run of each month, and the headline numbers (yearly growth and worst drop vs the S&P 500) join the "How reliable is this?" note. Companies that disappeared only count in their last month, so the real past was a little worse than this for any stock list.
 

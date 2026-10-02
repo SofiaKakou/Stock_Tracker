@@ -186,3 +186,45 @@ def test_monthly_portfolio_message_is_sent_once(model_db, tmp_path, monkeypatch)
     sent.clear()
     assert main(args) == 0
     assert not any(e["title"].startswith("📋") for p in sent for e in p["embeds"])
+
+
+def test_capped_rebalance_limits_each_industry():
+    order = [f"E{i}" for i in range(8)] + [f"T{i}" for i in range(8)] + ["U0", "U1"]
+    ranked = pd.Series(np.linspace(1, 0, len(order)), index=order)
+    sectors = pd.Series({t: ("Energy" if t[0] == "E" else "Technology" if t[0] == "T" else None) for t in order})
+    new, buys, sells = ideas.rebalance_capped(ranked, sectors, [], hold=10, buffer=20, cap=3)
+    assert new == ["E0", "E1", "E2", "T0", "T1", "T2", "U0", "U1"]   # 3 per industry; unknown industry uncapped
+    # Held stocks still within the buffer are kept, but never more than the cap.
+    new2, buys2, sells2 = ideas.rebalance_capped(ranked, sectors, ["E5", "E6", "E7", "E4", "T7"], hold=6, buffer=20,
+                                                 cap=3)
+    assert [t for t in new2 if t[0] == "E"] == ["E4", "E5", "E6"] and "E7" in sells2 and "T7" in new2
+    assert len(new2) == 6 and len(buys2) == 2
+
+
+def test_backtest_runs_capped_versions_and_picks_the_cap_only_if_it_helps(tmp_path):
+    from trend_bot import model
+
+    df = panel_with_edge()
+    days = pd.bdate_range("2018-01-01", "2022-03-31")
+    spy = pd.Series(np.linspace(100, 150, len(days)), index=days)
+    m = ideas.backtest(df, spy, hold=20, buffer=40, cap=5)
+    assert {"mix_capped", "mix_capped_always", "industry_mix_capped_always"} <= set(m.columns)
+    con = db.connect(tmp_path / "m.db")
+    ideas.save_backtest(con, m, 20)
+    mid = m.index[len(m) // 2]
+    better = all(model.summarize(h, ["mix_capped_always"]).loc["mix_capped_always", "return_per_risk"]
+                 > model.summarize(h, ["mix_always"]).loc["mix_always", "return_per_risk"]
+                 for h in (m[m.index < mid], m[m.index >= mid]))
+    assert ideas.use_cap(con) == better
+    # Force the decision both ways and check the live portfolio follows it.
+    names = [f"S{i:02d}" for i in range(60)]
+    r = ranking(names)
+    r["sector"] = ["Energy"] * 30 + [f"Industry {i}" for i in range(30)]   # one crowded industry, many small
+    db.set_meta(con, "ideas_backtest", json.dumps({"cap": True}))
+    port = ideas.update_portfolio(con, r, "2026-09-30", {"invest": True}, hold=20, buffer=40)
+    held = [p["ticker"] for p in port["buys"]]
+    assert len(held) == 20 and sum(t < "S30" for t in held) == 5    # at most 5 energy stocks
+    con.execute("DELETE FROM ideas_holdings")
+    db.set_meta(con, "ideas_backtest", json.dumps({"cap": False}))
+    port = ideas.update_portfolio(con, r, "2026-09-30", {"invest": True}, hold=20, buffer=40)
+    assert [p["ticker"] for p in port["buys"]] == names[:20]
