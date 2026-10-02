@@ -47,8 +47,12 @@ jobs:
           key: market-db-${{ github.run_id }}
           restore-keys: market-db-
 
+      # Steps that fail only log a warning and carry on; they also note it in reports/problems.txt
+      # for the health check at the end.
       - name: Update data
-        run: python -m trend_bot db update || echo "::warning::db update did not finish (see log); continuing"
+        run: |
+          mkdir -p reports
+          python -m trend_bot db update || { echo "::warning::db update did not finish (see log); continuing"; echo "the data update didn't finish" >> reports/problems.txt; }
 
       # Monthly (and on manual runs): re-test the 30-day outlook for its "How reliable is this?" note, and
       # re-test the all-signal model (its ideas are only shown if it passes; its picks are tracked either way).
@@ -56,10 +60,10 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || github.event.schedule != ''
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date +%d)" -le 3 ]; then
-            python -m trend_bot study forecast || echo "::warning::study forecast failed"
-            python -m trend_bot study ml || echo "::warning::study ml failed"
-            python -m trend_bot study ideas || echo "::warning::study ideas failed"
-            python -m trend_bot ideas || echo "::warning::ideas failed"
+            mkdir -p reports
+            for step in "study forecast" "study ml" "study ideas" "ideas"; do
+              python -m trend_bot $step || { echo "::warning::$step failed"; echo "'$step' failed" >> reports/problems.txt; }
+            done
           fi
 
       - name: Discord alerts
@@ -69,6 +73,12 @@ jobs:
         run: |
           python -m trend_bot report
           python -m trend_bot send-report
+
+      - name: Bot health
+        if: always()
+        run: |
+          python -m trend_bot health --discord --problems reports/problems.txt --job-status "${{ job.status }}" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
 
       - name: Save database
         if: always()
