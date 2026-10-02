@@ -158,9 +158,9 @@ def test_cli_insiders(fake_sec, capsys):
 
 
 def test_cli_alert_sends_insider_cluster_once(fake_sec, tmp_path, monkeypatch, up_then_down):
-    import trend_bot.cli as cli
+    import trend_bot.commands.common as common
 
-    monkeypatch.setattr(cli, "load_prices", lambda *a, **k: up_then_down)
+    monkeypatch.setattr(common, "load_prices", lambda *a, **k: up_then_down)
     sent = []
     monkeypatch.setattr(alerts, "send", lambda url, payload: sent.append(payload))
     state = tmp_path / "state.json"

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from pathlib import Path
 
 import numpy as np
 import pandas as pd

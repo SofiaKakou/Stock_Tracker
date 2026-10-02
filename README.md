@@ -472,12 +472,15 @@ trend_bot/
   sec_submissions.py the SEC's weekly bulk file: industry codes and company fates for everyone
   health.py      the bot's own health check (fresh data, SEC pause, failed steps)
   alerts.py      Discord messages and the saved-trend state
-  cli.py         the `scan`, `backtest`, `portfolio`, `alert` and `news` commands
+  cli.py         command-line options for every command (`python -m trend_bot ...`)
+  commands/      what each command does: watchlist.py (scan, backtest, portfolio, alert, news,
+                 insiders), data.py (db, screen), studies.py (study ...), outputs.py (track,
+                 report, model, forecast, ideas, health, send-guide, send-report), common.py
 run_alerts.bat   what Windows Task Scheduler runs
 tests/           offline tests on synthetic prices (run: pytest)
 ```
 
-To add a strategy, subclass `Strategy` in `strategy.py`, implement `generate()` so it returns a DataFrame with a `position` column, register it in `STRATEGIES`, and add its options in `cli.py`.
+To add a strategy, subclass `Strategy` in `strategy.py`, implement `generate()` so it returns a DataFrame with a `position` column, register it in `STRATEGIES`, and add its options in `cli.py` (and `commands/common.py`'s `build_strategy`).
 
 ## Ideas for next steps
 
