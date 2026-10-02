@@ -108,6 +108,24 @@ CREATE TABLE IF NOT EXISTS facts (
 );
 CREATE INDEX IF NOT EXISTS facts_item ON facts(item, cik);
 
+-- Annual and quarterly reports (10-K / 10-Q) of tracked companies, from the SEC bulk file.
+CREATE TABLE IF NOT EXISTS filings (
+    accession   TEXT PRIMARY KEY,
+    cik         INTEGER NOT NULL,
+    form        TEXT NOT NULL,       -- 10-K or 10-Q
+    filed       TEXT NOT NULL,
+    period      TEXT,                -- the period the report covers
+    primary_doc TEXT                 -- the main document's file name
+);
+CREATE INDEX IF NOT EXISTS filings_cik ON filings(cik, form, filed);
+
+-- How each report's text compares with the same report a year earlier (see text_changes.py).
+CREATE TABLE IF NOT EXISTS doc_vectors (
+    accession TEXT PRIMARY KEY,
+    words     INTEGER NOT NULL,      -- 0: couldn't be read
+    vec       BLOB                   -- word counts, hashed into buckets, compressed
+) WITHOUT ROWID;
+
 -- The top-ideas portfolio (see ideas.py): the top 20, kept while in the top 40.
 CREATE TABLE IF NOT EXISTS ideas_holdings (
     ticker      TEXT PRIMARY KEY,

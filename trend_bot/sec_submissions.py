@@ -45,6 +45,21 @@ def download(path: Path, log: Callable[[str], None] = print) -> Path:
     return path
 
 
+REPORT_FORMS = ("10-K", "10-Q")
+
+
+def _save_reports(con: sqlite3.Connection, cik: int, cols: dict) -> int:
+    """Store a company's 10-K / 10-Q filings from one page of its submissions (column lists)."""
+    forms = cols.get("form") or []
+    pick = lambda key: cols.get(key) or [None] * len(forms)
+    rows = [(acc, cik, f, filed, period or None, doc or None)
+            for f, acc, filed, period, doc in zip(forms, pick("accessionNumber"), pick("filingDate"),
+                                                   pick("reportDate"), pick("primaryDocument"))
+            if f in REPORT_FORMS and acc and filed]
+    con.executemany("INSERT OR IGNORE INTO filings VALUES (?, ?, ?, ?, ?, ?)", rows)
+    return len(rows)
+
+
 def apply(con: sqlite3.Connection, data: bytes | Path, log: Callable[[str], None] = print) -> dict[str, int]:
     """Fill industry codes and fates from a submissions.zip (bytes or a path). Returns counts."""
     zf = zipfile.ZipFile(io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else data)
@@ -52,8 +67,20 @@ def apply(con: sqlite3.Connection, data: bytes | Path, log: Callable[[str], None
     # Every company without prices whose fate a study needs, final outcomes excepted.
     need_fate = set(fates.companies_to_check(con, recheck_days=0))
     now = dt.datetime.now().isoformat(timespec="seconds")
-    counts = {"industry": 0, "fates": 0}
-    names = [n for n in zf.namelist() if n.endswith(".json") and "-submissions-" not in n]
+    counts = {"industry": 0, "fates": 0, "reports": 0}
+    all_names = [n for n in zf.namelist() if n.endswith(".json")]
+    # Older filings of busy companies sit in extra pages (CIK..-submissions-001.json).
+    for name in (n for n in all_names if "-submissions-" in n):
+        try:
+            cik = int(Path(name).stem.split("-")[0].removeprefix("CIK"))
+        except ValueError:
+            continue
+        if cik in tracked:
+            try:
+                counts["reports"] += _save_reports(con, cik, json.loads(zf.read(name)))
+            except ValueError:
+                continue
+    names = [n for n in all_names if "-submissions-" not in n]
     for i, name in enumerate(names, 1):
         try:
             cik = int(Path(name).stem.removeprefix("CIK"))
@@ -70,6 +97,7 @@ def apply(con: sqlite3.Connection, data: bytes | Path, log: Callable[[str], None
             con.execute("UPDATE tickers SET sic = ?, sic_desc = ?, info_checked_at = ? WHERE cik = ?",
                         (sic, doc.get("sicDescription"), now, cik))
             counts["industry"] += sic is not None
+            counts["reports"] += _save_reports(con, cik, doc.get("filings", {}).get("recent", {}))
         if cik in need_fate:
             status, date = fates.classify(doc)
             con.execute("INSERT OR REPLACE INTO company_fates VALUES (?, ?, ?, ?, ?)",
@@ -100,7 +128,8 @@ def update(con: sqlite3.Connection, max_age_days: int = 7, force: bool = False,
             path.unlink()  # we don't need to keep 1.5 GB
         except OSError:
             pass
-    log(f"[sec] industry codes for {counts['industry']:,} companies; fates for {counts['fates']:,} "
-        f"({', '.join(f'{k} {v:,}' for k, v in sorted(counts.items()) if k not in ('industry', 'fates')) or 'none'}) "
+    log(f"[sec] industry codes for {counts['industry']:,} companies; {counts['reports']:,} annual/quarterly "
+        f"reports listed; fates for {counts['fates']:,} "
+        f"({', '.join(f'{k} {v:,}' for k, v in sorted(counts.items()) if k not in ('industry', 'fates', 'reports')) or 'none'}) "
         f"in {time.time() - started:.0f}s")
     return counts
