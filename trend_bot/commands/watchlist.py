@@ -244,6 +244,15 @@ def cmd_alert(args: argparse.Namespace) -> int:
                 if not args.dry_run:
                     idb.set_meta(con, "ideas_portfolio_sent", port["date"])
                     con.commit()
+            # Once per new scoreboard: how the signals on probation are doing.
+            from trend_bot import candidates as icand
+
+            board = icand.load(con)
+            if board and idb.get_meta(con, "candidates_sent") != board["date"]:
+                embeds.append(alerts.candidates_embed(board))
+                if not args.dry_run:
+                    idb.set_meta(con, "candidates_sent", board["date"])
+                    con.commit()
             # New 8-K red flags or late filing notices for the watchlist and the top-ideas portfolio.
             e = _red_flag_embed(con, [r["ticker"] for r in rows], args.dry_run)
             if e:

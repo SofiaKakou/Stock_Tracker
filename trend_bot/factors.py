@@ -73,6 +73,30 @@ def market_caps(close: pd.Series, shares: pd.Series, shares_date: pd.Series, spl
     return pd.Series(out, dtype=float)
 
 
+def net_issuance(f: pd.DataFrame, splits: pd.DataFrame, tickers: dict[int, str]) -> pd.Series:
+    """log(shares now / shares a year earlier), with stock splits in between taken out.
+
+    Positive: the company issued shares (deals, stock pay, raising money); negative: it bought
+    shares back. Moves of more than 10x either way are treated as data errors."""
+    if "shares_prior" not in f or "shares_prior_date" not in f:
+        return pd.Series(np.nan, index=f.index)
+    by_ticker = {t: g for t, g in splits.groupby("ticker")} if len(splits) else {}
+    out = {}
+    for cik, r in f[["shares", "shares_prior", "shares_date", "shares_prior_date"]].dropna().iterrows():
+        if r["shares"] <= 0 or r["shares_prior"] <= 0:
+            continue
+        factor = 1.0
+        s = by_ticker.get(tickers.get(cik))
+        if s is not None:
+            for d, ratio in zip(pd.to_datetime(s["date"]), s["ratio"]):
+                if r["shares_prior_date"] < d <= r["shares_date"]:
+                    factor *= ratio
+        x = np.log(r["shares"] / (r["shares_prior"] * factor))
+        if abs(x) <= np.log(10):
+            out[cik] = x
+    return pd.Series(out, dtype=float).reindex(f.index)
+
+
 # Return in the month a company disappeared (no price data), by how it ended. Bought-out
 # companies get the average stock's return that month (neutral; the takeover premium
 # usually came earlier). -30% for other delistings is the research average (Shumway 1997).
@@ -131,6 +155,7 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
         caps = market_caps(raw.loc[month] if month in raw.index else pd.Series(dtype=float),
                            f["shares"], f["shares_date"], splits, tickers)
         vals = fundamentals.factor_values(f, caps).join(earnings.latest(ev, month), how="left")
+        vals["net_issuance"] = net_issuance(f, splits, tickers)
         for sig in text_changes.SIGNALS:
             vals[sig] = text_changes.latest(report_changes, month, column=sig).reindex(vals.index)
         # No event in the window means 0 events, not unknown.
@@ -204,7 +229,7 @@ def group_rank(df: pd.DataFrame, col: str, by_sector: bool = False) -> pd.Series
 # --- Build the table once, reuse it --------------------------------------------------------------
 
 TABLE_START = "2009-06-30"  # XBRL filings start in 2009
-TABLE_VERSION = 4           # bump when monthly_factors changes what it computes
+TABLE_VERSION = 5           # bump when monthly_factors changes what it computes
 
 
 def _table_key(con: sqlite3.Connection, universe: int, min_price: float) -> str:

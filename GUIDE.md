@@ -71,6 +71,11 @@ the real cost, how the scores lined up with what the stocks did next, and how of
 recognized the company anyway. On past reports it may half-remember what happened, so only
 reports filed from now on are a fair test.
 
+**🧪 Signals on probation**, monthly: every new signal starts on probation (measured, but left
+out of the top ideas). ✅ means it worked in both halves of its history *and* made the top-ideas
+mix better in both halves; ⏳ means not enough history yet; ❌ not proven. A ✅ signal is only
+added if you say so.
+
 **⚠️ Bot health**: something is wrong with the bot itself, such as stale prices, a failed step,
 or the SEC asking it to slow down. It fixes itself on later runs in most cases; **silence means
 healthy**. "✅ all fine again" means it cleared.
@@ -92,6 +97,8 @@ healthy**. "✅ all fine again" means it cleared.
   with the same report a year earlier. Research found big rewrites tend to come before weaker
   stock returns. The bot reads a batch of reports from the SEC each night; this signal is still
   a *candidate*: it is tested in research runs but only joins the mix if it proves itself.
+- **Net issuance**: how much a company's share count grew over a year (splits removed). Companies
+  buying back shares have tended to beat those issuing new ones.
 - **Tone / uncertainty / legal words**: the share of negative, uncertain ("may", "unpredictable")
   and legal ("lawsuit", "plaintiff") words in the latest report, and whether it got more negative
   than a year earlier. **Risk change / risk growth**: how much the "risk factors" section was

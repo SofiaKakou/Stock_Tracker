@@ -31,7 +31,8 @@ INSIDERS = ["insider_buyers", "insider_sellers"]
 # Signals still on probation: measured in study factors, but kept out of the mix and the model
 # until they've shown they work (each one is decided with the user after its test).
 CANDIDATES = {"report_change", "tone_negative", "tone_change", "uncertainty", "litigious",
-              "risk_change", "risk_growth", "red_flags", "late_filing", "exec_changes"}
+              "risk_change", "risk_growth", "red_flags", "late_filing", "exec_changes",
+              "net_issuance"}
 SIGNALS = [s for s in fundamentals.EXPECTED if s not in CANDIDATES]
 FEATURES = PRICE + INSIDERS + SIGNALS
 
@@ -84,11 +85,13 @@ def train(X: pd.DataFrame, y: pd.Series, trees: int = TREES):
 EXTRA = {"vol": -1, "high52": +1}
 
 
-def simple_mix(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -> pd.Series:
+def simple_mix(df: pd.DataFrame, by_sector: bool = False, extra: bool = False,
+               signals: list[str] | None = None) -> pd.Series:
     """The baseline: equal-weight average rank of every signal, each pointed the expected way,
     plus 12-month momentum. No fitting at all. by_sector: company signals are ranked within each
-    industry (momentum stays market-wide). extra: also low volatility and nearness to the 52-week high."""
-    cols = [c for c in SIGNALS if df[c].notna().any()]
+    industry (momentum stays market-wide). extra: also low volatility and nearness to the 52-week high.
+    signals: the company signals to mix (default SIGNALS; the candidates scoreboard tries others)."""
+    cols = [c for c in (SIGNALS if signals is None else signals) if c in df and df[c].notna().any()]
     mix = factors.composite(df, cols, by_sector) if cols else pd.Series(np.nan, index=df.index)
     parts = [mix * len(cols), df.groupby("month")["mom12"].rank(pct=True)]
     n = len(cols) + 1
