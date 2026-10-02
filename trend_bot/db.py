@@ -119,6 +119,14 @@ CREATE TABLE IF NOT EXISTS ideas_holdings (
     why         TEXT
 );
 
+-- What the top-ideas portfolio held from each monthly update on (for its live record vs the S&P 500).
+CREATE TABLE IF NOT EXISTS ideas_periods (
+    start  TEXT NOT NULL,     -- date of the monthly update
+    ticker TEXT NOT NULL,
+    bought INTEGER NOT NULL,  -- 1 if bought at that update (pays trading costs)
+    PRIMARY KEY (start, ticker)
+) WITHOUT ROWID;
+
 -- FINRA short interest, twice a month (see short_interest.py).
 CREATE TABLE IF NOT EXISTS short_interest (
     ticker     TEXT NOT NULL,

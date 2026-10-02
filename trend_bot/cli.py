@@ -312,7 +312,7 @@ def cmd_alert(args: argparse.Namespace) -> int:
             port = iideas.load_portfolio(con)
             # Once per monthly update: the buys and sells of the top-ideas portfolio.
             if port and idb.get_meta(con, "ideas_portfolio_sent") != port["date"]:
-                embeds.append(alerts.ideas_portfolio_embed(port, iideas.reliability_note(con)))
+                embeds.append(alerts.ideas_portfolio_embed(port, iideas.reliability_note(con), iideas.live_line(con)))
                 if not args.dry_run:
                     idb.set_meta(con, "ideas_portfolio_sent", port["date"])
                     con.commit()
@@ -333,7 +333,8 @@ def cmd_alert(args: argparse.Namespace) -> int:
                         con.commit()
                     from trend_bot import ideas as fideas, ml as fml
 
-                    e = alerts.ideas_embed(fideas.load(con), fmodel.weather_status(con), fideas.reliability_note(con))
+                    e = alerts.ideas_embed(fideas.load(con), fmodel.weather_status(con), fideas.reliability_note(con),
+                                           fideas.live_line(con))
                     if e:
                         embeds.append(e)
 
@@ -1076,6 +1077,10 @@ def cmd_ideas(args: argparse.Namespace) -> int:
         if not port["invest"]:
             print("  The weather filter says cash: the tested version held cash while the S&P 500 is below its "
                   "200-day average.")
+        with closing(db.connect(args.db)) as con:
+            live = ideas.live_line(con)
+        if live:
+            print("  " + live.replace("**", ""))
     print(f"\nHow reliable is this? {note}")
     if not args.no_record:
         print(f"Recorded {len(new)} new picks (top and bottom 10%) for forward tracking ('track').")

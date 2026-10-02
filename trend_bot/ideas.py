@@ -359,6 +359,8 @@ def update_portfolio(con: sqlite3.Connection, ranked: pd.DataFrame, date: str, w
         con.execute("INSERT INTO ideas_holdings VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (t, i, since, price, float(r["score"]),
                      r["sector"] if isinstance(r["sector"], str) else None, r["why"]))
+    con.executemany("INSERT OR REPLACE INTO ideas_periods VALUES (?, ?, ?)",
+                    [(date, t, int(t in buys)) for t in new])
     item = lambda t: {"ticker": t, "close": float(ranked.loc[t, "close"]), "rank": rank_of[t],
                       "sector": ranked.loc[t, "sector"] if isinstance(ranked.loc[t, "sector"], str) else None,
                       "why": ranked.loc[t, "why"]}
@@ -379,3 +381,59 @@ def use_cap(con: sqlite3.Connection) -> bool:
     """True if the last portfolio test chose the industry cap (better return per risk in both halves)."""
     raw = get_meta(con, "ideas_backtest")
     return bool(json.loads(raw).get("cap")) if raw else False
+
+
+def live_record(con: sqlite3.Connection, benchmark: str = "SPY", cost_bps: float = 10) -> dict | None:
+    """How the portfolio to follow has really done since its first monthly update, vs the S&P 500.
+
+    Equal amounts in each holding, re-balanced at each monthly update, 0.1% per trade each way
+    (sells and buys), always invested. Prices come from the database, so splits and dividends are
+    handled the same way as everywhere else. None until there's a first update.
+    """
+    from trend_bot.db import load_many
+
+    periods = pd.read_sql_query("SELECT * FROM ideas_periods ORDER BY start", con)
+    if periods.empty:
+        return None
+    starts = sorted(periods["start"].unique())
+    tickers = sorted(set(periods["ticker"]) | {benchmark})
+    closes = {t: df["Close"] for t, df in load_many(con, tickers, start=starts[0]).items()}
+    if benchmark not in closes:
+        return None
+    end = closes[benchmark].index[-1]
+
+    def change(t: str, a: str, b: pd.Timestamp | None) -> float | None:
+        c = closes.get(t)
+        if c is None or c.empty:
+            return None
+        i = c.index.searchsorted(pd.Timestamp(a))
+        if i >= len(c):
+            return None
+        last = c.loc[:b] if b is not None else c
+        return float(last.iloc[-1] / c.iloc[i] - 1) if len(last) and last.index[-1] >= c.index[i] else 0.0
+
+    value, cost = 1.0, cost_bps / 10_000
+    for k, start in enumerate(starts):
+        nxt = pd.Timestamp(starts[k + 1]) if k + 1 < len(starts) else None
+        part = periods[periods["start"] == start]
+        rets = [r for r in (change(t, start, nxt) for t in part["ticker"]) if r is not None]
+        sold_and_bought = part["bought"].sum() / max(len(part), 1)
+        trading = cost * (1 if k == 0 else 2) * sold_and_bought  # buying in; later, a sale for each buy
+        value *= (1 + (np.mean(rets) if rets else 0.0)) * (1 - trading)
+    spy = change(benchmark, starts[0], None)
+    return {"start": starts[0], "as_of": f"{end:%Y-%m-%d}", "portfolio": value - 1, "spy": spy,
+            "days": (end - pd.Timestamp(starts[0])).days, "updates": len(starts)}
+
+
+def live_line(con: sqlite3.Connection) -> str:
+    """One line for the messages: the portfolio's real record so far vs the S&P 500."""
+    r = live_record(con)
+    if not r or r["spy"] is None:
+        return ""
+    if r["days"] < 1:
+        return f"📈 Live record starts today ({r['start']}); it's compared with the S&P 500 from here on."
+    ahead = r["portfolio"] - r["spy"]
+    return (f"📈 **Since {r['start']}** ({r['days']} days, {r['updates']} monthly update"
+            f"{'s' if r['updates'] != 1 else ''}): portfolio **{r['portfolio']:+.1%}** vs S&P 500 "
+            f"**{r['spy']:+.1%}** ({'ahead' if ahead >= 0 else 'behind'} by {abs(ahead):.1%}; equal amounts, "
+            "always invested, after trading costs).")
