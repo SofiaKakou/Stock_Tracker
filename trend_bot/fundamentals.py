@@ -243,6 +243,8 @@ EXPECTED = {
     "sue": +1, "revenue_sue": +1, "ear": +1,
     # Short selling (see short_interest.py): heavily shorted stocks have tended to lag
     "short_ratio": -1, "days_to_cover": -1, "short_change": -1, "short_volume_ratio": -1,
+    # How much the latest annual/quarterly report was rewritten vs a year earlier (see text_changes.py)
+    "report_change": -1,
 }
 DESCRIPTIONS = {
     "gross_profitability": "gross profit / assets (Novy-Marx)",
@@ -261,4 +263,5 @@ DESCRIPTIONS = {
     "days_to_cover": "shares sold short / average daily volume; lower is better",
     "short_change": "change in shares sold short vs a month earlier; lower is better",
     "short_volume_ratio": "share of last month's off-exchange volume that was short sales; lower is better",
+    "report_change": "how much the latest 10-K/10-Q wording changed vs a year earlier; lower is better (Lazy Prices)",
 }

@@ -28,7 +28,10 @@ from trend_bot.db import get_meta, set_meta
 
 PRICE = ["trend", "mom12", "mom6", "mom1", "high52", "vol", "dollar_vol", "market_cap"]
 INSIDERS = ["insider_buyers", "insider_sellers"]
-SIGNALS = list(fundamentals.EXPECTED)
+# Signals still on probation: measured in study factors, but kept out of the mix and the model
+# until they've shown they work (each one is decided with the user after its test).
+CANDIDATES = {"report_change"}
+SIGNALS = [s for s in fundamentals.EXPECTED if s not in CANDIDATES]
 FEATURES = PRICE + INSIDERS + SIGNALS
 
 PARAMS = dict(objective="regression", learning_rate=0.03, num_leaves=15, min_data_in_leaf=300,

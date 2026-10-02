@@ -133,6 +133,9 @@ def make_parser() -> argparse.ArgumentParser:
     dbp.add_argument("--sec-lookups", type=int, default=1500,
                      help="max company lookups per run for the one-time catch-ups (default 1500)")
     dbp.add_argument("--no-fundamentals", action="store_true", help="skip the weekly company-financials refresh")
+    dbp.add_argument("--no-reports", action="store_true", help="skip reading annual/quarterly reports")
+    dbp.add_argument("--report-downloads", type=int, default=2500,
+                     help="max annual/quarterly reports to read per run (default 2500)")
     dbp.add_argument("--no-short", action="store_true", help="skip the FINRA short selling data")
     dbp.add_argument("--ignore-sec-pause", action="store_true",
                      help="try the SEC even if it asked us to slow down in the last 24 hours")
@@ -143,6 +146,8 @@ def make_parser() -> argparse.ArgumentParser:
     only.add_argument("--prices-only", action="store_true")
     only.add_argument("--insiders-only", action="store_true")
     only.add_argument("--short-only", action="store_true", help="only update FINRA short selling data")
+    only.add_argument("--reports-only", action="store_true",
+                      help="only read annual/quarterly reports for the 'report changed' signal")
     only.add_argument("--fates-only", action="store_true",
                       help="only look up what happened to companies without prices (use a big --sec-lookups "
                            "to catch up in one go)")

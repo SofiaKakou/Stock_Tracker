@@ -75,6 +75,10 @@ healthy**. "✅ all fine again" means it cleared.
 - **Survivorship bias**: only companies that still exist have prices, which makes the past look
   better than it was. The bot adds back companies that went bankrupt or were bought out.
 - **Worst drop**: the biggest fall from a peak before recovering.
+- **Report change ("Lazy Prices")**: how much a company rewrote its latest 10-K / 10-Q compared
+  with the same report a year earlier. Research found big rewrites tend to come before weaker
+  stock returns. The bot reads a batch of reports from the SEC each night; this signal is still
+  a *candidate*: it is tested in research runs but only joins the mix if it proves itself.
 
 ## What it can't do
 

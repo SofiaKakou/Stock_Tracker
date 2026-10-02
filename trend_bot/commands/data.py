@@ -52,7 +52,7 @@ def cmd_db(args: argparse.Namespace) -> int:
                       f"{f.get('unknown', 0):,} unclear)")
             return 0
 
-        if args.fundamentals_only or args.fates_only:
+        if args.fundamentals_only or args.fates_only or args.reports_only:
             args.insiders_only = True  # same SEC step, but only that part matters
         everything = not (args.universe_only or args.prices_only or args.insiders_only or args.short_only)
         if everything or args.universe_only or args.prices_only:
@@ -96,6 +96,9 @@ def cmd_db(args: argparse.Namespace) -> int:
                     left = len(fates.companies_to_check(con))
                     print(f"[fates] {left:,} companies still to check" if left else "[fates] all caught up")
                     return 0
+                if args.reports_only:
+                    _update_reports(con, args.report_downloads)
+                    return 0
                 added = sec_bulk.load_quarters(con, since_year=args.insider_since)
                 print(f"[insiders] {added} quarterly file(s) loaded")
                 filings = sec_bulk.load_recent_days(con, max_days=args.insider_days,
@@ -116,6 +119,8 @@ def cmd_db(args: argparse.Namespace) -> int:
                     from trend_bot import fundamentals
 
                     fundamentals.update_fundamentals(con, force=args.fundamentals_only)
+                if not args.no_reports:
+                    _update_reports(con, args.report_downloads)
             except RuntimeError as e:
                 print(f"[insiders] stopped: {e}", file=sys.stderr)
                 if "limiting" in str(e):
@@ -126,6 +131,17 @@ def cmd_db(args: argparse.Namespace) -> int:
                           "(use --ignore-sec-pause to try sooner)", file=sys.stderr)
                 return 1
     return 0
+
+
+def _update_reports(con, limit: int) -> None:
+    """Read a batch of new annual/quarterly reports for the 'report changed' signal (newest first)."""
+    from trend_bot import factors, sec_submissions, text_changes
+
+    sec_submissions.update(con)  # the list of reports comes from the weekly bulk file
+    universe = set(factors.primary_tickers(con))
+    n = text_changes.update(con, limit=limit, ciks=universe)
+    left = len(text_changes.to_fetch(con, universe))
+    print(f"[reports] {n:,} reports read; {left:,} still to read" if n or left else "[reports] all read")
 
 
 def cmd_screen(args: argparse.Namespace) -> int:
