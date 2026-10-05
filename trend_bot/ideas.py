@@ -191,11 +191,11 @@ def reliability_note(con: sqlite3.Connection) -> str:
 
 # --- Would it have made money? A portfolio test ---------------------------------------------------
 
-def scores(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -> pd.Series:
+def scores(df: pd.DataFrame, by_sector: bool = False, extra: bool = False, mom_weight: float = 1.0) -> pd.Series:
     """The mix score for every row of a monthly table (NaN where too few signals are known)."""
     df = df.assign(**{c: np.nan for c in ml.FEATURES if c not in df})
     known = oriented_ranks(df, by_sector).notna().sum(axis=1)
-    return ml.simple_mix(df, by_sector, extra).where(known >= MIN_SIGNALS)
+    return ml.simple_mix(df, by_sector, extra, mom_weight=mom_weight).where(known >= MIN_SIGNALS)
 
 
 MAX_PER_INDUSTRY = 5  # at most this many of the top 20 from one industry (when the cap is used)
@@ -281,6 +281,88 @@ def backtest(df: pd.DataFrame, spy: pd.Series, hold: int = 20, buffer: int = 40,
     res["average_stock"] = df.groupby("month")["ret"].mean().reindex(months).to_numpy()
     res["invested"] = invest
     return res.sort_index()
+
+
+# --- How to build the portfolio: number of stocks, weights, an index core, momentum -------------------
+
+CONSTRUCTION = {
+    "top20": "Top 20, equal weight (followed now)",
+    "top50": "Top 50, equal weight",
+    "top20_size": "Top 20, weighted by company size",
+    "core70": "70% S&P 500 + 30% top 20",
+    "core50": "50% S&P 500 + 50% top 20",
+    "mom3": "Top 20, momentum counted 3x",
+    "SPY": "S&P 500 (buy & hold)",
+}
+
+
+def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, cost: float,
+                  by_size: bool = False) -> pd.Series:
+    """Monthly returns of holding the top `hold` by `score` (kept while in the top `buffer`), always
+    invested, after trading costs. by_size: weighted by market value instead of equally."""
+    from trend_bot import model
+
+    held: list[str] = []
+    out = {}
+    for month, g in df.assign(score=score).dropna(subset=["score"]).groupby("month"):
+        if len(g) < hold * 3:
+            continue
+        g = g.set_index("ticker")
+        new, buys, _ = model.rebalance(g["score"].sort_values(ascending=False), held, hold, buffer)
+        r = g["ret"].reindex(new)
+        if by_size and "market_cap" in g:
+            w = g["market_cap"].reindex(new)
+            w = w.fillna(w.median() if w.notna().any() else 1.0)
+        else:
+            w = pd.Series(1.0, index=new)
+        ok = r.notna()
+        gross = float((r[ok] * w[ok]).sum() / w[ok].sum()) if ok.any() else 0.0
+        out[month + pd.offsets.MonthEnd(1)] = gross - cost * len(buys) / hold
+        held = new
+    return pd.Series(out, dtype=float)
+
+
+def construction_test(df: pd.DataFrame, spy: pd.Series, extra: bool = False, by_sector: bool = False,
+                      cost_bps: float = 10) -> pd.DataFrame:
+    """Monthly returns (always invested) of different ways to build the portfolio from the same ranking."""
+    from trend_bot import model
+
+    df = df.dropna(subset=["ret"]).reset_index(drop=True)
+    cost = cost_bps / 10_000 * 2
+    base = scores(df, by_sector, extra)
+    res = pd.DataFrame({
+        "top20": _hold_returns(df, base, 20, 40, cost),
+        "top50": _hold_returns(df, base, 50, 100, cost),
+        "top20_size": _hold_returns(df, base, 20, 40, cost, by_size=True),
+        "mom3": _hold_returns(df, scores(df, by_sector, extra, mom_weight=3.0), 20, 40, cost),
+    }).sort_index()
+    spy_m = model._monthly_last(spy)
+    months = res.index - pd.offsets.MonthEnd(1)
+    res["SPY"] = (spy_m.shift(-1) / spy_m - 1).reindex(months).to_numpy()
+    # An index core rebalanced monthly back to its share.
+    res["core70"] = 0.7 * res["SPY"] + 0.3 * res["top20"]
+    res["core50"] = 0.5 * res["SPY"] + 0.5 * res["top20"]
+    # Too few stocks for a variant (e.g. a top 50 out of 80): left out rather than shown empty.
+    return res[[c for c in CONSTRUCTION if c in res and res[c].notna().any()]]
+
+
+def construction_verdicts(monthly: pd.DataFrame) -> pd.DataFrame:
+    """Per variant and half: does it beat the S&P 500 on return, and the current top 20 on return per risk?"""
+    from trend_bot import model
+
+    mid = monthly.index[len(monthly) // 2]
+    halves = [monthly[monthly.index < mid], monthly[monthly.index >= mid]]
+    rows = {}
+    for c in monthly.columns:
+        if c in ("SPY", "top20"):
+            continue
+        s = [model.summarize(h, [c, "SPY", "top20"]) for h in halves]
+        if not all({c, "SPY", "top20"} <= set(x.index) for x in s):
+            continue
+        rows[c] = {"beats_spy_both_halves": all(x.loc[c, "cagr"] > x.loc["SPY", "cagr"] for x in s),
+                   "better_risk_than_top20_both": all(x.loc[c, "return_per_risk"] > x.loc["top20", "return_per_risk"]
+                                                      for x in s)}
+    return pd.DataFrame(rows).T
 
 
 NAMES = {"mix": "Top ideas + weather filter", "mix_always": "Top ideas, always invested",

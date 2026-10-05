@@ -86,15 +86,16 @@ EXTRA = {"vol": -1, "high52": +1}
 
 
 def simple_mix(df: pd.DataFrame, by_sector: bool = False, extra: bool = False,
-               signals: list[str] | None = None) -> pd.Series:
+               signals: list[str] | None = None, mom_weight: float = 1.0) -> pd.Series:
     """The baseline: equal-weight average rank of every signal, each pointed the expected way,
     plus 12-month momentum. No fitting at all. by_sector: company signals are ranked within each
     industry (momentum stays market-wide). extra: also low volatility and nearness to the 52-week high.
-    signals: the company signals to mix (default SIGNALS; the candidates scoreboard tries others)."""
+    signals: the company signals to mix (default SIGNALS; the candidates scoreboard tries others).
+    mom_weight: how many signals' worth 12-month momentum counts for (1 = like any other signal)."""
     cols = [c for c in (SIGNALS if signals is None else signals) if c in df and df[c].notna().any()]
     mix = factors.composite(df, cols, by_sector) if cols else pd.Series(np.nan, index=df.index)
-    parts = [mix * len(cols), df.groupby("month")["mom12"].rank(pct=True)]
-    n = len(cols) + 1
+    parts = [mix * len(cols), df.groupby("month")["mom12"].rank(pct=True) * mom_weight]
+    n = len(cols) + mom_weight
     if extra:
         for c, sign in EXTRA.items():
             if c in df and df[c].notna().any():
