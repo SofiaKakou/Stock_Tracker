@@ -56,7 +56,8 @@ def test_study_candidates_runs_on_the_real_pipeline(model_db, tmp_path, monkeypa
                                      log=lambda *_: None)
     assert main(["study", "candidates", "--db", str(tmp_path / "market.db"), "--since", str(DATES[260].date())]) == 0
     out = capsys.readouterr().out
-    assert "Signals on probation" in out and "net_issuance" in out and "report_change" in out
+    assert "Signals on probation" in out and "red_flags" in out and "report_change" in out
+    assert "net_issuance  " not in out                                # promoted: no longer on probation
     assert candidates.load(model_db)["rows"]["report_change"]["verdict"] == "no data yet"
 
 

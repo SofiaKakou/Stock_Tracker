@@ -18,8 +18,8 @@ things.** It's a research assistant, not financial advice.
 
 **🌦️ Market weather**: is the S&P 500 above its average of the last 200 trading days?
 - ☀️ **Invest**: it's above, so the market is in an uptrend.
-- 🌧️ **Caution**: it's below. In the past this cut the worst drops roughly in half, but it also
-  sat in cash during some rebounds, which cost returns. Treat it as a warning, not a crystal ball.
+- 🌧️ **Caution**: it's below. A warning only: the top-ideas portfolio stays invested, because in
+  testing, moving to cash during these spells cost about 5% a year (it missed most rebounds).
 
 **💡 Top ideas (every signal, simple mix)**, weekly: the ~1,000 most traded stocks ranked on
 every signal (cheap, profitable, beating earnings, few short sellers, strong past year, ...),

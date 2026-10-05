@@ -110,7 +110,7 @@ def test_portfolio_backtest_of_the_top_ideas(tmp_path):
 
     con = db.connect(tmp_path / "m.db")
     ideas.save_backtest(con, m, 20)
-    assert "Holding the top 20 with the weather filter" in ideas.backtest_note(con)
+    assert "Holding the top 20, always invested" in ideas.backtest_note(con)
 
 
 def test_study_ideas_end_to_end(model_db, tmp_path, monkeypatch, capsys):
@@ -167,7 +167,7 @@ def test_portfolio_buys_top_and_sells_only_below_the_buffer(tmp_path):
     assert ("S01", "ideas_sell") in new and all((p["ticker"], "ideas_buy") in new for p in port["buys"])
 
     e = alerts.ideas_portfolio_embed(port, "note")
-    assert "Caution" in e["description"] and "S01" in e["description"] and "+20%" in e["description"]
+    assert "Heads-up" in e["description"] and "stays invested" in e["description"] and "S01" in e["description"] and "+20%" in e["description"]
 
 
 def test_monthly_portfolio_message_is_sent_once(model_db, tmp_path, monkeypatch):

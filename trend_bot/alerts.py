@@ -295,9 +295,9 @@ def ideas_portfolio_embed(port: dict, note: str, live: str = "") -> dict:
                      + f" · {p['why']}")
     sell = lambda p: (f"`{p['ticker']:<6}` " + (f"fell to rank {p['rank']}" if p.get("rank") else "no longer ranked")
                       + (f", {p['return']:+.0%} since {p['since']}" if p.get("return") is not None else ""))
-    weather = ("☀️ **Invest**: the S&P 500 is above its 200-day average." if port["invest"] else
-               "🌧️ **Caution**: the S&P 500 is below its 200-day average. The tested version held **cash** "
-               "until it recovers; the list below is what it would hold otherwise.")
+    weather = ("☀️ Market weather: the S&P 500 is above its 200-day average." if port["invest"] else
+               "🌧️ **Heads-up**: the S&P 500 is below its 200-day average, so expect a bumpier ride. The portfolio "
+               "stays invested: in testing, moving to cash during these spells cost more than it saved.")
     lines = [weather, "",
              f"**🟢 Buy ({len(port['buys'])})**" + (" - starting the portfolio" if port.get("first") else ""),
              *([buy(p) for p in port["buys"]] or ["nothing new"]), "",
