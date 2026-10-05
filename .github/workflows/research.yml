@@ -86,8 +86,9 @@ jobs:
           python -m trend_bot send-report --path reports/study-${{ inputs.study }}.txt \
             --message "🔬 Research run: study ${{ inputs.study }} ${{ inputs.args }} (results attached)" || true
 
+      # Always saved: studies also store decisions (ML verdict, mix choice, cap, probation board).
       - name: Save database
-        if: always() && inputs.refresh != 'none'
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: |

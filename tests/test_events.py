@@ -62,7 +62,9 @@ def test_red_flags_are_studied_but_stay_out_of_the_mix(model_db, tmp_path, monke
 
     for sig in events.SIGNALS:
         assert sig in fundamentals.EXPECTED and sig in fundamentals.DESCRIPTIONS
+    for sig in ("red_flags", "exec_changes"):                     # still on probation
         assert sig not in ml.SIGNALS and sig not in ml.FEATURES
+    assert "late_filing" in ml.SIGNALS and "net_issuance" in ml.SIGNALS   # promoted after passing
     years = list(range(DATES[0].year - 1, DATES[-1].year))
     data = bulk_zip(years)
     monkeypatch.setattr(fundamentals.insiders, "CACHE_DIR", tmp_path / "sec")

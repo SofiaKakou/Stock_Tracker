@@ -36,6 +36,7 @@ GOOD = {
     "days_to_cover": "shorts can exit easily", "short_change": "short sellers backing off",
     "short_volume_ratio": "little short selling", "mom12": "strong past year",
     "vol": "calm stock", "high52": "near its 52-week high",
+    "net_issuance": "buying back shares", "late_filing": "files reports on time",
 }
 BAD = {
     "gross_profitability": "weak profitability", "roe": "low return on equity",
@@ -47,6 +48,7 @@ BAD = {
     "days_to_cover": "crowded short", "short_change": "short sellers piling in",
     "short_volume_ratio": "lots of short selling", "mom12": "weak past year",
     "vol": "jumpy stock", "high52": "far below its 52-week high",
+    "net_issuance": "issuing lots of new shares", "late_filing": "filed a report late",
 }
 
 
@@ -302,7 +304,9 @@ def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> 
     halves = [monthly[monthly.index < mid], monthly[monthly.index >= mid]]
     cap = f"{base}_capped_always" in monthly and all(
         len(h) > 12 and rpr(h, f"{base}_capped_always") > rpr(h, f"{base}_always") for h in halves)
-    col = f"{base}_capped" if cap else base
+    # The portfolio to follow stays invested whatever the weather (going to cash cost about 5% a year
+    # in testing), so the note quotes the always-invested version.
+    col = f"{base}_capped_always" if cap else f"{base}_always"
     s = model.summarize(monthly, [col, "SPY"])
     if col not in s.index or "SPY" not in s.index:
         return
@@ -319,7 +323,7 @@ def backtest_note(con: sqlite3.Connection) -> str:
         return ""
     b = json.loads(raw)
     capped = f", at most {MAX_PER_INDUSTRY} per industry," if b.get("cap") else ""
-    return (f"Holding the top {b['hold']}{capped} with the weather filter, {b['from']}-{b['to']}: {b['cagr']:+.1%} a year "
+    return (f"Holding the top {b['hold']}{capped}, always invested, {b['from']}-{b['to']}: {b['cagr']:+.1%} a year "
             f"(worst drop {b['max_drawdown']:.0%}) vs the S&P 500's {b['spy_cagr']:+.1%} "
             f"(worst drop {b['spy_max_drawdown']:.0%}).")
 

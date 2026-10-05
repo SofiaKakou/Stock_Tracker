@@ -197,9 +197,9 @@ def _study_ideas(con, args: argparse.Namespace) -> None:
         min_count=1) - 1
     print("\nYear by year:\n" + yearly.rename(columns=ideas.NAMES).rename_axis("year").to_string(
         float_format=lambda v: f"{v:+.0%}", na_rep="–"))
-    beat = (yearly["mix"] > yearly["SPY"]).mean()
+    beat = (yearly["mix_always"] > yearly["SPY"]).mean()
     print(f"\nIn the market {monthly['invested'].mean():.0%} of months; about "
-          f"{monthly['mix_turnover'].mean():.0%} of the portfolio changed each month; the top ideas (+ weather) beat "
+          f"{monthly['mix_turnover'].mean():.0%} of the portfolio changed each month; the top ideas (always invested, as followed) beat "
           f"the S&P 500 in {beat:.0%} of years.")
     print("return_per_risk = yearly growth divided by volatility (higher is better). Companies that disappeared "
           "only count in their last month, so the real past was a little worse than this for every stock list.")
