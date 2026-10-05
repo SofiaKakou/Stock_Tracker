@@ -127,6 +127,66 @@ def _ideas_section(con: sqlite3.Connection, esc) -> list[str]:
             f'<p class="note"><b>How reliable is this?</b> {esc(ideas.reliability_note(con))}</p>']
 
 
+def _glance_section(con: sqlite3.Connection, esc) -> list[str]:
+    """The dashboard at the top: the portfolio to follow, how it's really doing vs the S&P 500,
+    red flags in its stocks, and the signals on probation."""
+    from trend_bot import candidates, events, ideas
+
+    parts = ["<h2>📋 At a glance</h2>"]
+    rec = ideas.live_record(con)
+    if rec and rec["spy"] is not None and rec["days"] >= 1:
+        ahead = rec["portfolio"] - rec["spy"]
+        tiles = [(_pct(rec["portfolio"]), f"top-ideas portfolio since {esc(rec['start'])}"),
+                 (_pct(rec["spy"]), "S&P 500 over the same days"),
+                 (f'<span class="{"up" if ahead >= 0 else "down"}">{ahead:+.1%}</span>',
+                  "ahead of the S&P 500" if ahead >= 0 else "behind the S&P 500")]
+        parts.append('<div class="tiles">' + "".join(
+            f'<div class="tile"><div class="n">{n}</div><div class="l">{l}</div></div>' for n, l in tiles) + "</div>")
+    elif rec:
+        parts.append(f'<p class="sub">The live record starts {esc(rec["start"])}; it is compared with the '
+                     "S&P 500 from then on.</p>")
+
+    held = pd.read_sql_query("SELECT * FROM ideas_holdings ORDER BY rank", con)
+    if held.empty:
+        parts.append('<p class="empty">The top-ideas portfolio starts at its first monthly update.</p>')
+    else:
+        closes = {t: df["Close"] for t, df in load_many(
+            con, list(held["ticker"]), start=(dt.date.today() - dt.timedelta(days=200)).isoformat()).items()}
+        rows = []
+        for h in held.itertuples(index=False):
+            c = closes.get(h.ticker, pd.Series(dtype=float))
+            now = float(c.iloc[-1]) if len(c) else float("nan")
+            rows.append([f"<b>{esc(h.ticker)}</b>", esc(str(h.since)), sparkline(c),
+                         f"{h.entry_price:,.2f}" if h.entry_price else "–", f"{now:,.2f}",
+                         _pct(now / h.entry_price - 1 if h.entry_price else None),
+                         esc(h.sector or "–"), esc(h.why or "")])
+        parts += ["<h3>The portfolio to follow</h3>",
+                  _table(["Ticker", "Since", "6 months", "Bought at", "Now", "Return", "Industry", "Mostly because"],
+                         rows, left={0, 1, 6, 7})]
+        cik_of = dict(con.execute(f"SELECT cik, ticker FROM tickers WHERE cik IS NOT NULL AND ticker IN "
+                                  f"({','.join('?' * len(held))})", list(held["ticker"])).fetchall())
+        flags = events.recent_flags(con, list(cik_of), days=90)
+        parts.append("<h3>🚩 Red flags in these stocks (last 90 days)</h3>")
+        parts.append(_table(["Ticker", "Filed", "What happened"],
+                            [[f"<b>{esc(cik_of[r.cik])}</b>", esc(r.filed), esc(events.describe(r.items))]
+                             for r in flags.itertuples(index=False)], left={0, 1, 2})
+                     if len(flags) else '<p class="empty">None.</p>')
+
+    board = candidates.load(con)
+    if board:
+        icon = {"PASSES": "✅", "promising": "🔶", "not proven": "❌"}
+        order = {"PASSES": 0, "promising": 1, "not proven": 2}
+        rows = [[f"{icon.get(r.get('verdict'), '⏳')} <b>{esc(n)}</b>", esc(r.get("verdict") or ""),
+                 f"{r['ic']:+.3f}" if r.get("ic") is not None else "–",
+                 f"{r['ic_t']:+.1f}" if r.get("ic_t") is not None else "–", esc(r.get("from") or "–")]
+                for n, r in sorted(board["rows"].items(), key=lambda kv: (order.get(kv[1].get("verdict"), 3), kv[0]))]
+        parts += [f"<h3>🧪 Signals on probation (checked {esc(board['date'])})</h3>",
+                  _table(["Signal", "Verdict", "IC", "t-stat", "Since"], rows, left={0, 1}),
+                  '<p class="note">✅ passed (t 3+, works in both halves and improves the mix); 🔶 promising '
+                  "(t 2-3); ❌ not proven; ⏳ not enough history. Nothing joins the top ideas without your OK.</p>"]
+    return parts
+
+
 def _ml_section(con: sqlite3.Connection, esc) -> list[str]:
     """The all-signal model's ideas, only if it passed its walk-forward test."""
     from trend_bot import ml
@@ -210,6 +270,7 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
         '<div class="tiles">' + "".join(f'<div class="tile"><div class="n">{n}</div><div class="l">{l}</div></div>'
                                         for n, l in tiles) + "</div>",
     ]
+    parts += _glance_section(con, esc)
     parts += _ideas_section(con, esc)
     parts += _outlook(con, esc)
     parts += _ml_section(con, esc)

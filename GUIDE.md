@@ -73,14 +73,19 @@ reports filed from now on are a fair test.
 
 **🧪 Signals on probation**, monthly: every new signal starts on probation (measured, but left
 out of the top ideas). ✅ means it worked in both halves of its history *and* made the top-ideas
-mix better in both halves; ⏳ means not enough history yet; ❌ not proven. A ✅ signal is only
-added if you say so.
+mix better in both halves, with a high bar against luck (t-stat 3+: when many signals are tested,
+some look good by chance); 🔶 promising: the same but t between 2 and 3, watched but not trusted;
+⏳ not enough history yet; ❌ not proven. A ✅ signal is only added if you say so.
 
 **⚠️ Bot health**: something is wrong with the bot itself, such as stale prices, a failed step,
 or the SEC asking it to slow down. It fixes itself on later runs in most cases; **silence means
 healthy**. "✅ all fine again" means it cleared.
 
 **📄 Daily report (HTML file)**: open it in your browser for everything above with charts.
+It opens with **📋 At a glance**: the portfolio to follow, how it's really doing vs the S&P 500,
+red flags in its stocks, and the signals on probation. It can also be published as a web page
+you open on your phone (optional, see the end of `.github/workflows/nightly.yml`; the page is
+public, like this repository).
 
 **🔬 Research run**: results of a test run started from the Actions tab (attached as a file).
 

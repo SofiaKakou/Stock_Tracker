@@ -94,7 +94,9 @@ def _study_candidates(con, args: argparse.Namespace) -> None:
     print(f"\nSignals on probation ({len(board)}), {df['month'].min():%Y-%m} to {df['month'].max():%Y-%m}:")
     print(candidates.text(board))
     print(f"\nTo pass, a signal must rank stocks the expected way in both halves of its own history (t-stat of "
-          f"{candidates.MIN_T:g}+ overall) AND make the simple mix rank better in both halves; at least "
+          f"{candidates.MIN_T:g}+ overall, a high bar because many signals are tested at once; "
+          f"{candidates.PROMISING_T:g}-{candidates.MIN_T:g} shows as 'promising') "
+          f"AND make the simple mix rank better in both halves; at least "
           f"{candidates.MIN_MONTHS} months per half. A passing signal is only added to the mix after you agree.")
     print("\nWhat each one is:")
     for n in sorted(ml.CANDIDATES):
