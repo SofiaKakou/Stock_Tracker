@@ -113,8 +113,11 @@ def gone_companies(con: sqlite3.Connection, priced: set[int]) -> pd.DataFrame:
 
 def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe: int = 1000,
                     min_price: float = 5, panel: dict[str, pd.DataFrame] | None = None,
-                    log=print, extras: bool = False, include_latest: bool = False) -> pd.DataFrame:
+                    log=print, extras: bool = False, include_latest: bool = False,
+                    workers: int | None = None) -> pd.DataFrame:
     """One row per (month, stock): every factor and next month's return.
+
+    workers: processes to spread the months over (default: the machine's cores, at most 4).
 
     extras: also the price features, last month's return and market value (for the ML model).
     include_latest: also the latest month, whose next-month return isn't known yet (ret = NaN).
@@ -144,51 +147,100 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
     industry = sectors.ticker_sectors(con)
     report_changes = text_changes.changes(con)
     red_flags = events.load(con)
-    rows = []
-    for k, month in enumerate(months):
-        feat = pd.DataFrame({f: panel[f].loc[month] for f in model.FEATURES})
-        feat = feat[model.eligible(feat, universe, min_price)]
-        f_all = fundamentals.as_of(facts, month)
-        if f_all.empty or "shares" not in f_all:
-            continue
-        f = f_all[f_all.index.isin(list(tickers))]
-        caps = market_caps(raw.loc[month] if month in raw.index else pd.Series(dtype=float),
-                           f["shares"], f["shares_date"], splits, tickers)
-        vals = fundamentals.factor_values(f, caps).join(earnings.latest(ev, month), how="left")
-        vals["net_issuance"] = net_issuance(f, splits, tickers)
-        for sig in text_changes.SIGNALS:
-            vals[sig] = text_changes.latest(report_changes, month, column=sig).reindex(vals.index)
-        # No event in the window means 0 events, not unknown.
-        if len(red_flags):
-            vals = vals.join(events.counts(red_flags, month), how="left").fillna({s: 0 for s in events.SIGNALS})
-        if extras:
-            vals["market_cap"] = caps
-        vals.index = [tickers[c] for c in vals.index]
-        if len(si) or len(sv):
-            by_t = lambda col: pd.Series(f[col].to_numpy(), index=[tickers[c] for c in f.index])
-            short = short_interest.factor_values(si, sv, month, by_t("shares"), by_t("shares_date"), splits)
-            vals = vals.join(short, how="left")
-        vals = vals[vals.index.isin(feat.index)]
-        if extras:
-            vals = vals.join(feat, how="left")   # close is kept for reference, not used as an input
-            vals["mom1"] = last1.loc[month, vals.index]
-        vals["ret"] = nxt.loc[month, vals.index]
-        vals["month"] = month
-        vals["sector"] = industry.reindex(vals.index).to_numpy()
-        if not (include_latest and month == month_ends[-1]):
-            vals = vals.dropna(subset=["ret"])
-            caps_t = pd.Series(caps.to_numpy(), index=[tickers[c] for c in caps.index])
-            dead = _gone_rows(gone, f_all, ev, month, month_ends, caps_t.reindex(vals.index).quantile(0.1),
-                              vals["ret"].mean())
-            if len(dead):
-                vals = pd.concat([vals, dead])
-        rows.append(vals.rename_axis("ticker").reset_index())
-        if (k + 1) % 24 == 0:
-            log(f"[factors] {k + 1}/{len(months)} months")
+    global _CTX
+    _CTX = dict(panel=panel, universe=universe, min_price=min_price, facts=facts, tickers=tickers, raw=raw,
+                splits=splits, ev=ev, si=si, sv=sv, nxt=nxt, last1=last1, month_ends=month_ends, gone=gone,
+                industry=industry, report_changes=report_changes, red_flags=red_flags, extras=extras,
+                include_latest=include_latest)
+    try:
+        rows = [r for r in _map_months(months, workers, log) if r is not None]
+    finally:
+        _CTX = {}
     out = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
     if len(out) and "gone" not in out:
         out["gone"] = np.nan
     return out
+
+
+# Data shared with the worker processes (filled in by monthly_factors; forked workers inherit it).
+_CTX: dict = {}
+
+
+def _factor_workers() -> int:
+    """How many processes build the monthly table: the machine's cores (at most 4), or FACTOR_WORKERS."""
+    import os
+
+    env = os.environ.get("FACTOR_WORKERS")
+    return max(1, int(env)) if env else min(4, os.cpu_count() or 1)
+
+
+def _map_months(months: list, workers: int | None, log) -> list:
+    """_month_rows for every month, in order; spread over processes when it's worth it (Linux/macOS fork)."""
+    import multiprocessing as mp
+
+    workers = _factor_workers() if workers is None else workers
+    out = []
+    if workers > 1 and len(months) >= 12 and "fork" in mp.get_all_start_methods():
+        with mp.get_context("fork").Pool(workers) as pool:
+            for k, r in enumerate(pool.imap(_month_rows, months, chunksize=4)):
+                out.append(r)
+                if (k + 1) % 24 == 0:
+                    log(f"[factors] {k + 1}/{len(months)} months ({workers} processes)")
+        return out
+    for k, month in enumerate(months):
+        out.append(_month_rows(month))
+        if (k + 1) % 24 == 0:
+            log(f"[factors] {k + 1}/{len(months)} months")
+    return out
+
+
+def _month_rows(month: pd.Timestamp) -> pd.DataFrame | None:
+    """Every factor for one month-end (one row per stock), from the data prepared in monthly_factors."""
+    ctx = _CTX
+    panel, universe, min_price, facts, tickers = (ctx["panel"], ctx["universe"], ctx["min_price"], ctx["facts"],
+                                                  ctx["tickers"])
+    raw, splits, ev, si, sv = ctx["raw"], ctx["splits"], ctx["ev"], ctx["si"], ctx["sv"]
+    nxt, last1, month_ends, gone, industry = (ctx["nxt"], ctx["last1"], ctx["month_ends"], ctx["gone"],
+                                              ctx["industry"])
+    report_changes, red_flags, extras, include_latest = (ctx["report_changes"], ctx["red_flags"], ctx["extras"],
+                                                          ctx["include_latest"])
+    feat = pd.DataFrame({f: panel[f].loc[month] for f in model.FEATURES})
+    feat = feat[model.eligible(feat, universe, min_price)]
+    f_all = fundamentals.as_of(facts, month)
+    if f_all.empty or "shares" not in f_all:
+        return None
+    f = f_all[f_all.index.isin(list(tickers))]
+    caps = market_caps(raw.loc[month] if month in raw.index else pd.Series(dtype=float),
+                       f["shares"], f["shares_date"], splits, tickers)
+    vals = fundamentals.factor_values(f, caps).join(earnings.latest(ev, month), how="left")
+    vals["net_issuance"] = net_issuance(f, splits, tickers)
+    for sig in text_changes.SIGNALS:
+        vals[sig] = text_changes.latest(report_changes, month, column=sig).reindex(vals.index)
+    # No event in the window means 0 events, not unknown.
+    if len(red_flags):
+        vals = vals.join(events.counts(red_flags, month), how="left").fillna({s: 0 for s in events.SIGNALS})
+    if extras:
+        vals["market_cap"] = caps
+    vals.index = [tickers[c] for c in vals.index]
+    if len(si) or len(sv):
+        by_t = lambda col: pd.Series(f[col].to_numpy(), index=[tickers[c] for c in f.index])
+        short = short_interest.factor_values(si, sv, month, by_t("shares"), by_t("shares_date"), splits)
+        vals = vals.join(short, how="left")
+    vals = vals[vals.index.isin(feat.index)]
+    if extras:
+        vals = vals.join(feat, how="left")   # close is kept for reference, not used as an input
+        vals["mom1"] = last1.loc[month, vals.index]
+    vals["ret"] = nxt.loc[month, vals.index]
+    vals["month"] = month
+    vals["sector"] = industry.reindex(vals.index).to_numpy()
+    if not (include_latest and month == month_ends[-1]):
+        vals = vals.dropna(subset=["ret"])
+        caps_t = pd.Series(caps.to_numpy(), index=[tickers[c] for c in caps.index])
+        dead = _gone_rows(gone, f_all, ev, month, month_ends, caps_t.reindex(vals.index).quantile(0.1),
+                          vals["ret"].mean())
+        if len(dead):
+            vals = pd.concat([vals, dead])
+    return vals.rename_axis("ticker").reset_index()
 
 
 def _gone_rows(gone: pd.DataFrame, f_all: pd.DataFrame, ev: pd.DataFrame, month: pd.Timestamp,
