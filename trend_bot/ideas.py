@@ -292,23 +292,35 @@ CONSTRUCTION = {
     "core70": "70% S&P 500 + 30% top 20",
     "core50": "50% S&P 500 + 50% top 20",
     "mom3": "Top 20, momentum counted 3x",
+    "no_flags": "Top 20, selling on 8-K red flags",
+    "stop30": "Top 20, selling after a 30% drop",
     "SPY": "S&P 500 (buy & hold)",
 }
+STOP_LOSS = 0.30   # stop30: sell a holding once it's this far below its buy price
 
 
 def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, cost: float,
-                  by_size: bool = False) -> pd.Series:
+                  by_size: bool = False, exclude: pd.Series | None = None, stop: float | None = None) -> pd.Series:
     """Monthly returns of holding the top `hold` by `score` (kept while in the top `buffer`), always
-    invested, after trading costs. by_size: weighted by market value instead of equally."""
+    invested, after trading costs. by_size: weighted by market value instead of equally.
+    exclude: rows (aligned with df) that may not be held that month (sold if held, never bought).
+    stop: sell a holding once it's this fraction below its buy price (not bought back that month)."""
     from trend_bot import model
 
     held: list[str] = []
+    growth: dict[str, float] = {}   # value of each holding relative to its buy price
     out = {}
-    for month, g in df.assign(score=score).dropna(subset=["score"]).groupby("month"):
+    d = df.assign(score=score, _excl=False if exclude is None else exclude.to_numpy())
+    for month, g in d.dropna(subset=["score"]).groupby("month"):
         if len(g) < hold * 3:
             continue
         g = g.set_index("ticker")
-        new, buys, _ = model.rebalance(g["score"].sort_values(ascending=False), held, hold, buffer)
+        blocked = set(g.index[g["_excl"].astype(bool)])
+        if stop is not None:
+            blocked |= {t for t in held if growth.get(t, 1.0) < 1 - stop}
+        held = [t for t in held if t not in blocked]
+        ranked = g["score"].drop(index=list(blocked & set(g.index))).sort_values(ascending=False)
+        new, buys, _ = model.rebalance(ranked, held, hold, buffer)
         r = g["ret"].reindex(new)
         if by_size and "market_cap" in g:
             w = g["market_cap"].reindex(new)
@@ -318,6 +330,8 @@ def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, co
         ok = r.notna()
         gross = float((r[ok] * w[ok]).sum() / w[ok].sum()) if ok.any() else 0.0
         out[month + pd.offsets.MonthEnd(1)] = gross - cost * len(buys) / hold
+        growth = {t: (1.0 if t in buys else growth.get(t, 1.0)) * (1 + (r[t] if pd.notna(r[t]) else 0.0))
+                  for t in new}
         held = new
     return pd.Series(out, dtype=float)
 
@@ -335,7 +349,12 @@ def construction_test(df: pd.DataFrame, spy: pd.Series, extra: bool = False, by_
         "top50": _hold_returns(df, base, 50, 100, cost),
         "top20_size": _hold_returns(df, base, 20, 40, cost, by_size=True),
         "mom3": _hold_returns(df, scores(df, by_sector, extra, mom_weight=3.0), 20, 40, cost),
+        "stop30": _hold_returns(df, base, 20, 40, cost, stop=STOP_LOSS),
     }).sort_index()
+    # Serious 8-K warning signs or a late-filing notice in the last 6 months (see events.py).
+    flags = [c for c in ("red_flags", "late_filing") if c in df and df[c].notna().any()]
+    if flags:
+        res["no_flags"] = _hold_returns(df, base, 20, 40, cost, exclude=(df[flags].fillna(0) > 0).any(axis=1))
     spy_m = model._monthly_last(spy)
     months = res.index - pd.offsets.MonthEnd(1)
     res["SPY"] = (spy_m.shift(-1) / spy_m - 1).reindex(months).to_numpy()

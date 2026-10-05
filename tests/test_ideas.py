@@ -244,7 +244,7 @@ def test_construction_variants_use_the_same_ranking():
     assert (m["top50"] != m["top20"]).any() and (m["top20_size"] != m["top20"]).any()
     assert m["top20"].mean() > m["top50"].mean() > 0          # the edge is strongest at the very top here
     v = ideas.construction_verdicts(m)
-    assert set(v.index) == {"top50", "top20_size", "core70", "core50", "mom3"}
+    assert set(v.index) == {"top50", "top20_size", "core70", "core50", "mom3", "stop30", "no_flags"}
     assert v.dtypes.apply(lambda d: d == bool or d == object).all()
 
 
@@ -255,3 +255,35 @@ def test_momentum_weight_tilts_the_mix():
     tilted = ml.simple_mix(df, mom_weight=3.0)
     mom = df.groupby("month")["mom12"].rank(pct=True)
     assert tilted.corr(mom) > plain.corr(mom)
+
+
+def test_stop_loss_and_red_flag_sells():
+    df = panel_with_edge(months=24, n=150)
+    cost = 0.002
+    base = ideas.scores(df)
+    plain = ideas._hold_returns(df, base, 20, 40, cost)
+    # Flag the five best-ranked stocks every month: they can never be held.
+    top5 = base.groupby(df["month"]).rank(ascending=False) <= 5
+    flagged = ideas._hold_returns(df, base, 20, 40, cost, exclude=top5)
+    assert (flagged != plain).any()
+    assert ideas._hold_returns(df, base, 20, 40, cost, exclude=pd.Series(False, index=df.index)).equals(plain)
+    # A stop that never triggers changes nothing; a crash in one holding makes it sell.
+    assert ideas._hold_returns(df, base, 20, 40, cost, stop=0.99).equals(plain)
+    # T0 is always ranked first, so the plain rule always holds it; it halves in the first month.
+    score = base.where(df["ticker"] != "T0", 99.0)
+    crashed = df.copy()
+    crashed.loc[(crashed["ticker"] == "T0") & (crashed["month"] == crashed["month"].min()), "ret"] = -0.5
+    a = ideas._hold_returns(crashed, score, 20, 40, cost)
+    b = ideas._hold_returns(crashed, score, 20, 40, cost, stop=0.30)
+    assert a.iloc[0] == b.iloc[0]          # same holdings until the drop is known
+    assert a.iloc[1] != b.iloc[1]          # then the stop sells T0 for a month
+
+
+def test_construction_includes_the_sell_rules_when_flags_exist():
+    df = panel_with_edge(months=30, n=150)
+    df["red_flags"] = (df["ticker"] == "T3").astype(float)
+    days = pd.bdate_range("2018-12-01", "2021-09-30")
+    spy = pd.Series(np.linspace(100, 140, len(days)), index=days)
+    m = ideas.construction_test(df, spy)
+    assert {"stop30", "no_flags"} <= set(m.columns)
+    assert "no_flags" not in ideas.construction_test(df.drop(columns=["red_flags", "late_filing"]), spy)
