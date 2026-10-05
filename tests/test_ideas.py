@@ -228,3 +228,30 @@ def test_backtest_runs_capped_versions_and_picks_the_cap_only_if_it_helps(tmp_pa
     db.set_meta(con, "ideas_backtest", json.dumps({"cap": False}))
     port = ideas.update_portfolio(con, r, "2026-09-30", {"invest": True}, hold=20, buffer=40)
     assert [p["ticker"] for p in port["buys"]] == names[:20]
+
+
+def test_construction_variants_use_the_same_ranking():
+    df = panel_with_edge(months=48, n=180)
+    df["market_cap"] = np.where(df["ticker"].str[1:].astype(int) < 10, 1e12, 1e9)   # a few giants
+    days = pd.bdate_range("2018-12-01", "2023-03-31")
+    spy = pd.Series(np.linspace(100, 160, len(days)), index=days)
+    m = ideas.construction_test(df, spy)
+    assert list(m.columns) == list(ideas.CONSTRUCTION)
+    # The equal-weight top 20 is exactly the "always invested" rule the main backtest uses.
+    main = ideas.backtest(df, spy, hold=20, buffer=40)
+    pd.testing.assert_series_equal(m["top20"], main["mix_always"].reindex(m.index), check_names=False)
+    assert np.allclose(m["core70"], 0.7 * m["SPY"] + 0.3 * m["top20"])
+    assert (m["top50"] != m["top20"]).any() and (m["top20_size"] != m["top20"]).any()
+    assert m["top20"].mean() > m["top50"].mean() > 0          # the edge is strongest at the very top here
+    v = ideas.construction_verdicts(m)
+    assert set(v.index) == {"top50", "top20_size", "core70", "core50", "mom3"}
+    assert v.dtypes.apply(lambda d: d == bool or d == object).all()
+
+
+def test_momentum_weight_tilts_the_mix():
+    df = panel_with_edge(months=3, n=60)
+    plain = ml.simple_mix(df)
+    assert np.allclose(ml.simple_mix(df, mom_weight=1.0), plain)
+    tilted = ml.simple_mix(df, mom_weight=3.0)
+    mom = df.groupby("month")["mom12"].rank(pct=True)
+    assert tilted.corr(mom) > plain.corr(mom)

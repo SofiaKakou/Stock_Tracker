@@ -204,8 +204,35 @@ def _study_ideas(con, args: argparse.Namespace) -> None:
     print("return_per_risk = yearly growth divided by volatility (higher is better). Companies that disappeared "
           "only count in their last month, so the real past was a little worse than this for every stock list.")
     ideas.save_backtest(con, monthly, args.hold)
+    _construction_section(df, spy, ideas, con, args)
     print(f"The portfolio to follow will {'use' if ideas.use_cap(con) else 'not use'} the cap of "
           f"{ideas.MAX_PER_INDUSTRY} per industry (used only if it gave more return per risk in both halves).")
+
+
+def _construction_section(df, spy, ideas, con, args) -> None:
+    """How else the same ranking could be turned into a portfolio (shown, never switched automatically)."""
+    from trend_bot import model
+
+    test = ideas.construction_test(df, spy, extra=ideas.extra(con), by_sector=ideas.method(con) == "industry_mix")
+    if test.empty:
+        return
+    fmt = {"cagr": "{:+.1%}".format, "volatility": "{:.0%}".format, "max_drawdown": "{:.0%}".format,
+           "return_per_risk": "{:.2f}".format, "total": "{:+.0%}".format}
+    print("\n\n##### How to build the portfolio (all always invested, 0.1% per trade) #####")
+    split = pd.Timestamp(f"{args.split_year}-01-01")
+    for label, part in (("All years", test), (f"before {args.split_year}", test[test.index < split]),
+                        (f"{args.split_year} on", test[test.index >= split])):
+        if part.empty:
+            continue
+        s = model.summarize(part, list(test.columns)).rename(index=ideas.CONSTRUCTION)
+        print(f"\n== {label}: {part.index[0]:%Y-%m} to {part.index[-1]:%Y-%m} ==\n" + s.to_string(formatters=fmt))
+    v = ideas.construction_verdicts(test)
+    yes = lambda b: "yes" if b else "no"
+    print("\nEach half of the history (split in the middle):")
+    for c, r in v.iterrows():
+        print(f"  {ideas.CONSTRUCTION[c]:<38} beats the S&P 500 in both halves: {yes(r['beats_spy_both_halves'])}; "
+              f"more return per risk than the top 20 in both: {yes(r['better_risk_than_top20_both'])}")
+    print("Nothing here changes the portfolio by itself: a switch is your call after seeing these numbers.")
 
 
 def _study_forecast(con, args: argparse.Namespace) -> None:
