@@ -138,7 +138,8 @@ def _update_reports(con, limit: int) -> None:
     from trend_bot import factors, sec_submissions, text_changes
 
     sec_submissions.update(con)  # the list of reports comes from the weekly bulk file
-    universe = set(factors.primary_tickers(con))
+    # Only companies the studies can pick: ever among the 1,000 most traded (about a third of all).
+    universe = set(factors.primary_tickers(con)) & text_changes.liquid_ciks(con)
     n = text_changes.update(con, limit=limit, ciks=universe)
     left = len(text_changes.to_fetch(con, universe))
     print(f"[reports] {n:,} reports read; {left:,} still to read" if n or left else "[reports] all read")

@@ -188,3 +188,29 @@ def test_reports_read_before_tone_existed_are_read_again(tmp_path):
     assert list(text_changes.to_fetch(con)["accession"]) == ["a"]
     text_changes.update(con, fetch=lambda url: doc(1), log=lambda *_: None)
     assert text_changes.to_fetch(con).empty
+
+
+def test_recent_reports_of_every_company_come_first(tmp_path):
+    con = db.connect(tmp_path / "m.db")
+    today = pd.Timestamp.today()
+    day = lambda n: str((today - pd.Timedelta(days=n)).date())
+    add_filings(con, [("old-new", 1, "10-K", day(900), None, "a.htm"),     # company 1, 2.5 years ago
+                      ("rec-a", 2, "10-Q", day(30), None, "b.htm"),        # recent
+                      ("rec-b", 3, "10-K", day(380), None, "c.htm"),       # a year ago: still in the first pass
+                      ("old-z", 2, "10-K", day(700), None, "d.htm")])
+    assert list(text_changes.to_fetch(con)["accession"]) == ["rec-a", "rec-b", "old-z", "old-new"]
+    assert list(text_changes.to_fetch(con, ciks={2})["accession"]) == ["rec-a", "old-z"]
+
+
+def test_liquid_companies_are_the_most_traded_in_some_year(tmp_path):
+    con = db.connect(tmp_path / "m.db")
+    con.executemany("INSERT INTO tickers(ticker, cik) VALUES (?, ?)",
+                    [("BIG", 1), ("WAS", 2), ("TINY", 3), ("ETFX", None)])
+    rows = []
+    for year, vols in ((2015, {"BIG": 9e6, "WAS": 5e6, "TINY": 1e3, "ETFX": 8e6}),
+                       (2024, {"BIG": 9e6, "WAS": 3e3, "TINY": 2e3, "ETFX": 8e6})):
+        for t, v in vols.items():
+            rows.append((t, f"{year}-06-01", 10.0, v))
+    con.executemany("INSERT INTO prices(ticker, date, close, volume) VALUES (?, ?, ?, ?)", rows)
+    assert text_changes.liquid_ciks(con, top=2) == {1, 2}            # funds (no cik) don't count; TINY never made it
+    assert text_changes.liquid_ciks(con, top=1, since_year=2020) == {1}
