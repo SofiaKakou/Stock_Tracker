@@ -46,6 +46,8 @@ BUCKETS = 8192
 FIRST_YEAR = 2009        # XBRL financials start here, so the other signals do too
 FRESH_DAYS = 200         # a report change counts for about two quarters
 MIN_WORDS = 2000         # shorter documents are usually cover pages or exhibits, not the report
+RECENT_DAYS = 430        # read every company's last ~5 quarters first: enough for the year-on-year signals
+LIQUID_TOP = 1000        # only companies that were among the most traded in some year (the studies' universe)
 MIN_RISK_WORDS = 300     # shorter "risk factors" are usually "no material changes" notes
 TONE_VERSION = 1         # bump when the word lists change, so reports are re-read
 
@@ -157,15 +159,34 @@ def risk_section(ws: list[str]) -> list[str]:
 
 # --- Downloading ----------------------------------------------------------------------------
 
-def to_fetch(con: sqlite3.Connection, ciks: set[int] | None = None, since_year: int = FIRST_YEAR) -> pd.DataFrame:
-    """Reports not read yet, newest first (so today's signal is ready before the history fills in)."""
+def liquid_ciks(con: sqlite3.Connection, top: int = LIQUID_TOP, since_year: int = FIRST_YEAR) -> set[int]:
+    """Companies whose stock was among the `top` most traded (average daily $ volume) in at least one
+    year since `since_year`: the ones the studies and the top ideas can ever pick."""
+    dv = pd.read_sql_query(
+        """SELECT p.ticker, substr(p.date, 1, 4) AS year, AVG(p.close * p.volume) AS dv, t.cik
+           FROM prices p JOIN tickers t ON t.ticker = p.ticker
+           WHERE p.date >= ? AND t.cik IS NOT NULL
+           GROUP BY p.ticker, year""", con, params=[f"{since_year}-01-01"])
+    if dv.empty:
+        return set()
+    dv = dv.dropna(subset=["dv"])
+    best = dv[dv.groupby("year")["dv"].rank(ascending=False, method="first") <= top]
+    return {int(c) for c in best["cik"]}
+
+
+def to_fetch(con: sqlite3.Connection, ciks: set[int] | None = None, since_year: int = FIRST_YEAR,
+             recent_days: int = RECENT_DAYS) -> pd.DataFrame:
+    """Reports not read yet. First every company's reports from the last `recent_days` (today's
+    report and the one a year earlier, so the year-on-year signals work right away), then the
+    rest newest first as the history fills in."""
+    cutoff = (pd.Timestamp.today() - pd.Timedelta(days=recent_days)).strftime("%Y-%m-%d")
     df = pd.read_sql_query(
         """SELECT f.accession, f.cik, f.form, f.filed, f.primary_doc FROM filings f
            LEFT JOIN doc_vectors v ON v.accession = f.accession
            WHERE (v.accession IS NULL OR (v.words > 0 AND COALESCE(v.tone_version, 0) < ?))
              AND f.primary_doc IS NOT NULL AND f.filed >= ?
-           ORDER BY f.filed DESC""", con, params=[TONE_VERSION, f"{since_year}-01-01"])
-    return df[df["cik"].isin(ciks)] if ciks is not None else df
+           ORDER BY (f.filed >= ?) DESC, f.filed DESC""", con, params=[TONE_VERSION, f"{since_year}-01-01", cutoff])
+    return df[df["cik"].isin(ciks)].reset_index(drop=True) if ciks is not None else df
 
 
 def update(con: sqlite3.Connection, limit: int = 2500, ciks: set[int] | None = None,

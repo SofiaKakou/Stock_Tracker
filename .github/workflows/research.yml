@@ -16,7 +16,7 @@ on:
         type: string
         default: ""
       refresh:
-        description: "Refresh data first? fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = industry codes and what happened to every company that disappeared, from the SEC's bulk file (~15 min); reports = read up to 6,000 annual/quarterly reports for the 'report changed' signal (~1-2 h); full = whole nightly update"
+        description: "Refresh data first? fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = industry codes and what happened to every company that disappeared, from the SEC's bulk file (~15 min); reports = read up to 12,000 annual/quarterly reports for the text signals (~1-2 h); full = whole nightly update"
         type: choice
         default: none
         options: [none, fundamentals, short, fates, reports, full]
@@ -62,7 +62,7 @@ jobs:
           elif [ "${{ inputs.refresh }}" = "fates" ]; then
             python -m trend_bot db update --fates-only --sec-lookups 20000 || echo "::warning::refresh did not finish"
           elif [ "${{ inputs.refresh }}" = "reports" ]; then
-            python -m trend_bot db update --reports-only --report-downloads 6000 || echo "::warning::refresh did not finish"
+            python -m trend_bot db update --reports-only --report-downloads 12000 || echo "::warning::refresh did not finish"
           elif [ "${{ inputs.refresh }}" = "short" ]; then
             python -m trend_bot db update --short-only || echo "::warning::refresh did not finish"
           else
