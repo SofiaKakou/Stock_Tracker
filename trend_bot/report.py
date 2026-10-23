@@ -125,7 +125,7 @@ def _table(headers: list[str], rows: list[list[str]], left: set[int] = frozenset
 
 def _ideas_section(con: sqlite3.Connection, esc) -> list[str]:
     """The monthly simple-mix ideas with the reasons, and how reliable they've been."""
-    from trend_bot import ideas
+    from trend_bot import ideas, paper
 
     r = ideas.load(con)
     if not r:
@@ -140,6 +140,7 @@ def _ideas_section(con: sqlite3.Connection, esc) -> list[str]:
             "<h3>💡 Best scores</h3>", _table(heads, [row(p) for p in r["top"]], left={0, 2, 3}),
             "<h3>⚠️ Worst scores (more likely to lag)</h3>", _table(heads, [row(p) for p in r["bottom"]], left={0, 2, 3}),
             *([f'<p class="note">{esc(ideas.live_line(con).replace("**", ""))}</p>'] if ideas.live_line(con) else []),
+            *([f'<p class="note">{esc(paper.line(con).replace("**", ""))}</p>'] if paper.line(con) else []),
             f'<p class="note"><b>How reliable is this?</b> {esc(ideas.reliability_note(con))}</p>']
 
 

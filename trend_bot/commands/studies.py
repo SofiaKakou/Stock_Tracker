@@ -248,8 +248,34 @@ def _study_ideas(con, args: argparse.Namespace) -> None:
           "only count in their last month, so the real past was a little worse than this for every stock list.")
     ideas.save_backtest(con, monthly, args.hold)
     _construction_section(df, spy, ideas, con, args)
+    _morning_section(df, ideas, con, args)
     print(f"The portfolio to follow will {'use' if ideas.use_cap(con) else 'not use'} the cap of "
           f"{ideas.MAX_PER_INDUSTRY} per industry (used only if it gave more return per risk in both halves).")
+
+
+def _morning_section(df, ideas, con, args) -> None:
+    """The tests buy at the month-end close; in real life you buy the next morning. How much does it matter?"""
+    from trend_bot.db import load_many
+
+    d = df.dropna(subset=["ret"]).reset_index(drop=True)
+    record: list = []
+    ideas._hold_returns(d, ideas.scores(d, extra=ideas.extra(con)), args.hold, args.buffer, 0.0, record=record)
+    held = sorted({t for r in record for t in r["held"]})
+    if not held:
+        return
+    prices = {t: p[["Open", "Close"]].dropna() for t, p in load_many(con, held, start=str(record[0]["month"].date()))
+              .items()}
+    m = ideas.next_morning(record, prices)
+    if m.empty:
+        return
+    gap = m["morning"] - m["close"]
+    yearly = lambda r: (1 + r).prod() ** (12 / len(r)) - 1
+    print(f"\nBuying the next morning instead of at the close ({len(m)} months, same stocks, before costs):\n"
+          f"  bought at the month-end close (as tested): {yearly(m['close']):+.1%}/yr\n"
+          f"  bought at the next morning's open (as you really can): {yearly(m['morning']):+.1%}/yr\n"
+          f"  difference: {yearly(m['morning']) - yearly(m['close']):+.1%}/yr; the morning was worse in "
+          f"{(gap < 0).mean():.0%} of months (average month {gap.mean():+.2%}).")
+    print("  (The demo account buys at the next open too, so this is the gap to expect between it and the tests.)")
 
 
 def _construction_section(df, spy, ideas, con, args) -> None:

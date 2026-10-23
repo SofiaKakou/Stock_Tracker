@@ -4,7 +4,7 @@ A free research assistant for the US stock market. Every weekday evening it runs
 servers, scores about 1,000 large US stocks, suggests a 20-stock portfolio once a month, warns about
 problems in the stocks you follow, and sends everything to Discord and your email.
 
-> **It never trades and it isn't financial advice.** In 20 years of honest testing its best picks
+> **It never trades real money (the optional demo account uses fake money) and it isn't financial advice.** In 20 years of honest testing its best picks
 > beat the *average* stock but not reliably an S&P 500 index fund, especially since 2018, so for real
 > money the index fund is the default. The bot is for ideas, warnings and learning.
 
@@ -22,6 +22,7 @@ New to the market? Start with **[GUIDE.md](GUIDE.md)**: what every message means
 - ⚠️ **Bot health**: tells you when something breaks (old prices, SEC limits) and when it's fixed
 - 🔎 **"Why isn't this stock ranked?"**: a one-click lookup that explains any ticker
 - 📒 **Logbook**: every run logged; every result stamped with the code and data that made it
+- 🧪 **Demo account** (optional): follows the portfolio with fake money on Alpaca paper trading, vs the S&P 500
 
 **Honest testing** (the core of the project)
 - Walk-forward tests: every year is judged by rules made only from earlier years
@@ -59,6 +60,7 @@ The database lives in the Actions cache between runs.
    - `DISCORD_WEBHOOK_URL`: a Discord channel webhook
    - `SEC_USER_AGENT`: your name and email, e.g. `Jane Doe jane@example.com` (the SEC requires it)
    - optional email: `EMAIL_USER`, `EMAIL_APP_PASSWORD` (a Gmail app password), `EMAIL_TO`
+   - optional demo account: `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY` (Alpaca **paper** keys; see GUIDE.md)
 2. **First data load**: Actions → *Research run* → refresh `full`. Then the nightly run keeps it up to date.
 3. Optional: put your tickers in `watchlist.txt`.
 

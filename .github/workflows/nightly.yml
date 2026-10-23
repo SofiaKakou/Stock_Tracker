@@ -83,6 +83,14 @@ jobs:
       - name: Discord alerts
         run: python -m trend_bot alert --summary --market --model --forecast
 
+      # Optional: the demo account (fake money on Alpaca's paper trading) follows the portfolio.
+      # Does nothing until the ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY secrets exist (GUIDE.md).
+      - name: Demo account
+        env:
+          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+          ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+        run: python -m trend_bot paper --discord || echo "the demo account step failed" >> reports/problems.txt
+
       - name: Report
         run: |
           python -m trend_bot report

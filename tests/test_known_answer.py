@@ -66,3 +66,17 @@ def test_the_database_step_computes_returns_and_momentum_from_the_prices(model_d
             momentum += 1
         checked += 1
     assert checked == 200 and momentum > 50
+
+
+def test_next_morning_vs_close_on_known_prices():
+    days = pd.bdate_range("2020-01-01", "2020-04-30")
+    # Every close is 1% above that morning's open; prices rise 0.1% a day.
+    close = pd.Series(100 * 1.001 ** np.arange(len(days)), index=days)
+    prices = {"A": pd.DataFrame({"Open": close / 1.01, "Close": close})}
+    record = [{"month": pd.Timestamp(m), "held": ["A"]} for m in ("2020-01-31", "2020-02-29", "2020-03-31")]
+    m = ideas.next_morning(record, prices)
+    assert list(m.index) == [pd.Timestamp("2020-02-29"), pd.Timestamp("2020-03-31")]
+    feb = close.loc["2020-02"]
+    assert m.loc["2020-02-29", "close"] == pytest.approx(feb.iloc[-1] / close.loc[:"2020-01-31"].iloc[-1] - 1)
+    # Morning to morning covers the same number of trading days, so it's the same 0.1%/day growth.
+    assert m.loc["2020-02-29", "morning"] == pytest.approx(1.001 ** len(feb) - 1)

@@ -307,6 +307,38 @@ def cmd_send_email(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_paper(args: argparse.Namespace) -> int:
+    """Demo account: follow the portfolio on Alpaca's paper-trading account (fake money)."""
+    from trend_bot import db, ideas, paper
+
+    client = paper.Paper.from_env()
+    if client is None:
+        print(f"The demo account isn't set up ({paper.KEY_ENV} / {paper.SECRET_ENV}); skipped. "
+              "See GUIDE.md, 'Demo account'.")
+        return 0
+    with closing(db.connect(args.db)) as con:
+        try:
+            res = paper.sync(con, client, dry_run=args.dry_run)
+        except paper.PaperError as e:
+            print(f"[demo] the broker refused: {e}", file=sys.stderr)
+            return 1
+        print(f"[demo] account value ${res['status']['equity']:,.0f}"
+              + (f"; nothing to do: {res['skipped']}" if res["skipped"] else ""))
+        for s, side, qty in res.get("planned", []):
+            print(f"  would {side} {qty:,} {s}")
+        line = paper.line(con)
+        if line:
+            print(line.replace("**", ""))
+        port = ideas.load_portfolio(con)
+        e = paper.embed(res, port["date"]) if port and not args.dry_run else None
+    if e and args.discord:
+        from trend_bot import alerts
+
+        if alerts.load_webhook():
+            alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [e]})
+    return 0
+
+
 def cmd_why(args: argparse.Namespace) -> int:
     """Why is (or isn't) a stock in the ranking? Plain answers; with --discord, posted there too."""
     from trend_bot import alerts, coverage, db
