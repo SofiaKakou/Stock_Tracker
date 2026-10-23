@@ -552,6 +552,12 @@ def cmd_study(args: argparse.Namespace) -> int:
         if args.signal == "ml":
             _study_ml(con, args)
             return 0
+        if args.signal == "audit":
+            from trend_bot import coverage
+
+            print("Data audit: checks on the stored data for mistakes that quietly distort tests.\n")
+            print(coverage.audit_text(coverage.audit(con)))
+            return 0
         if args.signal == "mllab":
             _study_ml_lab(con, args)
             return 0

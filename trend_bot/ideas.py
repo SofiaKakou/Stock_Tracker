@@ -85,6 +85,7 @@ def rank_month(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -
     ranks = oriented_ranks(now, by_sector, extra)
     now["score"] = ml.simple_mix(now, by_sector, extra)
     now["signals"] = ranks.notna().sum(axis=1)
+    too_few = now.loc[now["signals"] < MIN_SIGNALS].set_index("ticker")["signals"].astype(int).to_dict()
     now = now[now["signals"] >= MIN_SIGNALS].dropna(subset=["score"])
     now["pct"] = now["score"].rank(pct=True)
     now = now.sort_values("score", ascending=False)
@@ -92,7 +93,9 @@ def rank_month(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -
     now["why"] = [reasons(ranks.loc[i], best=j < k) for j, i in enumerate(now.index)]
     if "sector" not in now:
         now["sector"] = None
-    return now.set_index("ticker")[["score", "pct", "close", "signals", "sector", "why"]]
+    out = now.set_index("ticker")[["score", "pct", "close", "signals", "sector", "why"]]
+    out.attrs["too_few"] = too_few        # in the universe, but with fewer than MIN_SIGNALS measures known
+    return out
 
 
 def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd.DataFrame, str]:

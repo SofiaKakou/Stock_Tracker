@@ -30,6 +30,7 @@ from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
     cmd_send_email,
+    cmd_why,
     cmd_track,
     cmd_report,
     cmd_model,
@@ -174,7 +175,7 @@ def make_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
     st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml",
-                                       "ideas", "candidates", "lookahead", "mllab"])
+                                       "ideas", "candidates", "lookahead", "mllab", "audit"])
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
     st.add_argument("--months", help="lookahead: month-ends to check, e.g. 2012-06-30,2021-06-30")
     st.add_argument("--trees", type=int, default=300, help="ml: boosting rounds (default 300)")
@@ -242,6 +243,12 @@ def make_parser() -> argparse.ArgumentParser:
     sc2 = sub.add_parser("sec-check", help="one small SEC request: is the SEC still refusing us? (lifts the pause if not)")
     sc2.add_argument("--db", default="market.db", help="database file (default: market.db)")
     sc2.set_defaults(func=cmd_sec_check)
+
+    wy = sub.add_parser("why", help="why is (or isn't) a stock in the ranking?")
+    wy.add_argument("tickers", nargs="+", help="one or more tickers, e.g. AAPL BRK-B")
+    wy.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    wy.add_argument("--discord", action="store_true", help="also post the answer to Discord")
+    wy.set_defaults(func=cmd_why)
 
     pc = sub.add_parser("price-check", help="does the backup price source (Stooq) answer and agree with our prices?")
     pc.add_argument("--db", default="market.db", help="database file (default: market.db)")

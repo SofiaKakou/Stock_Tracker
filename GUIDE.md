@@ -171,6 +171,16 @@ missing days for the most important stocks first, and switches back to Yahoo's d
 it answers again). Company reports, insider trades and warning signs from the SEC. Short-selling
 data from FINRA. All free.
 
+## Checking things yourself
+
+- **Why isn't a stock ranked?** GitHub → Actions → *Why is a stock (not) ranked?* → Run workflow →
+  type the tickers. The answer comes to Discord: its rank, or the reason it's left out (a fund, another
+  share class, too little known about it, under $5, not traded enough, no recent prices).
+- **📒 Logbook**: the report's last section lists recent runs, what they did and whether they worked.
+  Every result carries a stamp ("code … · data …") saying which code and data made it.
+- **Data audit**: a Research run with study *audit* checks the stored data for misdated, impossible
+  or missing prices and misdated filings.
+
 ## Optional setup
 
 - **Daily email**: free through a Gmail "app password". Add the `EMAIL_USER` and

@@ -1,0 +1,44 @@
+# "Why isn't this stock ranked?" Actions tab -> "Why is a stock (not) ranked?" -> Run workflow ->
+# type one or more tickers. The answer is posted to Discord (and shown in the run's log).
+# Read-only: it uses the latest database and changes nothing.
+
+name: Why is a stock (not) ranked?
+
+on:
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: "Tickers, separated by spaces (e.g. AAPL BRK-B)"
+        type: string
+        required: true
+
+jobs:
+  why:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v5
+        with:
+          path: market.db
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+
+      - name: Explain
+        env:
+          TICKERS: ${{ inputs.tickers }}
+        run: python -m trend_bot why $TICKERS --discord

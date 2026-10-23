@@ -143,6 +143,11 @@ def cmd_ideas(args: argparse.Namespace) -> int:
 
         runs.note("stocks_ranked", len(ranked))
         runs.note("ranking_date", date)
+        if not ranked.empty:
+            from trend_bot import coverage
+
+            coverage.save(con, ranked, date)
+            runs.note("left_out_too_few_measures", len(ranked.attrs.get("too_few", {})))
         if ranked.empty:
             print("Not enough data.")
             return 1
@@ -299,5 +304,24 @@ def cmd_send_email(args: argparse.Namespace) -> int:
         print(f"Could not send the email: {e}", file=sys.stderr)
         return 1
     print(f"Emailed the report to {cfg['EMAIL_TO']}.")
+    return 0
+
+
+def cmd_why(args: argparse.Namespace) -> int:
+    """Why is (or isn't) a stock in the ranking? Plain answers; with --discord, posted there too."""
+    from trend_bot import alerts, coverage, db
+
+    if not Path(args.db).exists():
+        print(f"{args.db} not found.")
+        return 1
+    with closing(db.connect(args.db)) as con:
+        answers = [line for t in args.tickers for line in coverage.why(con, t)]
+    print("\n".join(answers))
+    if args.discord:
+        webhook = alerts.load_webhook()
+        if webhook:
+            alerts.send(webhook, {"username": "Trend Bot", "embeds": [{
+                "title": "🔎 Why is (or isn't) this stock ranked?", "description": "\n\n".join(answers)[:4000],
+                "color": alerts.GRAY}]})
     return 0
 
