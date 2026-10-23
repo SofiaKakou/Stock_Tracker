@@ -16,10 +16,10 @@ on:
         type: string
         default: ""
       refresh:
-        description: "Refresh data first? sec-check = one small SEC request to see if the SEC still refuses us (lifts the pause if not); fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = industry codes and what happened to every company that disappeared, from the SEC's bulk file (~15 min); reports = read up to 4,000 annual/quarterly reports for the text signals (~45 min; gentle on the SEC); full = whole nightly update"
+        description: "Refresh data first? email-test = make the report and email it now (checks the EMAIL_* secrets); sec-check = one small SEC request to see if the SEC still refuses us (lifts the pause if not); fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = industry codes and what happened to every company that disappeared, from the SEC's bulk file (~15 min); reports = read up to 4,000 annual/quarterly reports for the text signals (~45 min; gentle on the SEC); full = whole nightly update"
         type: choice
         default: none
-        options: [none, sec-check, fundamentals, short, fates, reports, full]
+        options: [none, sec-check, email-test, fundamentals, short, fates, reports, full]
 
 concurrency:
   group: nightly-market-run    # shares the database with the nightly run, so never at the same time
@@ -32,6 +32,9 @@ jobs:
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
@@ -63,6 +66,10 @@ jobs:
             python -m trend_bot db update --fates-only --sec-lookups 20000 || echo "::warning::refresh did not finish"
           elif [ "${{ inputs.refresh }}" = "reports" ]; then
             python -m trend_bot db update --reports-only --report-downloads 4000 || echo "::warning::refresh did not finish"
+          elif [ "${{ inputs.refresh }}" = "email-test" ]; then
+            mkdir -p reports
+            python -m trend_bot report || echo "::warning::the report could not be made"
+            python -m trend_bot send-email || echo "::warning::the email could not be sent (see above)"
           elif [ "${{ inputs.refresh }}" = "sec-check" ]; then
             python -m trend_bot sec-check || echo "::warning::the SEC still refuses our requests"
           elif [ "${{ inputs.refresh }}" = "short" ]; then
