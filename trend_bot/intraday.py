@@ -231,6 +231,7 @@ def evaluate(trades: pd.DataFrame, draws: int = 500, seed: int = 0) -> dict:
         flip = raw * rng.choice([-1.0, 1.0], len(raw)) - trades["cost"].to_numpy()
         better += pd.Series(flip).groupby(dates).mean().mean() >= real
     return {"trades": len(trades), "days": len(daily), "per_trade": float(net.mean()),
+            "sd_trade": float(net.std(ddof=1)) if len(net) > 1 else np.nan,
             "gross_per_trade": float(trades["ret"].mean()), "yearly": yearly(daily),
             "early": yearly(early), "late": yearly(late), "hit": float((net > 0).mean()), "t": t(daily),
             "luck": better / draws, "worst_day": float(daily.min()) if len(daily) else np.nan}

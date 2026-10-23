@@ -125,8 +125,10 @@ def pnl(orders: list[dict]) -> dict[str, dict]:
 
 class Session:
     def __init__(self, broker: DayBroker, data: intraday.Data, symbols: list[str], today: dt.date,
-                 log=print, sleep=time.sleep, now=lambda: dt.datetime.now(NY)):
+                 log=print, sleep=time.sleep, now=lambda: dt.datetime.now(NY), share: dict | None = None,
+                 paused: set | None = None):
         self.b, self.data, self.log, self.sleep, self.now = broker, data, log, sleep, now
+        self.share, self.paused = share or {}, set(paused or ())
         self.today = today
         self.etfs = [s for s in symbols if s in intraday.ETFS]
         self.stocks = [s for s in symbols if s not in intraday.ETFS]
@@ -152,15 +154,21 @@ class Session:
 
     def enter(self, pattern: str, signals: list[tuple[str, int]], prices: dict[str, float], slots: int,
               strength: dict[str, float] | None = None) -> int:
+        if pattern in self.paused:
+            self.log(f"[day] {pattern}: paused (worse live than its history); no trades")
+            return 0
         done = self.traded()
         used = len(done & set(self.stocks if pattern != "momentum" else self.etfs))
-        each, sent = self.budget(), 0
+        each, sent = self.budget() * size_factor(self.share, pattern), 0
+        room = float(self.b.account()["equity"]) * INVESTED - sum(
+            abs(float(p.get("market_value") or 0)) for p in self.b.positions())
         for sym, side in signals:
             if sym in done or used + sent >= slots or not prices.get(sym):
                 continue
-            qty = shares(prices[sym], each)
+            qty = shares(prices[sym], min(each, room))
             if not qty:
                 continue
+            room -= qty * prices[sym]
             try:
                 self.b.order(sym, qty, "buy" if side > 0 else "sell", f"td-{self.today:%Y%m%d}-{pattern}-{sym}")
                 sent += 1
@@ -246,6 +254,101 @@ class Session:
         if self.b.positions():
             self.b.close_all()
             self.log("[day] closed what was left at 15:58")
+
+
+# --- Learning from the live trades ----------------------------------------------------------------
+
+PATTERN_TEST = {"gap": "gap_fade", "breakout": "opening_range", "momentum": "intraday_momentum"}
+SHORT_NAME = {"gap": "gap fade", "breakout": "breakouts", "momentum": "last half hour"}
+PATTERN_NAME = {"gap": "Fade big opening gaps", "breakout": "Breakout from the first half hour",
+                "momentum": "Market's last half hour follows its first"}
+MIN_SHARE, MAX_SHARE = 0.15, 0.60     # each pattern's share of the money stays between these
+PRIOR_TRADES = 100                    # the 10-year test counts like this many live trades
+SHIFT_AFTER, PAUSE_AFTER, COST_AFTER = 20, 40, 50   # live trades needed before each kind of change
+DEFAULT_SD = 0.01                     # a trade's typical spread of results, if the test didn't say
+
+
+def compare(log: list[dict], tested: dict | None) -> dict[str, dict]:
+    """Per pattern: live trades vs the 10-year test's forecast. z: how many 'luck widths' apart."""
+    out = {}
+    for p, key in PATTERN_TEST.items():
+        rets = [r["ret"] for r in log if r.get("pattern") == p and r.get("ret") is not None]
+        t = (tested or {}).get(key) or {}
+        forecast = t.get("per_trade") if t.get("days") else None
+        sd = t.get("sd_trade") if t.get("sd_trade") == t.get("sd_trade") and t.get("sd_trade") else (
+            float(np.std(rets, ddof=1)) if len(rets) > 2 else DEFAULT_SD)
+        live = float(np.mean(rets)) if rets else None
+        z = (live - forecast) / (sd / np.sqrt(len(rets))) if rets and forecast is not None and sd else None
+        out[p] = {"n": len(rets), "live": live, "forecast": forecast, "sd": sd, "z": z}
+    return out
+
+
+def verdict_vs_test(c: dict) -> str:
+    if not c["n"]:
+        return "no live trades yet"
+    if c["forecast"] is None:
+        return "no 10-year test result yet"
+    if c["n"] < 10:
+        return "too early to tell"
+    if c["z"] < -2:
+        return "worse than its history beyond what luck explains"
+    if c["z"] > 2:
+        return "better than its history (could still be luck)"
+    return "within the normal range of its history"
+
+
+def measured_cost(log: list[dict]) -> float | None:
+    """The real cost of getting in, per side, once there are enough trades (never below zero)."""
+    slip = [r["slippage"] for r in log if r.get("slippage") is not None]
+    return max(float(np.mean(slip)), 0.0) if len(slip) >= COST_AFTER else None
+
+
+def allocate(cmp: dict[str, dict], cost: float | None) -> tuple[dict[str, float], set[str]]:
+    """Each pattern's share of the money, and the paused ones.
+
+    The expected gain per trade is the 10-year forecast blended with the live average (the test
+    weighs like PRIOR_TRADES trades, so a few days barely move it), minus the measured cost if
+    known. Shares follow the expected gains, only for patterns with SHIFT_AFTER+ live trades, and
+    always stay within MIN_SHARE..MAX_SHARE. A pattern clearly worse live than its history
+    (PAUSE_AFTER+ trades, z below -2) is paused. A great streak never pauses or boosts beyond the cap."""
+    paused = {p for p, c in cmp.items() if c["n"] >= PAUSE_AFTER and c["z"] is not None and c["z"] < -2}
+    active = [p for p in PATTERN_TEST if p not in paused]
+    if not active:
+        return {}, paused
+    if not any(cmp[p]["n"] >= SHIFT_AFTER for p in active):
+        return {p: 1 / len(active) for p in active}, paused
+    edge = {}
+    for p in active:
+        c = cmp[p]
+        prior = c["forecast"] if c["forecast"] is not None else 0.0
+        blended = (PRIOR_TRADES * prior + c["n"] * (c["live"] or 0.0)) / (PRIOR_TRADES + c["n"]) \
+            if c["n"] >= SHIFT_AFTER else prior
+        edge[p] = blended - (2 * cost if cost is not None else 0.0)
+    lo = min(edge.values())
+    raw = {p: e - lo + 1e-4 for p, e in edge.items()}            # the weakest gets the least, never nothing
+    return bounded(raw), paused
+
+
+def bounded(raw: dict[str, float], lo: float = MIN_SHARE, hi: float = MAX_SHARE) -> dict[str, float]:
+    """Shares in proportion to `raw`, adding up to 1, none below `lo` or above `hi`: a share that would
+    cross a limit is held at it, and the rest is split among the others in the same proportions."""
+    lo, hi = min(lo, 1 / len(raw)), max(hi, 1 / len(raw))
+    fixed: dict[str, float] = {}
+    while True:
+        free = {p: v for p, v in raw.items() if p not in fixed}
+        left = 1 - sum(fixed.values())
+        share = {p: left * v / sum(free.values()) for p, v in free.items()} if free else {}
+        over = {p for p, v in share.items() if v > hi + 1e-12}
+        under = {p for p, v in share.items() if v < lo - 1e-12}
+        if not over and not under:
+            return {**fixed, **share}
+        fixed.update({p: hi for p in over} if over else {p: lo for p in under})
+
+
+def size_factor(share: dict[str, float], pattern: str) -> float:
+    """Position size vs an equal split among the active patterns (1.0 = the normal 4.9% of the account).
+    A paused pattern's money isn't handed to the others: their sizes stay as if it were still there."""
+    return share.get(pattern, 0.0) * len(share) if share else 1.0
 
 
 LOG_FIELDS = ["date", "time", "pattern", "symbol", "side", "qty", "signal", "expected", "entry", "exit",
@@ -343,6 +446,28 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     lesson = learned(state["log"])
     if lesson:
         lines += ["", lesson]
+    cmp = compare(state["log"], tested)
+    cost = measured_cost(state["log"])
+    share, paused = allocate(cmp, cost)
+    newly = paused - set(state.get("paused", []))
+    state.update(share=share, paused=sorted(paused), measured_cost=cost)
+    lines += ["", "**Forecast vs actual** (10-year test vs live, per trade after costs):"]
+    for p, c in cmp.items():
+        f = f"{c['forecast']:+.2%}" if c["forecast"] is not None else "–"
+        lv = f"{c['live']:+.2%}" if c["live"] is not None else "–"
+        lines.append(f"• {PATTERN_NAME[p]}: tested {f}, live {lv} over {c['n']} trade{'s' if c['n'] != 1 else ''}: "
+                     f"{verdict_vs_test(c)}")
+    if cost is not None:
+        lines.append(f"Measured cost of getting in: {cost:.3%} a side (from {COST_AFTER}+ trades; the test assumed "
+                     f"{intraday.COST['stock'] / 2:.3%}).")
+    if share:
+        lines.append("Tomorrow's money per pattern: " + ", ".join(
+            f"{SHORT_NAME[p]} {v:.0%}" for p, v in share.items())
+                     + ("" if any(c["n"] >= SHIFT_AFTER for c in cmp.values())
+                        else f" (equal until a pattern has {SHIFT_AFTER} live trades)"))
+    for p in sorted(newly):
+        lines.append(f"⏸️ **{PATTERN_NAME[p]} is paused**: after {cmp[p]['n']} live trades it's doing clearly worse "
+                     "than its 10-year history. It resumes on its own if its record comes back within range.")
     lines += ["", f"**Today: ${today_total:+,.0f}** · account ${equity:,.0f} "
                   f"(**{equity / start - 1:+.2%}** since {min(state['days'])}, {len(state['days'])} trading day"
                   f"{'s' if len(state['days']) != 1 else ''})"]

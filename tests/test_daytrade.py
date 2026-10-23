@@ -188,3 +188,78 @@ def test_the_session_records_what_each_order_expected():
     e = {x["symbol"]: x for x in s.entries}
     assert e["GAPPY"]["pattern"] == "gap" and e["GAPPY"]["signal"] == pytest.approx(0.05) and e["GAPPY"]["side"] == -1
     assert e["BREAKY"]["signal"] == pytest.approx(103 / 101 - 1) and e["BREAKY"]["expected"] == 103.0
+
+
+def rows(pattern, rets, slip=0.0002):
+    return [{"date": "2026-10-20", "pattern": pattern, "symbol": f"S{i}", "ret": r, "slippage": slip}
+            for i, r in enumerate(rets)]
+
+
+TESTED = {"gap_fade": {"days": 100, "per_trade": 0.001, "sd_trade": 0.01},
+          "opening_range": {"days": 100, "per_trade": 0.0005, "sd_trade": 0.01},
+          "intraday_momentum": {"days": 100, "per_trade": 0.0002, "sd_trade": 0.003}}
+
+
+def test_forecast_vs_actual():
+    log = rows("gap", [0.002] * 5) + rows("breakout", [-0.01] * 60) + rows("momentum", [0.0003, 0.0001] * 10)
+    c = daytrade.compare(log, TESTED)
+    assert daytrade.verdict_vs_test(c["gap"]) == "too early to tell"
+    assert c["breakout"]["z"] < -2 and "worse than its history" in daytrade.verdict_vs_test(c["breakout"])
+    assert "within the normal range" in daytrade.verdict_vs_test(c["momentum"])
+    assert daytrade.verdict_vs_test(daytrade.compare([], None)["gap"]) == "no live trades yet"
+
+
+def test_money_shifts_slowly_within_limits_and_a_broken_pattern_pauses():
+    few = rows("gap", [0.05] * 5)                                   # a lucky few days: nothing changes
+    share, paused = daytrade.allocate(daytrade.compare(few, TESTED), None)
+    assert share == pytest.approx({"gap": 1 / 3, "breakout": 1 / 3, "momentum": 1 / 3}) and not paused
+
+    log = rows("gap", [0.004] * 30) + rows("breakout", [0.0] * 30) + rows("momentum", [0.0002] * 30)
+    share, paused = daytrade.allocate(daytrade.compare(log, TESTED), None)
+    assert share["gap"] > share["momentum"] and abs(sum(share.values()) - 1) < 1e-9
+    assert all(daytrade.MIN_SHARE - 1e-9 <= v <= daytrade.MAX_SHARE + 1e-9 for v in share.values())
+
+    huge = rows("gap", [0.5] * 200) + rows("breakout", [0.0] * 30) + rows("momentum", [0.0] * 30)
+    share, _ = daytrade.allocate(daytrade.compare(huge, TESTED), None)
+    assert share["gap"] == pytest.approx(daytrade.MAX_SHARE)        # never more than the cap
+
+    broken = rows("breakout", [-0.01] * 45) + rows("gap", [0.001] * 25)
+    share, paused = daytrade.allocate(daytrade.compare(broken, TESTED), None)
+    assert paused == {"breakout"} and "breakout" not in share
+    assert daytrade.size_factor(share, "gap") == pytest.approx(share["gap"] * 2)   # equal split = 1.0 each
+
+
+def test_measured_cost_after_enough_trades_lowers_the_expected_gain():
+    assert daytrade.measured_cost(rows("gap", [0.0] * 49)) is None
+    assert daytrade.measured_cost(rows("gap", [0.0] * 50, slip=0.0006)) == pytest.approx(0.0006)
+    assert daytrade.measured_cost(rows("gap", [0.0] * 50, slip=-0.001)) == 0.0     # never a negative cost
+
+
+def test_a_paused_pattern_doesnt_trade_and_sizes_follow_the_shares():
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=lambda *_: None,
+                         sleep=clock.sleep, now=clock.now, share={"breakout": 0.6, "momentum": 0.4},
+                         paused={"gap"})
+    s.morning()
+    tags = [o["client_order_id"] for o in broker.orders]
+    assert not any("-gap-" in t for t in tags) and "td-20261026-breakout-BREAKY" in tags
+    qty = next(o["qty"] for o in broker.orders if o["symbol"] == "BREAKY")
+    assert qty == daytrade.shares(103.0, 100_000 * daytrade.INVESTED / 20 * 0.6 * 2)    # 1.2x the normal size
+
+
+def test_the_report_shows_the_learning_lines():
+    state = {"log": rows("breakout", [-0.01] * 45, slip=0.0006) + rows("gap", [0.001] * 25), "days": {}}
+    state, e = daytrade.report([], 100_000.0, state, DAY, TESTED)
+    d = e["description"]
+    assert "Forecast vs actual" in d and "worse than its history" in d and "Measured cost of getting in: 0.046%" in d
+    assert "Breakout from the first half hour is paused" in d and state["paused"] == ["breakout"]
+    assert "Tomorrow's money per pattern" in d
+
+
+def test_bounded_shares_respect_the_limits_exactly():
+    s = daytrade.bounded({"a": 100.0, "b": 1.0, "c": 1.0})
+    assert s["a"] == pytest.approx(0.6) and s["b"] == pytest.approx(0.2) and sum(s.values()) == pytest.approx(1)
+    s = daytrade.bounded({"a": 100.0, "b": 50.0, "c": 0.0001})
+    assert s["c"] == pytest.approx(0.15) and s["a"] <= 0.6 + 1e-9 and sum(s.values()) == pytest.approx(1)
+    assert daytrade.bounded({"a": 1.0, "b": 9.0}) == pytest.approx({"a": 0.4, "b": 0.6})

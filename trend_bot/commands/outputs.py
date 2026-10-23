@@ -337,8 +337,9 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
             meta = {k: json.loads(v) for k, v in ic.execute("SELECT key, value FROM meta WHERE key IN ('universe', 'results')")}
     symbols = meta.get("universe") or intraday.ETFS + daytrade.FALLBACK_STOCKS
     data = intraday.Data.from_env(daytrade.KEY_ENV, daytrade.SECRET_ENV)
-    session = daytrade.Session(broker, data, symbols, now.date())
     state = daytrade.load_state(args.state)
+    session = daytrade.Session(broker, data, symbols, now.date(), share=state.get("share"),
+                               paused=state.get("paused"))
     try:
         if phase == "morning":
             session.morning()
