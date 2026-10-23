@@ -129,11 +129,18 @@ def _study_intraday(con, args: argparse.Namespace) -> int:
             print("No bars came back from Alpaca.")
             return 1
         results = intraday.study(df)
+        try:
+            earnings = intraday.earnings_days(ic, symbols)
+        except Exception as e:  # noqa: BLE001 - the earnings filter is optional
+            print(f"(No earnings dates: {e}; the earnings-day filter is skipped.)")
+            earnings = None
+        tested_filters = intraday.filters(df, earnings)
         # Kept for the day-trading demo account: which stocks to watch, and each pattern's test result.
         ic.executemany("INSERT OR REPLACE INTO meta VALUES (?, ?)",
                        [("universe", json.dumps(symbols)), ("results", json.dumps(results))])
         ic.commit()
     print(intraday.text(results, feed, df["date"].min(), df["date"].max()))
+    print(intraday.filters_text(tested_filters))
     return 0
 
 

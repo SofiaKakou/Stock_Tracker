@@ -31,6 +31,7 @@ from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
     cmd_daytrade,
     cmd_lookahead_combine,
+    cmd_accounts,
     cmd_notify,
     cmd_paper,
     cmd_safety,
@@ -286,6 +287,14 @@ def make_parser() -> argparse.ArgumentParser:
     lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")
     lc.add_argument("files", nargs="+", help="JSON files from study lookahead --json")
     lc.set_defaults(func=cmd_lookahead_combine)
+
+    ac = sub.add_parser("accounts", help="the demo accounts' history (chart); --weekly: Friday's summary")
+    ac.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    ac.add_argument("--weekly", action="store_true", help="on Fridays, post the week's summary with the chart")
+    ac.add_argument("--force", action="store_true", help="post the weekly summary even if it isn't Friday")
+    ac.add_argument("--day-state", default="daytrade.json", help="the day-trading account's running totals")
+    ac.add_argument("--discord", action="store_true")
+    ac.set_defaults(func=cmd_accounts)
 
     nt = sub.add_parser("notify", help="post a short warning to Discord")
     nt.add_argument("--title", required=True)

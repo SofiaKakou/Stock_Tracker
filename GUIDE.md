@@ -190,6 +190,10 @@ The bot's research is about which stocks to hold for a month. Day-trading ideas 
 separately (Research run → study `intraday`): years of half-hour prices from Alpaca, the costs of
 every trade, both halves of history, and a luck check (the same trades in random directions).
 Most day-trading patterns don't survive their costs.
+The study also tests two newer patterns (a clear first half hour carrying on for the next hour;
+big movers giving some back at the end of the day) and two filters for every pattern: **earnings
+days vs other days**, and **nervous vs calm markets** (how much the market moved in its first half
+hour). New patterns and filters are only tested; nothing goes live without your OK.
 
 **Day-trading demo account** (optional, fake money, a second Alpaca paper account): trades these
 patterns live every weekday so you can watch them: big opening gaps faded at 9:31 New York time,
@@ -214,6 +218,12 @@ Setup: a second paper account in Alpaca, its
 keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
 separate and unaffected.
 
+## The demo accounts week by week
+
+Every **Friday evening** "📅 The week" shows both demo accounts and the S&P 500 this week and since
+the start, the day-trading patterns' week, and a chart of both accounts against the S&P 500. The same
+chart is in the report and the email every day.
+
 ## How the bot keeps things safe
 
 **The portfolio to follow (and its demo account)**
@@ -226,7 +236,7 @@ separate and unaffected.
 
 **The day-trading demo account**
 - Every position has a **protective stop at the broker** (out if it moves 5% against us; it works
-  even if our job stops). At most 20 positions, never more than 98% of the account.
+  even if our job stops); any position found without one gets one when a trading part starts. At most 20 positions, never more than 98% of the account.
 - **Daily loss limit**: down 3% on the day → everything closed, no more trades that day.
 - **Never overnight**: closing orders at 15:45, then anything left at 15:58, and an **independent
   safety net** (15:52, 16:06 and 9:20 New York) closes anything the trading job missed and tells you.

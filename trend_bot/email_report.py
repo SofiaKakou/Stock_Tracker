@@ -115,7 +115,7 @@ def _text(sections) -> str:
     return "\n\n".join(parts)
 
 
-def _html(sections, footer: list[str], chart_title: str | None = None) -> str:
+def _html(sections, footer: list[str], chart_title: str | None = None, demo_chart: bool = False) -> str:
     from html import escape
 
     cell = "padding:3px 10px 3px 0;text-align:left;border-bottom:1px solid #eee"
@@ -128,6 +128,9 @@ def _html(sections, footer: list[str], chart_title: str | None = None) -> str:
                        '<p style="color:#777;font-size:13px;margin:4px 0">A test on past data, after trading '
                        "costs. The real record is the line below.</p>")
         out.append(f'<h3 style="margin:18px 0 6px">{escape(title)}</h3>')
+        if k == 0 and demo_chart:
+            out.append('<img src="cid:demo" alt="Demo accounts vs the S&amp;P 500" '
+                       'style="width:100%;max-width:640px;height:auto">')
         table = [x for x in lines if isinstance(x, list)]
         text = [x for x in lines if not isinstance(x, list)]
         if text:
@@ -144,7 +147,8 @@ def _html(sections, footer: list[str], chart_title: str | None = None) -> str:
 
 
 def build(cfg: dict, summary, report: Path | None, today: dt.date | None = None,
-          chart: bytes | None = None, chart_title: str = "What $10,000 would have become in testing") -> EmailMessage:
+          chart: bytes | None = None, chart_title: str = "What $10,000 would have become in testing",
+          demo_chart: bytes | None = None) -> EmailMessage:
     """`summary`: digest() sections, or plain lines (shown as one section). `chart`: a PNG shown in the email."""
     today = today or dt.date.today()
     msg = EmailMessage()
@@ -160,9 +164,11 @@ def build(cfg: dict, summary, report: Path | None, today: dt.date | None = None,
     if runs.current_stamp():
         footer.append(f"Made by: {runs.current_stamp()}")
     msg.set_content(_text(sections) + "\n\n" + "\n".join(footer))
-    msg.add_alternative(_html(sections, footer, chart_title if chart else None), subtype="html")
+    msg.add_alternative(_html(sections, footer, chart_title if chart else None, demo_chart is not None), subtype="html")
     if chart:
         msg.get_payload()[1].add_related(chart, "image", "png", cid="<growth>")
+    if demo_chart:   # the demo accounts vs the S&P 500, under the first section (the real record)
+        msg.get_payload()[1].add_related(demo_chart, "image", "png", cid="<demo>")
     if report:
         msg.add_attachment(report.read_bytes(), maintype="text", subtype="html", filename=f"report-{today}.html")
     return msg
