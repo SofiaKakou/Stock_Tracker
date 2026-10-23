@@ -272,6 +272,8 @@ def make_parser() -> argparse.ArgumentParser:
     pp.add_argument("--db", default="market.db", help="database file (default: market.db)")
     pp.add_argument("--dry-run", action="store_true", help="show the orders it would send, send nothing")
     pp.add_argument("--discord", action="store_true", help="post a message when it trades")
+    pp.add_argument("--test-trade", action="store_true",
+                    help="buy 1 SPY share and sell it straight back (market hours only), to test orders")
     pp.set_defaults(func=cmd_paper)
 
     sg = sub.add_parser("send-guide", help="post GUIDE.md (how to read the bot's messages) to Discord")

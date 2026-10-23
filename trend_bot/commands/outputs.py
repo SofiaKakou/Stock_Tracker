@@ -316,6 +316,12 @@ def cmd_paper(args: argparse.Namespace) -> int:
         print(f"The demo account isn't set up ({paper.KEY_ENV} / {paper.SECRET_ENV}); skipped. "
               "See GUIDE.md, 'Demo account'.")
         return 0
+    if args.test_trade:
+        try:
+            return 0 if paper.test_trade(client) else 1
+        except paper.PaperError as e:
+            print(f"[demo] the broker refused: {e}", file=sys.stderr)
+            return 1
     with closing(db.connect(args.db)) as con:
         try:
             res = paper.sync(con, client, dry_run=args.dry_run)

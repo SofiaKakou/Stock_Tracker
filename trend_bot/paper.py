@@ -73,6 +73,56 @@ class Paper:
     def close(self, symbol: str) -> dict:
         return self._call("DELETE", f"/positions/{symbol}")
 
+    def clock(self) -> dict:
+        return self._call("GET", "/clock")
+
+    def get_order(self, order_id: str) -> dict:
+        return self._call("GET", f"/orders/{order_id}")
+
+    def cancel(self, order_id: str) -> None:
+        self._call("DELETE", f"/orders/{order_id}")
+
+
+def test_trade(client: Paper, ticker: str = "SPY", wait: float = 60, sleep=None, log=print) -> bool:
+    """Buy 1 share and sell it straight back, to prove orders work end to end (fake money).
+
+    Only while the market is open, so no order is left waiting (that would hold up the nightly sync).
+    An order that hasn't filled within `wait` seconds is cancelled. True if both filled."""
+    import time
+
+    sleep = sleep or time.sleep
+    clock = client.clock()
+    if not clock.get("is_open"):
+        log(f"[demo] the market is closed (next open {clock.get('next_open', '?')}); the test trade only runs "
+            "while it's open, so no order is left waiting.")
+        return False
+
+    def fill(side: str) -> float | None:
+        stamp = dt.datetime.now().strftime("%Y%m%d%H%M%S")
+        o = client.order(symbol(ticker), 1, side, f"tb-test-{side}-{stamp}")
+        for _ in range(int(wait / 2) + 1):
+            o = client.get_order(o["id"])
+            if o.get("status") == "filled":
+                return float(o["filled_avg_price"])
+            if o.get("status") in ("canceled", "expired", "rejected"):
+                break
+            sleep(2)
+        if o.get("status") not in ("canceled", "expired", "rejected"):
+            client.cancel(o["id"])
+        log(f"[demo] the test {side} of 1 {ticker} didn't fill (status: {o.get('status')}); cancelled.")
+        return None
+
+    bought = fill("buy")
+    if bought is None:
+        return False
+    log(f"[demo] bought 1 {ticker} at ${bought:,.2f}")
+    sold = fill("sell")
+    if sold is None:
+        log(f"[demo] still holding the 1 {ticker} share; the nightly sync sells it (it isn't in the portfolio).")
+        return False
+    log(f"[demo] sold 1 {ticker} at ${sold:,.2f} ({sold - bought:+.2f}). Orders work end to end.")
+    return True
+
 
 def symbol(ticker: str) -> str:
     """Our tickers (Yahoo style, BRK-B) to Alpaca's (BRK.B)."""
