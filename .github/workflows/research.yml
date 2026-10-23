@@ -68,6 +68,14 @@ jobs:
           key: intraday-db-${{ github.run_id }}
           restore-keys: intraday-db-
 
+      - name: Restore day-trading results (measured costs)
+        if: inputs.study == 'intraday'
+        uses: actions/cache/restore@v6
+        with:
+          path: daytrade.json
+          key: daytrade-state-${{ github.run_id }}
+          restore-keys: daytrade-state-
+
       - name: Refresh data
         if: inputs.refresh != 'none'
         run: |

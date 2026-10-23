@@ -198,7 +198,19 @@ breakouts from the first half hour checked every half hour, the index funds' las
 Each evening "🧪 Day trading" shows today's trades, profit or loss per pattern, the running total,
 each pattern's 10-year test result next to it, and what the live trades have taught so far (how much
 worse the real prices were than expected, the average trade). Every trade is kept in a trade log
-(a spreadsheet file, `day-trade-log`, on each day's run page in the Actions tab). Setup: a second paper account in Alpaca, its
+(a spreadsheet file, `day-trade-log`, on each day's run page in the Actions tab).
+
+It learns from them, slowly on purpose (a few weeks of day trades are mostly luck):
+- **Forecast vs actual**: each pattern's live result next to its 10-year test, with whether the
+  difference is within the normal range or beyond what luck explains.
+- **Real costs**: after 50 trades, the measured cost of getting in replaces the assumed one, in
+  the 10-year study too.
+- **Money per pattern**: after 20 live trades a pattern's share of the money moves with its results,
+  blended with its 10-year record (which counts like 100 trades), always between 15% and 60%.
+- **Automatic pause**: after 40 trades, a pattern doing clearly worse than its history is paused
+  (and resumes if it comes back within range). A great streak never gets bigger bets than the cap.
+
+Setup: a second paper account in Alpaca, its
 keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
 separate and unaffected.
 

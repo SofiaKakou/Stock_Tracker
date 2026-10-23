@@ -113,6 +113,12 @@ def _study_intraday(con, args: argparse.Namespace) -> int:
         print("Day-trading research needs Alpaca's market data: add the ALPACA_API_KEY_ID and "
               "ALPACA_API_SECRET_KEY secrets (the demo account's keys; GUIDE.md, 'Demo account').")
         return 1
+    state = Path("daytrade.json")   # the day-trading account's measured costs, once it has enough trades
+    measured = json.loads(state.read_text()).get("measured_cost") if state.exists() else None
+    if measured is not None and 2 * measured > intraday.COST["stock"]:
+        print(f"Using the day-trading account's measured cost: {2 * measured:.3%} a round trip for stocks "
+              f"(instead of the assumed {intraday.COST['stock']:.3%}).")
+        intraday.COST["stock"] = 2 * measured
     with closing(intraday.connect(args.intraday_db)) as ic:
         symbols = intraday.universe(con)
         print(f"Updating half-hour bars for {len(symbols)} symbols (the first time takes a while)...")
