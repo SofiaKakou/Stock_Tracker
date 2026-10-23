@@ -20,6 +20,7 @@ New to the market? Start with **[GUIDE.md](GUIDE.md)**: what every message means
 - 🚩 **Warning signs**: restatements, auditor changes, defaults, late reports and more from SEC 8-K filings
 - 🔔 **Insider buying**, 🌎 **market screen**, 👀 **watchlist trends**, 📊 **pick scorecard**
 - ⚠️ **Bot health**: tells you when something breaks (old prices, SEC limits) and when it's fixed
+- 🛡️ **Safety**: nightly emergency exits (bankruptcy, delisting notice, unreliable accounts), warnings, drawdown alarm; for day trading broker-side stops, a 3% daily loss limit, an independent safety net and pre-trade checks
 - 🔎 **"Why isn't this stock ranked?"**: a one-click lookup that explains any ticker
 - 📒 **Logbook**: every run logged; every result stamped with the code and data that made it
 - 🧪 **Demo account** (optional): follows the portfolio with fake money on Alpaca paper trading, vs the S&P 500

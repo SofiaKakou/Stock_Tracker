@@ -320,6 +320,16 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
         return 0
     now = dt.datetime.now(daytrade.NY)
     phase = args.phase
+    if phase == "safety":   # the independent safety net: only in its windows, so a summer/winter twin is harmless
+        t = now.time()
+        if not (dt.time(15, 50) <= t < dt.time(15, 59) or t >= dt.time(16, 2) or t < dt.time(9, 29)):
+            print(f"[day] safety net: {now:%H:%M} New York is outside its windows; nothing to do")
+            return 0
+        alert = daytrade.safety_net(broker, now)
+        print(alert["description"] if alert else "[day] safety net: nothing left open")
+        if alert and args.discord and alerts.load_webhook():
+            alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [alert]})
+        return 0
     if phase == "auto":   # two schedules per part (summer and winter time): only the right one runs
         phase = ("morning" if dt.time(9, 0) <= now.time() < dt.time(9, 50) else
                  "afternoon" if dt.time(12, 0) <= now.time() < dt.time(12, 50) else "")
@@ -369,6 +379,34 @@ def cmd_lookahead_combine(args: argparse.Namespace) -> int:
     return 0 if lookahead.verdict(results)[0] else 1
 
 
+def cmd_notify(args: argparse.Namespace) -> int:
+    """Post a short warning to Discord (for workflow steps that failed)."""
+    from trend_bot import alerts
+
+    if alerts.load_webhook():
+        alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [
+            {"title": args.title, "description": args.text[:4000], "color": alerts.RED}]})
+    print(f"{args.title}: {args.text}")
+    return 0
+
+
+def cmd_safety(args: argparse.Namespace) -> int:
+    """Nightly safety check of the portfolio's stocks: emergency exits and warnings, posted once each."""
+    from trend_bot import alerts, db, safety
+
+    with closing(db.connect(args.db)) as con:
+        found = safety.check(con)
+    e = safety.embed(found, [])
+    for kind in ("exit", "warn"):
+        for t, why in found[kind]:
+            print(f"[safety] {'EXIT' if kind == 'exit' else 'warning'} {t}: {why}")
+    if not e:
+        print("[safety] nothing new")
+    elif args.discord and alerts.load_webhook():
+        alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [e]})
+    return 0
+
+
 def cmd_paper(args: argparse.Namespace) -> int:
     """Demo account: follow the portfolio on Alpaca's paper-trading account (fake money)."""
     from trend_bot import db, ideas, paper
@@ -410,6 +448,12 @@ def cmd_paper(args: argparse.Namespace) -> int:
         e = paper.embed(res, port["date"]) if port and not args.dry_run else None
         if e:
             embeds.append(e)
+        if not args.dry_run:
+            from trend_bot import safety
+
+            alarms = safety.drawdown(con)
+            if alarms:
+                embeds.append(safety.embed({"exit": [], "warn": []}, alarms))
     if args.changed_flag and (embeds or res["traded"]):
         Path(args.changed_flag).write_text("1\n")   # the workflow saves the database only then
     if embeds and args.discord:

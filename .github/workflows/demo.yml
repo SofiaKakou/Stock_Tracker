@@ -19,6 +19,10 @@ on:
         type: boolean
         default: false
 
+# Least privilege: the workflow's token can only read the code (jobs that need more say so).
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -34,9 +38,8 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -45,7 +48,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore database
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |            # must list the same files as the nightly run's save, or the cache isn't found
             market.db
@@ -66,7 +69,7 @@ jobs:
 
       - name: Save database
         if: inputs.follow_now && hashFiles('changed.flag') != ''
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             market.db

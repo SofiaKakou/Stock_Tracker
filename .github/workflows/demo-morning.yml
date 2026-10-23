@@ -13,6 +13,10 @@ concurrency:
   group: nightly-market-run    # shares the database with the nightly run
   cancel-in-progress: false
 
+# Least privilege: the workflow's token can only read the code (jobs that need more say so).
+permissions:
+  contents: read
+
 jobs:
   morning:
     runs-on: ubuntu-latest
@@ -24,9 +28,8 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -36,7 +39,7 @@ jobs:
 
       - name: Restore database
         id: restore
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |            # must list the same files as the nightly run's save, or the cache isn't found
             market.db
@@ -51,9 +54,15 @@ jobs:
       # Saved only when something changed, so most mornings add nothing to GitHub's cache.
       - name: Save database
         if: hashFiles('changed.flag') != ''
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             market.db
             alert_state.json
           key: market-db-${{ github.run_id }}
+
+      - name: Tell me if this failed
+        if: failure()
+        run: |
+          python -m trend_bot notify --title "⚠️ Demo account morning check failed" \
+            --text "The demo account morning check job stopped with an error (fake money). Log: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true

@@ -94,6 +94,15 @@ def check(con: sqlite3.Connection, today: dt.date | None = None, failed_steps: l
                         + ", ".join(f"{t} (last {d[:10]})" for t, d in stale[:6])
                         + ". Their earnings-surprise scores are old: the company may be late, or its SEC data missing.")
 
+    demo = json.loads(get_meta(con, "paper_status") or "{}")
+    age = _age_days(demo.get("date"), today)
+    if age is not None and int(np.busday_count(dt.date.fromisoformat(demo["date"][:10]), today)) > 2:
+        problems.append(f"Demo account: not checked since {demo['date'][:10]} ({age} days); the demo step may be failing.")
+    keep_out = json.loads(get_meta(con, "paper_excluded") or "{}")
+    recent = [t for t, r in keep_out.items() if (_age_days(r.get("date"), today) or 99) <= 3]
+    if recent:
+        problems.append(f"Emergency exit in the last days: {', '.join(recent)} (see the 🛡️ Portfolio safety message).")
+
     audit = json.loads(get_meta(con, "data_audit") or "{}")
     if audit.get("problems") and (_age_days(audit["date"], today) or 0) <= 40:
         problems.append(f"The monthly data audit ({audit['date']}) found something to look into: "

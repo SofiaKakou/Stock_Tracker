@@ -286,8 +286,9 @@ def _study_ideas(con, args: argparse.Namespace) -> None:
     ideas.save_backtest(con, monthly, args.hold)
     _construction_section(df, spy, ideas, con, args)
     _morning_section(df, ideas, con, args)
-    print(f"The portfolio to follow will {'use' if ideas.use_cap(con) else 'not use'} the cap of "
-          f"{ideas.MAX_PER_INDUSTRY} per industry (used only if it gave more return per risk in both halves).")
+    print(f"The test {'preferred' if ideas.use_cap(con) else 'did not prefer'} the cap of {ideas.MAX_PER_INDUSTRY} "
+          "per industry (more return per risk in both halves?); the portfolio to follow uses it "
+          + ("either way, as a safety rule." if ideas.ALWAYS_CAP else "only then."))
 
 
 def _morning_section(df, ideas, con, args) -> None:

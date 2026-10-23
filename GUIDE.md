@@ -214,6 +214,30 @@ Setup: a second paper account in Alpaca, its
 keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
 separate and unaffected.
 
+## How the bot keeps things safe
+
+**The portfolio to follow (and its demo account)**
+- 20 stocks in equal amounts, **at most 5 from one industry** (always): one company is about 5%.
+- **Checked every night** (🛡️ Portfolio safety): a **bankruptcy filing, a delisting notice or "past
+  accounts can't be relied on"** means an **emergency exit**: the demo account sells it at the next
+  open and keeps it out for 90 days. **Other red flags, a fall of 25% since buying or 15% in a day**
+  are warnings for you (selling on those didn't help in 20 years of tests, so it's your call).
+- **Drawdown alarm**: a message if the demo account is 10% below its peak or 10% behind the S&P 500.
+
+**The day-trading demo account**
+- Every position has a **protective stop at the broker** (out if it moves 5% against us; it works
+  even if our job stops). At most 20 positions, never more than 98% of the account.
+- **Daily loss limit**: down 3% on the day → everything closed, no more trades that day.
+- **Never overnight**: closing orders at 15:45, then anything left at 15:58, and an **independent
+  safety net** (15:52, 16:06 and 9:20 New York) closes anything the trading job missed and tells you.
+- **Checks before each trade**: the stock must be tradable, shortable and easy to borrow (for shorts),
+  and have traded in the last 15 minutes (not halted).
+
+**The bot itself**
+- Both demo accounts can only reach Alpaca's paper-trading (fake money) server; keys live only in
+  GitHub Secrets. The GitHub Actions it uses are locked to exact versions and every workflow can only
+  read the code by default. ⚠️ Bot health and a Discord message tell you if a trading job fails.
+
 ## Optional setup
 
 - **Daily email**: free through a Gmail "app password". Add the `EMAIL_USER` and

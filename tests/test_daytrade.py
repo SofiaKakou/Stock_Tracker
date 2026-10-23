@@ -60,16 +60,28 @@ class Clock:
 
 
 class FakeBroker:
-    def __init__(self):
-        self.orders, self.held, self.closed_all = [], {}, False
+    def __init__(self, equity=100_000.0, last_equity=100_000.0, assets=None):
+        self.orders, self.held, self.closed_all, self.cancelled = [], {}, False, 0
+        self.equity, self.last_equity, self.assets = equity, last_equity, assets or {}
 
     def account(self):
-        return {"equity": "100000"}
+        return {"equity": str(self.equity), "last_equity": str(self.last_equity)}
 
-    def order(self, symbol, qty, side, tag, tif="day"):
+    def asset(self, symbol):
+        return self.assets.get(symbol, {"tradable": True, "status": "active", "shortable": symbol != "NOSHORT",
+                                        "easy_to_borrow": symbol != "NOSHORT"})
+
+    def cancel_all(self):
+        self.cancelled += 1
+
+    def open_orders(self):
+        return [o for o in self.orders if o.get("tif") == "cls"]
+
+    def order(self, symbol, qty, side, tag, tif="day", stop=None):
         if symbol == "NOSHORT" and side == "sell":
             raise PaperError("422 not shortable")
-        self.orders.append({"symbol": symbol, "qty": qty, "side": side, "client_order_id": tag, "tif": tif})
+        self.orders.append({"symbol": symbol, "qty": qty, "side": side, "client_order_id": tag, "tif": tif,
+                            "stop": stop, "time_in_force": tif})
         if tif == "day":
             self.held[symbol] = self.held.get(symbol, 0) + (qty if side == "buy" else -qty)
         else:
@@ -100,6 +112,10 @@ class FakeData:
             elif timeframe == "1Min":
                 o = {"GAPPY": 105.0}.get(s, 100.0)
                 rows.append((s, "2026-10-26T13:30:00Z", o, o, o, o, 1))
+                if s != "STALE":   # the latest minute: it's still trading (STALE stopped at 9:30)
+                    last = (pd.Timestamp(end) - pd.Timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if last > "2026-10-26T13:30:00Z":
+                        rows.append((s, last, o, o, o, o, 1))
             else:
                 t0 = pd.Timestamp("2026-10-26T13:30:00Z")
                 for k in range(13):
@@ -263,3 +279,66 @@ def test_bounded_shares_respect_the_limits_exactly():
     s = daytrade.bounded({"a": 100.0, "b": 50.0, "c": 0.0001})
     assert s["c"] == pytest.approx(0.15) and s["a"] <= 0.6 + 1e-9 and sum(s.values()) == pytest.approx(1)
     assert daytrade.bounded({"a": 1.0, "b": 9.0}) == pytest.approx({"a": 0.4, "b": 0.6})
+
+
+def test_every_entry_carries_a_protective_stop():
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=lambda *_: None,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    by = {o["symbol"]: o for o in broker.orders}
+    assert by["GAPPY"]["side"] == "sell" and by["GAPPY"]["stop"] == pytest.approx(105 * 1.05)   # short: stop above
+    assert by["BREAKY"]["side"] == "buy" and by["BREAKY"]["stop"] == pytest.approx(103 * 0.95)  # long: stop below
+
+
+def test_the_daily_loss_limit_closes_everything_and_stops_trading():
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker(equity=96_500.0, last_equity=100_000.0)          # down 3.5% on the day
+    broker.held = {"OLD": 10}
+    out = []
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=out.append,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    assert s.halted and broker.closed_all and not broker.orders
+    assert any("daily loss limit" in m for m in out)
+
+
+def test_pre_trade_checks_skip_what_shouldnt_be_traded():
+    clock = Clock(dt.datetime(2026, 10, 26, 10, 31, tzinfo=daytrade.NY))
+    hard = {"tradable": True, "status": "active", "shortable": True, "easy_to_borrow": False}
+    broker = FakeBroker(assets={"HARD": hard, "GONE": {"tradable": False, "status": "inactive"}})
+    out = []
+    s = daytrade.Session(broker, FakeData(clock), ["SPY"], DAY, log=out.append, sleep=clock.sleep, now=clock.now)
+    px = {"HARD": 50.0, "GONE": 50.0, "STALE": 50.0, "FINE": 50.0, "NOSHORT": 50.0}
+    s.enter("breakout", [("HARD", -1), ("GONE", 1), ("STALE", 1), ("NOSHORT", -1), ("FINE", 1)], px, 17)
+    assert [o["symbol"] for o in broker.orders] == ["FINE"]
+    text = "\n".join(out)
+    assert "HARD skipped (hard to borrow)" in text and "GONE skipped (not tradable)" in text
+    assert "STALE skipped (no recent trades (halted?))" in text and "NOSHORT skipped (can't be shorted)" in text
+
+
+def test_the_safety_net_closes_only_what_should_already_be_closed():
+    broker = FakeBroker()
+    ny = lambda h, m: dt.datetime(2026, 10, 26, h, m, tzinfo=daytrade.NY)
+    assert daytrade.safety_net(broker, ny(15, 52), log=lambda *_: None) is None          # nothing open
+    broker.held = {"AAA": 10, "BBB": -5}
+    broker.orders = [{"symbol": "AAA", "tif": "cls", "time_in_force": "cls"}, {"symbol": "BBB", "tif": "cls", "time_in_force": "cls"}]
+    assert daytrade.safety_net(broker, ny(15, 52), log=lambda *_: None) is None          # closing orders in place
+    broker.orders = [{"symbol": "AAA", "tif": "cls", "time_in_force": "cls"}]
+    e = daytrade.safety_net(broker, ny(15, 52), log=lambda *_: None)                     # BBB has none: close all
+    assert e and "BBB" in e["description"] and broker.closed_all
+    broker.held, broker.closed_all = {"AAA": 10}, False
+    e = daytrade.safety_net(broker, ny(9, 20), log=lambda *_: None)                      # left overnight
+    assert "left overnight" in e["description"] and "next open" in e["description"] and broker.closed_all
+
+
+def test_stopped_out_trades_are_counted_with_the_brokers_exit_order():
+    t = "td-20261026"
+    orders = [{"symbol": "AAA", "side": "buy", "status": "filled", "filled_qty": "10", "filled_avg_price": "100",
+               "client_order_id": f"{t}-breakout-AAA"},
+              {"symbol": "AAA", "side": "sell", "status": "filled", "filled_qty": "10", "filled_avg_price": "95",
+               "client_order_id": "a1b2c3-stop-leg"}]
+    row, = daytrade.trade_log(orders, [], DAY)
+    assert row["exit"] == 95 and row["ret"] == pytest.approx(-0.05)
+    assert daytrade.pnl(orders)["breakout"]["pnl"] == pytest.approx(-50)

@@ -23,6 +23,10 @@ concurrency:
   group: day-trading
   cancel-in-progress: false
 
+# Least privilege: the workflow's token can only read the code (jobs that need more say so).
+permissions:
+  contents: read
+
 jobs:
   trade:
     runs-on: ubuntu-latest
@@ -34,9 +38,8 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -46,14 +49,14 @@ jobs:
 
       # Which stocks to watch and the 10-year test results, from the last `study intraday` (read only).
       - name: Restore intraday study
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: intraday.db
           key: intraday-db-${{ github.run_id }}
           restore-keys: intraday-db-
 
       - name: Restore running totals
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: daytrade.json
           key: daytrade-state-${{ github.run_id }}
@@ -65,7 +68,7 @@ jobs:
       # Every trade so far (expected vs actual price, result): download it from the run's page.
       - name: Keep the trade log
         if: always() && hashFiles('daytrade_log.csv') != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: day-trade-log
           path: daytrade_log.csv
@@ -73,7 +76,13 @@ jobs:
 
       - name: Save running totals
         if: always() && hashFiles('daytrade.json') != ''
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: daytrade.json
           key: daytrade-state-${{ github.run_id }}
+
+      - name: Tell me if this failed
+        if: failure()
+        run: |
+          python -m trend_bot notify --title "⚠️ Day trading failed" \
+            --text "The day trading job stopped with an error (fake money). The safety net closes any day-trading positions left open. Log: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true

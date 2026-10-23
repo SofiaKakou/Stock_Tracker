@@ -207,7 +207,7 @@ def test_capped_rebalance_limits_each_industry():
     assert len(new2) == 6 and len(buys2) == 2
 
 
-def test_backtest_runs_capped_versions_and_picks_the_cap_only_if_it_helps(tmp_path):
+def test_backtest_runs_capped_versions_and_picks_the_cap_only_if_it_helps(tmp_path, monkeypatch):
     from trend_bot import model
 
     df = panel_with_edge()
@@ -232,6 +232,11 @@ def test_backtest_runs_capped_versions_and_picks_the_cap_only_if_it_helps(tmp_pa
     assert len(held) == 20 and sum(t < "S30" for t in held) == 5    # at most 5 energy stocks
     con.execute("DELETE FROM ideas_holdings")
     db.set_meta(con, "ideas_backtest", json.dumps({"cap": False}))
+    port = ideas.update_portfolio(con, r, "2026-09-30", {"invest": True}, hold=20, buffer=40)
+    held = [p["ticker"] for p in port["buys"]]
+    assert sum(t < "S30" for t in held) == 5          # the safety rule caps it even when the test didn't prefer it
+    con.execute("DELETE FROM ideas_holdings")
+    monkeypatch.setattr(ideas, "ALWAYS_CAP", False)   # without the safety rule: the test's choice
     port = ideas.update_portfolio(con, r, "2026-09-30", {"invest": True}, hold=20, buffer=40)
     assert [p["ticker"] for p in port["buys"]] == names[:20]
 
