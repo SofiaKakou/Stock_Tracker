@@ -58,6 +58,8 @@ def test_followed_stocks(tmp_path, monkeypatch):
 
 
 class Cursor:
+    rowcount = 0
+
     def __init__(self, remote):
         self.remote, self.sql = remote, []
 
@@ -83,6 +85,8 @@ def test_the_mirror_sends_only_whats_new_and_resends_a_readjusted_stock(tmp_path
     con = db.connect(tmp_path / "m.db")
     rows = [(t, f"2026-10-{d:02d}", 1, 1, 1, c, c, 10) for t, c in (("AAA", 10.0), ("BBB", 20.0), ("CCC", 30.0))
             for d in (20, 21, 22)]
+    rows += [("CCC", "1999-12-31", 1, 1, 1, 5.0, 5.0, 10),        # before 2000: not copied
+             ("OLD", "1995-06-01", 1, 1, 1, 5.0, 5.0, 10)]        # gone before 2000: skipped
     con.executemany("INSERT INTO prices VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
     con.execute("INSERT INTO tickers(ticker, name) VALUES ('AAA', 'A Corp')")
     con.commit()
@@ -94,6 +98,7 @@ def test_the_mirror_sends_only_whats_new_and_resends_a_readjusted_stock(tmp_path
     out = mirror.sync(conn, con, log=lambda *_: None)
     assert out == {"stocks": 3, "rows": 1 + 3 + 3, "tickers": 1}
     assert any(s.startswith("DELETE FROM dbo.prices WHERE ticker") and p == ("BBB",) for s, p in conn.c.sql)
+    assert any(s.startswith("DELETE TOP") and p == (mirror.SINCE,) for s, p in conn.c.sql)
     inserts = [p for s, p in conn.c.sql if s.startswith("INSERT INTO dbo.prices")]
     assert sum(len(p) // 8 for p in inserts) == 7
 
