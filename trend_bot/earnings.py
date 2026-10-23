@@ -50,13 +50,16 @@ def quarterly_series(facts: pd.DataFrame, item: str) -> pd.DataFrame:
     for r in fy.itertuples(index=False):
         nine = ytd_by.get(r.cik)
         val = None
+        # Only figures already filed when the year's report came out (a later restatement must not
+        # change a fourth quarter that was known on the annual report's filing date).
         if nine is not None:
-            m = nine[(nine["start"] == r.start) & (nine["end"] < r.end)]
+            m = nine[(nine["start"] == r.start) & (nine["end"] < r.end) & (nine["filed"] <= r.filed)]
             if len(m):
                 val = r.val - m["val"].iloc[0]
         if val is None and r.cik in q_by:
             inside = q_by[r.cik]
-            inside = inside[(inside["end"] > r.start) & (inside["end"] < r.end - pd.Timedelta(days=40))]
+            inside = inside[(inside["end"] > r.start) & (inside["end"] < r.end - pd.Timedelta(days=40))
+                            & (inside["filed"] <= r.filed)]
             if len(inside) == 3:
                 val = r.val - inside["val"].sum()
         if val is not None:

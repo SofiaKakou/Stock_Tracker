@@ -287,7 +287,7 @@ def group_rank(df: pd.DataFrame, col: str, by_sector: bool = False) -> pd.Series
 # --- Build the table once, reuse it --------------------------------------------------------------
 
 TABLE_START = "2009-06-30"  # XBRL filings start in 2009
-TABLE_VERSION = 8           # bump when monthly_factors changes what it computes
+TABLE_VERSION = 9           # bump when monthly_factors changes what it computes
 
 
 def _table_key(con: sqlite3.Connection, universe: int, min_price: float) -> str:
