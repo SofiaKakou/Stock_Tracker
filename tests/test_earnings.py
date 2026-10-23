@@ -107,3 +107,19 @@ def test_factor_study_includes_earnings(model_db, tmp_path, monkeypatch, capsys)
     assert "earnings_combo" in res["all"].index
     assert main(["study", "factors", "--db", str(tmp_path / "market.db"), "--since", str(DATES[260].date())]) == 0
     assert "earnings_combo" in capsys.readouterr().out
+
+
+def test_a_quarter_first_filed_later_does_not_change_an_earlier_surprise():
+    rows = []
+    for i, y in enumerate(range(2015, 2021)):
+        base = 100 + 4 * i
+        rows += year_rows(1, y, [base, base + 1, base + 2, base + 3])
+    f = facts_frame(rows)
+    rng = np.random.default_rng(0)
+    f.loc[f["days"].between(80, 100), "val"] += rng.normal(0, 0.5, f["days"].between(80, 100).sum())
+    before = earnings.surprises(earnings.quarterly_series(f, "net_income"))
+    # A quarter that was never reported on its own shows up years later (e.g. in a restated filing).
+    late = facts_frame([(1, "net_income", 0, "2014-01-01", "2014-03-31", "2022-05-01", 500.0)])
+    after = earnings.surprises(earnings.quarterly_series(pd.concat([f, late], ignore_index=True), "net_income"))
+    merged = before.merge(after, on=["end", "filed"], suffixes=("_b", "_a"))
+    assert len(merged) == len(before) and np.allclose(merged["sue_b"], merged["sue_a"])

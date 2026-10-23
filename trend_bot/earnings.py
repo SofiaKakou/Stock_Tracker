@@ -66,26 +66,42 @@ def quarterly_series(facts: pd.DataFrame, item: str) -> pd.DataFrame:
     return out.sort_values(["cik", "end"]).drop_duplicates(["cik", "end"], keep="first").reset_index(drop=True)
 
 
+def _changes(ends: np.ndarray, vals: np.ndarray) -> list[tuple[int, float]]:
+    """(index, change vs the quarter ending 350-380 days earlier) for each quarter that has one."""
+    out = []
+    for i in range(len(ends)):
+        lag = (ends[i] - ends[:i]).astype("timedelta64[D]").astype(int)
+        j = np.where((lag >= 350) & (lag <= 380))[0]
+        if len(j):
+            out.append((i, vals[i] - vals[j[-1]]))
+    return out
+
+
 def surprises(q: pd.DataFrame, history: int = 8, min_history: int = 4) -> pd.DataFrame:
-    """Standardized unexpected values per quarter: [cik, end, filed, sue]."""
+    """Standardized unexpected values per quarter: [cik, end, filed, sue].
+
+    Point in time: each quarter's surprise uses only the quarters already filed when it was filed.
+    (A past quarter that first appeared in a later filing must not change an earlier surprise.)"""
     rows = []
     for cik, g in q.groupby("cik", sort=False):
         g = g.sort_values("end").reset_index(drop=True)
-        ends, vals = g["end"].to_numpy(), g["val"].to_numpy(float)
-        diffs = []  # (index, change vs the same quarter a year earlier)
+        filed = g["filed"].to_numpy()
         for i in range(len(g)):
-            # the quarter ending 350-380 days earlier
-            lag = (ends[i] - ends[:i]).astype("timedelta64[D]").astype(int)
-            j = np.where((lag >= 350) & (lag <= 380))[0]
-            if len(j):
-                diffs.append((i, vals[i] - vals[j[-1]]))
-        for k, (i, d) in enumerate(diffs):
-            past = [x for _, x in diffs[max(0, k - history):k]]
+            known = np.where(filed <= filed[i])[0]
+            known = known[g["end"].to_numpy()[known] <= g.at[i, "end"]]
+            if i not in known:
+                continue
+            sub_ends, sub_vals = g["end"].to_numpy()[known], g["val"].to_numpy(float)[known]
+            diffs = _changes(sub_ends, sub_vals)
+            pos = int(np.where(known == i)[0][0])
+            if not diffs or diffs[-1][0] != pos:
+                continue
+            past = [x for _, x in diffs[-1 - history:-1]]
             if len(past) < min_history:
                 continue
             sd = np.std(past, ddof=1)
             if sd > 0:
-                rows.append((cik, g.at[i, "end"], g.at[i, "filed"], d / sd))
+                rows.append((cik, g.at[i, "end"], g.at[i, "filed"], diffs[-1][1] / sd))
     return pd.DataFrame(rows, columns=["cik", "end", "filed", "sue"])
 
 
