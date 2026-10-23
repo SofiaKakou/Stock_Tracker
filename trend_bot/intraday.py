@@ -101,6 +101,22 @@ class Data:
         return pd.DataFrame(rows, columns=["symbol", "t", "open", "high", "low", "close", "volume"])
 
 
+QUOTES_URL = "https://data.alpaca.markets/v2/stocks/quotes/latest"
+
+
+def latest_quotes(data: "Data", symbols: list[str]) -> dict[str, dict]:
+    """The best bid and ask right now: {symbol: {"bid", "ask"}} (whole-market feed, else IEX)."""
+    if not symbols:
+        return {}
+    for feed in (("sip", "iex") if data.feed == "sip" else ("iex",)):
+        resp = data.http.get(QUOTES_URL, params={"symbols": ",".join(symbols), "feed": feed}, timeout=30)
+        if resp.status_code == 403:
+            continue
+        resp.raise_for_status()
+        return {s: {"bid": q.get("bp"), "ask": q.get("ap")} for s, q in (resp.json().get("quotes") or {}).items()}
+    return {}
+
+
 def universe(market: sqlite3.Connection, n: int = N_STOCKS) -> list[str]:
     """The 3 index funds plus the n most traded stocks (by average daily dollar volume)."""
     from trend_bot.company_info import fund_tickers

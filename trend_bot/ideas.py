@@ -95,7 +95,25 @@ def rank_month(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -
         now["sector"] = None
     out = now.set_index("ticker")[["score", "pct", "close", "signals", "sector", "why"]]
     out.attrs["too_few"] = too_few        # in the universe, but with fewer than MIN_SIGNALS measures known
+    out.attrs["measures"] = ranks.loc[now.index].set_axis(now["ticker"].to_numpy())   # each measure's 0-1 rank
     return out
+
+
+def save_snapshot(con: sqlite3.Connection, ranked: pd.DataFrame, date: str) -> int:
+    """Keep the whole ranking of this date: every stock's place and score, and its rank on each measure
+    (1 = best). A record of what the bot thought, to compare with what happened later."""
+    con.execute("DELETE FROM ranking_snapshots WHERE date = ?", (date,))
+    con.execute("DELETE FROM measure_snapshots WHERE date = ?", (date,))
+    rows = [(date, t, i, float(r["score"]), float(r["pct"]), r["sector"] if isinstance(r["sector"], str) else None,
+             int(r["signals"])) for i, (t, r) in enumerate(ranked.iterrows(), 1)]
+    con.executemany("INSERT INTO ranking_snapshots VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    m = ranked.attrs.get("measures")
+    if m is not None and len(m):
+        long = m.stack().dropna()
+        con.executemany("INSERT INTO measure_snapshots VALUES (?, ?, ?, ?)",
+                        [(date, t, c, float(v)) for (t, c), v in long.items()])
+    con.commit()
+    return len(rows)
 
 
 def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd.DataFrame, str]:

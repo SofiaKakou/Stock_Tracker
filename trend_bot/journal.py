@@ -26,7 +26,7 @@ import sqlite3
 TABLES = {
     "day_trades": """trade_date DATE NOT NULL, symbol VARCHAR(12) NOT NULL, pattern VARCHAR(20), side SMALLINT,
         qty FLOAT, signal FLOAT, expected FLOAT, entry FLOAT, exit_price FLOAT, slippage FLOAT, ret FLOAT, pnl FLOAT,
-        entry_time VARCHAR(5), PRIMARY KEY (trade_date, symbol)""",
+        entry_time VARCHAR(5), bid FLOAT, ask FLOAT, spread FLOAT, PRIMARY KEY (trade_date, symbol)""",
     "day_summary": """trade_date DATE NOT NULL, pattern VARCHAR(20) NOT NULL, pnl FLOAT, trades INT,
         PRIMARY KEY (trade_date, pattern)""",
     "account_values": """account VARCHAR(10) NOT NULL, value_date DATE NOT NULL, value FLOAT,
@@ -38,11 +38,21 @@ TABLES = {
     "study_results": """pattern VARCHAR(30) NOT NULL PRIMARY KEY, trades INT, days INT, per_trade FLOAT,
         yearly FLOAT, first_half FLOAT, second_half FLOAT, hit_rate FLOAT, t_stat FLOAT, luck FLOAT,
         verdict NVARCHAR(200), updated DATE""",
+    "news": """id BIGINT NOT NULL PRIMARY KEY, created VARCHAR(30), news_date DATE, symbols NVARCHAR(400),
+        headline NVARCHAR(1000), summary NVARCHAR(MAX), source NVARCHAR(100), url NVARCHAR(1000), tone FLOAT""",
+    "macro": """series VARCHAR(20) NOT NULL, value_date DATE NOT NULL, value FLOAT, PRIMARY KEY (series, value_date)""",
+    "ranking_snapshots": """snapshot_date DATE NOT NULL, ticker VARCHAR(12) NOT NULL, rank INT, score FLOAT, pct FLOAT,
+        sector NVARCHAR(100), signals INT, PRIMARY KEY (snapshot_date, ticker)""",
+    "measure_snapshots": """snapshot_date DATE NOT NULL, ticker VARCHAR(12) NOT NULL, measure VARCHAR(40) NOT NULL,
+        pct FLOAT, PRIMARY KEY (snapshot_date, ticker, measure)""",
     "runs": """started VARCHAR(30) NOT NULL, command NVARCHAR(200) NOT NULL, finished VARCHAR(30), exit_code INT,
         error NVARCHAR(400), seconds FLOAT, code VARCHAR(64), data VARCHAR(64), PRIMARY KEY (started, command)""",
 }
 KEYS = {"day_trades": "trade_date", "day_summary": "trade_date", "account_values": "value_date",
-        "monthly_holdings": "portfolio_date", "safety_events": "event_date", "runs": "started"}
+        "monthly_holdings": "portfolio_date", "safety_events": "event_date", "runs": "started",
+        "news": "news_date", "macro": "value_date", "ranking_snapshots": "snapshot_date",
+        "measure_snapshots": "snapshot_date"}
+ADDED_COLUMNS = {"day_trades": {"bid": "FLOAT", "ask": "FLOAT", "spread": "FLOAT"}}   # for tables made earlier
 
 
 def connect():
@@ -61,7 +71,17 @@ def ensure_tables(conn) -> None:
     cur = conn.cursor()
     for name, cols in TABLES.items():
         cur.execute(f"IF OBJECT_ID('dbo.{name}', 'U') IS NULL CREATE TABLE dbo.{name} ({cols})")
+    for name, cols in ADDED_COLUMNS.items():
+        for col, kind in cols.items():
+            cur.execute(f"IF COL_LENGTH('dbo.{name}', '{col}') IS NULL ALTER TABLE dbo.{name} ADD {col} {kind}")
     conn.commit()
+
+
+def stored(conn, table: str, col: str) -> set[str]:
+    """The distinct values of a date column already in the journal (to send only what's new)."""
+    cur = conn.cursor()
+    cur.execute(f"SELECT DISTINCT CONVERT(VARCHAR(10), {col}, 23) FROM dbo.{table}")
+    return {r[0] for r in cur.fetchall()}
 
 
 def replace(conn, table: str, rows: list[dict]) -> int:
@@ -79,7 +99,9 @@ def replace(conn, table: str, rows: list[dict]) -> int:
     elif table == "study_results":
         cur.execute("DELETE FROM dbo.study_results")
     sql = f"INSERT INTO dbo.{table} ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})"
-    cur.executemany(sql, [tuple(r[c] for c in cols) for r in rows])
+    values = [tuple(r[c] for c in cols) for r in rows]
+    for i in range(0, len(values), 1000):
+        cur.executemany(sql, values[i:i + 1000])
     conn.commit()
     return len(rows)
 
@@ -90,7 +112,8 @@ def day_trade_rows(state: dict) -> list[dict]:
     return [{"trade_date": r["date"], "symbol": r["symbol"], "pattern": r.get("pattern"), "side": r.get("side"),
              "qty": r.get("qty"), "signal": r.get("signal"), "expected": r.get("expected"), "entry": r.get("entry"),
              "exit_price": r.get("exit"), "slippage": r.get("slippage"), "ret": r.get("ret"), "pnl": r.get("pnl"),
-             "entry_time": r.get("time")} for r in state.get("log", [])]
+             "entry_time": r.get("time"), "bid": r.get("bid"), "ask": r.get("ask"), "spread": r.get("spread")}
+            for r in state.get("log", [])]
 
 
 def day_summary_rows(state: dict) -> list[dict]:
@@ -143,6 +166,31 @@ def run_rows(con: sqlite3.Connection, days: int = 14) -> list[dict]:
     return out
 
 
+def news_rows(con: sqlite3.Connection, days: int = 5) -> list[dict]:
+    since = (dt.date.today() - dt.timedelta(days=days)).isoformat()
+    return [{"id": i, "created": c, "news_date": c[:10], "symbols": (s or "")[:400], "headline": (h or "")[:1000],
+             "summary": su, "source": (so or "")[:100], "url": (u or "")[:1000], "tone": t}
+            for i, c, s, h, su, so, u, t in con.execute("SELECT * FROM news WHERE created >= ?", (since,))]
+
+
+def macro_rows(con: sqlite3.Connection, since: str | None) -> list[dict]:
+    q, args = ("SELECT series, date, value FROM macro WHERE date >= ?", (since,)) if since else \
+        ("SELECT series, date, value FROM macro", ())
+    return [{"series": s, "value_date": d, "value": v} for s, d, v in con.execute(q, args)]
+
+
+def snapshot_rows(con: sqlite3.Connection, skip: set[str]) -> tuple[list[dict], list[dict]]:
+    """Ranking snapshots not yet in the journal (each is sent once: they never change)."""
+    dates = [d for (d,) in con.execute("SELECT DISTINCT date FROM ranking_snapshots") if d not in skip]
+    rank, measure = [], []
+    for d in dates:
+        rank += [{"snapshot_date": d, "ticker": t, "rank": r, "score": s, "pct": p, "sector": sec, "signals": n}
+                 for _, t, r, s, p, sec, n in con.execute("SELECT * FROM ranking_snapshots WHERE date = ?", (d,))]
+        measure += [{"snapshot_date": d, "ticker": t, "measure": m, "pct": p}
+                    for _, t, m, p in con.execute("SELECT * FROM measure_snapshots WHERE date = ?", (d,))]
+    return rank, measure
+
+
 def sync(conn, market: sqlite3.Connection, day_state: dict, intraday_results: dict | None,
          today: dt.date | None = None, log=print) -> dict[str, int]:
     """Write everything into the journal. Returns rows written per table."""
@@ -160,6 +208,14 @@ def sync(conn, market: sqlite3.Connection, day_state: dict, intraday_results: di
         "safety_events": replace(conn, "safety_events", safety_rows(found, today)) if found.get("date") == today.isoformat() else 0,
         "study_results": replace(conn, "study_results", study_rows(intraday_results, today)),
         "runs": replace(conn, "runs", run_rows(market)),
+        "news": replace(conn, "news", news_rows(market)),
     }
+    # The economy: everything the first time, then the last 60 days (late revisions included).
+    first = not stored(conn, "macro", "value_date")
+    written["macro"] = replace(conn, "macro", macro_rows(
+        market, None if first else (today - dt.timedelta(days=60)).isoformat()))
+    rank, measure = snapshot_rows(market, stored(conn, "ranking_snapshots", "snapshot_date"))
+    written["ranking_snapshots"] = replace(conn, "ranking_snapshots", rank)
+    written["measure_snapshots"] = replace(conn, "measure_snapshots", measure)
     log("[journal] " + ", ".join(f"{t} {n:,}" for t, n in written.items()))
     return written

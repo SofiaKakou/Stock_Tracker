@@ -230,8 +230,23 @@ Optional: every night the bot writes everything it did into a SQL Server databas
 offer) that you can open in **SQL Server Management Studio**. Tables (all in `dbo`):
 `day_trades` (every day trade: expected vs actual price, result), `day_summary` (each day per
 pattern), `account_values` (both demo accounts and the S&P 500 each day), `monthly_holdings`
-(the portfolio after each monthly update), `safety_events`, `study_results` (the 10-year tests)
-and `runs` (the bot's logbook). Rerunning a night replaces that night, never doubles it.
+(the portfolio after each monthly update), `safety_events`, `study_results` (the 10-year tests),
+`runs` (the bot's logbook), and the extra data it collects:
+- `ranking_snapshots` / `measure_snapshots`: **what the bot thought**: every stock's place and its
+  rank on each measure, at each monthly update and every Friday. Later you can check: was it right?
+- `news`: headlines for the stocks it follows (Alpaca News), with a tone score (+ good, − bad).
+- `macro`: the economy from FRED: 10-year and 2-year rates, the yield curve, the Fed rate, inflation,
+  unemployment, high-yield credit spreads and the VIX (the market's fear gauge).
+- `day_trades` also has the **bid, ask and spread** when each order went out.
+Rerunning a night replaces that night, never doubles it.
+
+A second database, **`TrendBotMarket`** (create it on the same server, also with the free offer),
+gets a copy of all the market data: `prices` (every stock, every day) and `tickers`. It's filled
+after each nightly run (Actions → *Market data mirror*); the first fill (~30 million rows) can take
+a few runs.
+
+For the economy data, get a free FRED key (fred.stlouisfed.org → My Account → API Keys) and add it
+as the secret `FRED_API_KEY`.
 
 Setup (once):
 1. Azure portal → **SQL databases → Create**, apply the **free offer**, database `TrendBotTrading`,
@@ -259,6 +274,13 @@ SELECT value_date, account, value FROM dbo.account_values ORDER BY value_date, a
 
 -- What the 10-year test said about each pattern
 SELECT * FROM dbo.study_results ORDER BY per_trade DESC;
+
+-- The latest headlines and their tone
+SELECT TOP 50 created, symbols, headline, tone FROM dbo.news ORDER BY created DESC;
+
+-- The bot's top 20 at each snapshot
+SELECT snapshot_date, rank, ticker, score, sector FROM dbo.ranking_snapshots WHERE rank <= 20
+ORDER BY snapshot_date DESC, rank;
 ```
 
 ## How the bot keeps things safe

@@ -1,0 +1,59 @@
+# Market data in SQL Server: copies the bot's prices into the TrendBotMarket database (same Azure
+# server as the journal), after each nightly run; only what's new. The first fill (~30 million rows)
+# can take a few runs: each stops after 4 hours and the next carries on.
+# Does nothing until the AZURE_SQL_* secrets exist (and the TrendBotMarket database is created).
+
+name: Market data mirror
+
+on:
+  schedule:
+    - cron: "41 3 * * 2-6"    # 03:41 UTC Tue-Sat, after the nightly run
+  workflow_dispatch: {}
+
+concurrency:
+  group: market-mirror
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 280
+    env:
+      AZURE_SQL_SERVER: ${{ secrets.AZURE_SQL_SERVER }}
+      AZURE_SQL_USER: ${{ secrets.AZURE_SQL_USER }}
+      AZURE_SQL_PASSWORD: ${{ secrets.AZURE_SQL_PASSWORD }}
+      AZURE_SQL_MARKET_DATABASE: ${{ secrets.AZURE_SQL_MARKET_DATABASE }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Restore database
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |            # must list the same files as the nightly run's save, or the cache isn't found
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+      - name: Open the database firewall for this run
+        if: env.AZURE_SQL_SERVER != ''
+        run: scripts/azure_firewall.sh open
+      - name: Copy what's new
+        if: env.AZURE_SQL_SERVER != ''
+        run: python -m trend_bot mirror --minutes 240
+      - name: Close the firewall again
+        if: always() && env.AZURE_SQL_SERVER != ''
+        run: scripts/azure_firewall.sh close

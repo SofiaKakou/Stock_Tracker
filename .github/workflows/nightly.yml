@@ -119,6 +119,19 @@ jobs:
           ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
         run: python -m trend_bot accounts --weekly --discord || echo "the demo accounts' history failed" >> reports/problems.txt
 
+      # Extra data for the record (nothing here changes how the bot trades): news headlines for the
+      # stocks it follows, the economy from FRED, and on Fridays the whole ranking as a snapshot.
+      - name: Collect news, the economy and the ranking
+        env:
+          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+          ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          python -m trend_bot collect || echo "collecting news / the economy failed" >> reports/problems.txt
+          if [ "$(date -u +%u)" = "5" ]; then
+            python -m trend_bot ideas --no-record > /dev/null || echo "the Friday ranking snapshot failed" >> reports/problems.txt
+          fi
+
       # Optional: the trading journal in SQL Server (Azure SQL, open it in SSMS). Does nothing until the
       # AZURE_SQL_* secrets exist (GUIDE.md, "The trading journal in SSMS").
       - name: Restore day-trading study

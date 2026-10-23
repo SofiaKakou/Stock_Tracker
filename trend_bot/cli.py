@@ -32,7 +32,9 @@ from trend_bot.commands.outputs import (
     cmd_daytrade,
     cmd_lookahead_combine,
     cmd_accounts,
+    cmd_collect,
     cmd_journal,
+    cmd_mirror,
     cmd_notify,
     cmd_paper,
     cmd_safety,
@@ -288,6 +290,16 @@ def make_parser() -> argparse.ArgumentParser:
     lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")
     lc.add_argument("files", nargs="+", help="JSON files from study lookahead --json")
     lc.set_defaults(func=cmd_lookahead_combine)
+
+    co = sub.add_parser("collect", help="collect news headlines (Alpaca) and the economy (FRED)")
+    co.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    co.add_argument("--news-since", help="collect headlines from this day (YYYY-MM-DD), e.g. to fill in history")
+    co.set_defaults(func=cmd_collect)
+
+    mr = sub.add_parser("mirror", help="copy the market data into SQL Server (TrendBotMarket), only what's new")
+    mr.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    mr.add_argument("--minutes", type=float, default=240, help="stop after this many minutes (default 240)")
+    mr.set_defaults(func=cmd_mirror)
 
     jn = sub.add_parser("journal", help="write the trading journal into SQL Server (Azure SQL, for SSMS)")
     jn.add_argument("--db", default="market.db", help="database file (default: market.db)")

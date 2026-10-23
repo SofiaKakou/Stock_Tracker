@@ -188,6 +188,28 @@ CREATE TABLE IF NOT EXISTS short_volume (
 
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
+-- What the bot thought: the whole ranking at each monthly update and each Friday (see ideas.save_snapshot).
+CREATE TABLE IF NOT EXISTS ranking_snapshots (
+    date TEXT NOT NULL, ticker TEXT NOT NULL, rank INTEGER, score REAL, pct REAL, sector TEXT, signals INTEGER,
+    PRIMARY KEY (date, ticker)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS measure_snapshots (
+    date TEXT NOT NULL, ticker TEXT NOT NULL, measure TEXT NOT NULL, pct REAL,   -- 0-1 rank, 1 = best
+    PRIMARY KEY (date, ticker, measure)
+) WITHOUT ROWID;
+
+-- News headlines for the stocks the bot follows (Alpaca News; see collect.py).
+CREATE TABLE IF NOT EXISTS news (
+    id INTEGER PRIMARY KEY, created TEXT NOT NULL, symbols TEXT, headline TEXT, summary TEXT, source TEXT,
+    url TEXT, tone REAL                  -- (positive - negative words) / words, financial word lists
+);
+CREATE INDEX IF NOT EXISTS news_created ON news(created);
+
+-- The economy and market mood (FRED: rates, yield curve, inflation, jobs, credit spreads, VIX).
+CREATE TABLE IF NOT EXISTS macro (
+    series TEXT NOT NULL, date TEXT NOT NULL, value REAL, PRIMARY KEY (series, date)
+) WITHOUT ROWID;
+
 -- The logbook: one row per command run (see runs.py).
 CREATE TABLE IF NOT EXISTS run_log (
     started   TEXT NOT NULL,
