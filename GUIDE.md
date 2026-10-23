@@ -166,9 +166,8 @@ The **🧠 AI report reader** only runs if started by hand (it costs money).
 
 ## Where the data comes from
 
-Prices from Yahoo Finance, with Stooq as a free backup when Yahoo refuses (the bot fills the
-missing days for the most important stocks first, and switches back to Yahoo's data as soon as
-it answers again). Company reports, insider trades and warning signs from the SEC. Short-selling
+Prices from Yahoo Finance (if Yahoo stops answering, the bot-health message tells you the
+prices are getting old; the next run catches up). Company reports, insider trades and warning signs from the SEC. Short-selling
 data from FINRA. All free.
 
 ## Checking things yourself
