@@ -61,9 +61,11 @@ def cmd_db(args: argparse.Namespace) -> int:
             market_data.update_etf_flags(con)
         if everything or args.prices_only:
             counts = market_data.update_prices(con, period=args.period, batch_size=args.batch, pause=args.pause,
-                                               retry_failed=args.retry_failed, limit=args.limit)
+                                               retry_failed=args.retry_failed, limit=args.limit,
+                                               backup=market_data.stooq_download)
             print(f"[prices] new {counts['new']:,}, updated {counts['updated']:,}, "
-                  f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}")
+                  f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}"
+                  + (f", filled from the backup source {counts['backup']:,}" if counts.get("backup") else ""))
             market_data.backfill_splits(con, pause=args.pause)
         if (everything and not args.no_short) or args.short_only:
             from trend_bot import short_interest
@@ -232,4 +234,28 @@ def cmd_sec_check(args: argparse.Namespace) -> int:
                 db.set_meta(con, "sec_paused_until", "")
                 con.commit()
                 print("[sec] pause lifted: the next run downloads from the SEC again")
+    return 0
+
+
+def cmd_price_check(args: argparse.Namespace) -> int:
+    """Does the backup price source (Stooq) answer, and does it agree with our prices?"""
+    from trend_bot import db, market_data
+
+    start = (dt.date.today() - dt.timedelta(days=14)).isoformat()
+    try:
+        df = market_data.stooq_download(args.ticker, start)
+    except Exception as e:  # noqa: BLE001
+        print(f"[prices] Stooq did not answer: {e}")
+        return 1
+    if df.empty:
+        print(f"[prices] Stooq answered but had no data for {args.ticker}")
+        return 1
+    print(f"[prices] Stooq: {len(df)} days of {args.ticker}, last {df.index[-1]:%Y-%m-%d} close {df['Close'].iloc[-1]:,.2f}")
+    if Path(args.db).exists():
+        with closing(db.connect(args.db)) as con:
+            ours = dict(con.execute("SELECT date, close FROM prices WHERE ticker = ? AND date >= ?", (args.ticker, start)))
+        both = [(d, float(c), ours[f"{d:%Y-%m-%d}"]) for d, c in df["Close"].items() if f"{d:%Y-%m-%d}" in ours]
+        if both:
+            gap = max(abs(a / b - 1) for _, a, b in both)
+            print(f"[prices] compared {len(both)} days with ours: largest difference {gap:.2%}")
     return 0

@@ -164,6 +164,13 @@ The **🧠 AI report reader** only runs if started by hand (it costs money).
 - Know your situation: taxes, how much risk you can take, when you need the money.
 - Promise anything: past patterns can stop working, especially once many people use them.
 
+## Where the data comes from
+
+Prices from Yahoo Finance, with Stooq as a free backup when Yahoo refuses (the bot fills the
+missing days for the most important stocks first, and switches back to Yahoo's data as soon as
+it answers again). Company reports, insider trades and warning signs from the SEC. Short-selling
+data from FINRA. All free.
+
 ## Optional setup
 
 - **Daily email**: free through a Gmail "app password". Add the `EMAIL_USER` and

@@ -541,3 +541,34 @@ def test_sec_pause_after_rate_limit(full_db, tmp_path, monkeypatch, capsys):
 
     assert main(args + ["--ignore-sec-pause"]) == 1  # unless asked to
     assert len(calls) == 2
+
+
+def test_backup_source_fills_what_yahoo_missed(con, monkeypatch):
+    monkeypatch.setattr(market_data.time, "sleep", lambda s: None)
+    market_data.update_universe(con)
+    market_data.update_prices(con, downloader=FakeYahoo(), pause=0, log=lambda *_: None)
+    last = con.execute("SELECT MAX(date) FROM prices WHERE ticker = 'UPPY'").fetchone()[0]
+    close = con.execute("SELECT close FROM prices WHERE ticker = 'UPPY' AND date = ?", (last,)).fetchone()[0]
+    day = pd.Timestamp(last)
+    asked = []
+
+    def stooq(t, start):
+        asked.append(t)
+        if t == "FLIP":       # a different split adjustment: the last day doesn't match, so it's skipped
+            return pd.DataFrame({"Open": [1.0, 1.0], "High": [1.0, 1.0], "Low": [1.0, 1.0], "Close": [1.0, 1.0],
+                                 "Volume": [1, 1]}, index=[day, day + pd.offsets.BDay(1)])
+        return pd.DataFrame({"Open": [close, 81.0], "High": [close, 82.0], "Low": [close, 80.0],
+                             "Close": [close, 81.5], "Volume": [10, 20]}, index=[day, day + pd.offsets.BDay(1)])
+
+    con.execute("UPDATE tickers SET updated_at = '2000-01-01'")
+    nothing = lambda tickers, start=None, period=None: {}
+    counts = market_data.update_prices(con, downloader=nothing, pause=0, log=lambda *_: None, backup=stooq)
+    assert counts["backup"] == 1 and asked[0] in market_data.BENCHMARKS    # benchmark funds asked first
+    assert asked.index("UPPY") > max(asked.index(b) for b in market_data.BENCHMARKS if b in asked)
+    assert con.execute("SELECT MAX(date) FROM prices WHERE ticker = 'UPPY'").fetchone()[0] > last
+    assert con.execute("SELECT close FROM prices WHERE ticker = 'UPPY' ORDER BY date DESC").fetchone()[0] == 81.5
+    assert con.execute("SELECT MAX(date) FROM prices WHERE ticker = 'FLIP'").fetchone()[0] == last
+
+
+def test_stooq_symbols():
+    assert market_data.stooq_symbol("BRK.B") == "brk-b.us" and market_data.stooq_symbol("AAPL") == "aapl.us"
