@@ -131,6 +131,11 @@ The **🧠 AI report reader** only runs if started by hand (it costs money).
   and checks they match. Any difference would mean a test quietly peeked at the answers.
 - **Robustness check**: the portfolio tested again with its settings nudged (15, 20 or 25 stocks;
   selling a bit sooner or later). If the results barely move, they don't hinge on lucky settings.
+- **ML lab**: six ideas (several borrowed from the FreqAI project) for making the machine-learning
+  model beat the simple average of the signals: counting recent years more, adding noise so it
+  doesn't memorize the past, staying quiet on unusual stocks, acting only when confident,
+  predicting "beats the middle stock: yes/no", and a 50/50 blend. Each is tested on years it never
+  saw; a winner is only offered to you.
 - **Kinds of market**: the portfolio's record in rising vs falling and calm vs volatile markets.
   It shows where any edge came from; it never moves the portfolio to cash.
 
