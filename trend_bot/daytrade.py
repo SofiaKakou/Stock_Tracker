@@ -63,6 +63,12 @@ class DayBroker(Paper):
             body.update(order_class="oto", stop_loss={"stop_price": f"{stop:.2f}"})
         return self._call("POST", "/orders", json=body)
 
+    def stop_order(self, symbol: str, qty: int, side: str, stop: float, tag: str) -> dict:
+        """A stand-alone protective stop (for a position that has none)."""
+        return self._call("POST", "/orders", json={"symbol": symbol, "qty": str(qty), "side": side, "type": "stop",
+                                                    "stop_price": f"{stop:.2f}", "time_in_force": "day",
+                                                    "client_order_id": tag})
+
     def asset(self, symbol: str) -> dict:
         return self._call("GET", f"/assets/{symbol}")
 
@@ -179,6 +185,29 @@ class Session:
             self.log(f"[day] daily loss limit: account {change:+.2%} today; everything closed, no more trades today")
         return self.halted
 
+    def protect(self) -> int:
+        """Give every open position without a protective stop one (STOP_LOSS from its entry price): covers
+        positions opened before stops existed, or a stop that got lost. Returns how many were added."""
+        stopped = {o["symbol"] for o in self.b.open_orders() if o.get("type") in ("stop", "stop_limit", "trailing_stop")}
+        added = 0
+        for p in self.b.positions():
+            if p["symbol"] in stopped:
+                continue
+            qty, entry = float(p["qty"]), float(p.get("avg_entry_price") or 0)
+            if not qty or not entry:
+                continue
+            long = qty > 0
+            stop = entry * (1 - STOP_LOSS) if long else entry * (1 + STOP_LOSS)
+            try:
+                self.b.stop_order(p["symbol"], abs(int(qty)), "sell" if long else "buy", stop,
+                                  f"td-{self.today:%Y%m%d}-x-{p['symbol']}-stop")
+                added += 1
+            except PaperError as e:
+                self.log(f"[day] couldn't add a stop for {p['symbol']} ({str(e)[:80]})")
+        if added:
+            self.log(f"[day] added protective stops to {added} position(s) that had none")
+        return added
+
     def can_trade(self, sym: str, side: int, last_trade: dt.datetime | None = None) -> str:
         """'' if the stock may be traded now, else why not (checked with the broker before each entry)."""
         if sym not in self._assets:
@@ -272,6 +301,8 @@ class Session:
         return {s: b[0] for s, b in bars.items() if b and b[0]["t"].endswith(("13:30:00Z", "14:30:00Z"))}
 
     def morning(self) -> None:
+        if not self.guard():
+            self.protect()
         self.wait_until(dt.time(9, 31))
         if self.now().time() <= GAP_LATEST:
             prev = self.prev_closes(self.stocks)
@@ -302,6 +333,8 @@ class Session:
         return dt.datetime.fromisoformat(bar["t"].replace("Z", "+00:00")) + dt.timedelta(minutes=30)
 
     def afternoon(self) -> None:
+        if not self.guard():
+            self.protect()
         self.breakouts(AFTERNOON_CHECKS[:-1])
         self.wait_until(dt.time(15, 30, 45))
         prev = self.prev_closes(self.etfs)

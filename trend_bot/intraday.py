@@ -176,25 +176,35 @@ def intraday_momentum(df: pd.DataFrame) -> pd.DataFrame:
                          "cost": COST["etf"]}).query("ret == ret")
 
 
+def _grid(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """One row per (symbol, date), one column per half-hour slot 0..12 (full days only)."""
+    g = df.pivot_table(index=["symbol", "date"], columns="slot", values=col, aggfunc="first")
+    return g.reindex(columns=range(13)).dropna()
+
+
 def opening_range(df: pd.DataFrame) -> pd.DataFrame:
-    """Break of the first half hour's range: in at the next bar's open, out at the close (stocks)."""
-    stocks = df[~df["symbol"].isin(ETFS)].sort_values(["symbol", "date", "slot"])
-    days = _days(stocks).set_index(["symbol", "date"])
-    rows = []
-    for (sym, date), g in stocks[stocks["slot"] >= 1].groupby(["symbol", "date"]):
-        if (sym, date) not in days.index:
-            continue
-        day = days.loc[(sym, date)]
-        closes, opens = g["close"].to_numpy(), g["open"].to_numpy()
-        up = np.where(closes[:-1] > day["high0"])[0]       # a bar closes outside the range ...
-        down = np.where(closes[:-1] < day["low0"])[0]
-        first = min(up[0] if len(up) else 99, down[0] if len(down) else 99)
-        if first == 99:
-            continue
-        side = 1 if len(up) and up[0] == first else -1
-        entry = opens[first + 1]                           # ... in at the next bar's open
-        rows.append((date, sym, side * (day["close"] / entry - 1)))
-    return pd.DataFrame(rows, columns=["date", "symbol", "ret"]).assign(cost=COST["stock"])
+    """Break of the first half hour's range: in at the next bar's open, out at the close (stocks).
+    Vectorized: a whole column of days at a time."""
+    stocks = df[~df["symbol"].isin(ETFS)]
+    if stocks.empty:
+        return pd.DataFrame(columns=["date", "symbol", "ret", "cost"])
+    close, opn, high = _grid(stocks, "close"), _grid(stocks, "open"), _grid(stocks, "high")
+    low = _grid(stocks, "low")
+    idx = close.index.intersection(opn.index).intersection(high.index).intersection(low.index)
+    close, opn, high0, low0 = close.loc[idx], opn.loc[idx], high.loc[idx, 0], low.loc[idx, 0]
+    c = close[list(range(1, 12))].to_numpy()                       # a bar closing outside the range ...
+    up, down = c > high0.to_numpy()[:, None], c < low0.to_numpy()[:, None]
+    hit = up | down
+    any_hit = hit.any(axis=1)
+    first = hit.argmax(axis=1)                                     # the first such bar (slot first + 1)
+    rows = np.arange(len(c))
+    side = np.where(up[rows, first], 1.0, -1.0)
+    entry = opn.to_numpy()[rows, first + 2]                        # ... in at the next bar's open
+    ret = side * (close[12].to_numpy() / entry - 1)
+    keep = any_hit
+    out = pd.DataFrame({"date": idx.get_level_values("date")[keep], "symbol": idx.get_level_values("symbol")[keep],
+                        "ret": ret[keep]})
+    return out.assign(cost=COST["stock"]).reset_index(drop=True)
 
 
 def gap_fade(df: pd.DataFrame, gap: float = GAP) -> pd.DataFrame:
