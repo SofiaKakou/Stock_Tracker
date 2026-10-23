@@ -65,8 +65,12 @@ def quarterly_series(facts: pd.DataFrame, item: str) -> pd.DataFrame:
         if val is not None:
             q4.append((r.cik, r.end, r.filed, val))
     q4 = pd.DataFrame(q4, columns=["cik", "end", "filed", "val"])
+    # A fourth quarter can exist twice: worked out from the annual report, and reported on its own in a
+    # later filing (many companies repeat last year's quarters in the next annual report). The one filed
+    # first wins: the later one wasn't known yet when the earlier one was used.
     out = pd.concat([q, q4], ignore_index=True)
-    return out.sort_values(["cik", "end"]).drop_duplicates(["cik", "end"], keep="first").reset_index(drop=True)
+    return (out.sort_values(["cik", "end", "filed"], kind="stable").drop_duplicates(["cik", "end"], keep="first")
+            .reset_index(drop=True))
 
 
 def _changes(ends: np.ndarray, vals: np.ndarray) -> list[tuple[int, float]]:

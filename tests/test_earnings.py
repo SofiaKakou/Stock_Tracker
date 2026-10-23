@@ -133,3 +133,12 @@ def test_fourth_quarter_uses_only_quarters_filed_by_the_annual_report():
             (1, "net_income", 0, "2020-01-01", "2020-03-31", "2021-05-10", 10.0)]   # filed after the 10-K
     q = earnings.quarterly_series(facts_frame(rows), "net_income")
     assert pd.Timestamp("2020-12-31") not in set(q["end"])     # Q4 couldn't be worked out on 2021-02-15
+
+
+def test_a_fourth_quarter_reported_again_a_year_later_does_not_replace_the_one_worked_out():
+    rows = year_rows(1, 2020, [10, 20, 30, 45])
+    # The next annual report (filed 2022) repeats 2020's fourth quarter on its own, restated.
+    rows.append((1, "net_income", 0, "2020-10-01", "2020-12-31", "2022-02-15", 99))
+    q = earnings.quarterly_series(facts_frame(rows), "net_income")
+    last = q[q["end"] == pd.Timestamp("2020-12-31")].iloc[0]
+    assert last["val"] == 45 and last["filed"] == pd.Timestamp("2021-02-15")
