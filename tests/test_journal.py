@@ -52,7 +52,7 @@ def test_the_journal_writes_every_table_once_per_day(tmp_path):
     written = journal.sync(conn, con, state, results, log=lambda *_: None)
     assert written == {"day_trades": 1, "day_summary": 1, "account_values": 2, "monthly_holdings": 2,
                        "safety_events": 1, "study_results": 1, "runs": 1, "news": 1, "macro": 2,
-                       "ranking_snapshots": 1, "measure_snapshots": 2}
+                       "ranking_snapshots": 1, "measure_snapshots": 2, "stocks": 0}
     alters = [s for s, _ in conn.sql if "ALTER TABLE" in s]
     assert len(alters) == 3                              # bid, ask, spread added to an older day_trades
     creates = [s for s, _ in conn.sql if s.startswith("IF OBJECT_ID")]
@@ -77,3 +77,33 @@ def test_every_column_written_exists_in_its_table():
     assert set(journal.day_summary_rows({"days": {"2026-10-23": {"gap": {"pnl": 1, "trades": 1}}}})[0]) <= cols["day_summary"]
     assert set(journal.account_rows({"day": {"dates": ["2026-10-23"], "values": [1.0]}})[0]) <= cols["account_values"]
     assert set(journal.safety_rows({"exit": [("A", "x")]}, dt.date(2026, 10, 23))[0]) <= cols["safety_events"]
+
+
+def test_the_stock_list_marks_funds_sectors_and_the_portfolio(tmp_path):
+    con = db.connect(tmp_path / "m.db")
+    con.executemany("INSERT INTO tickers(ticker, name, exchange, sic) VALUES (?, ?, ?, ?)",
+                    [("AAPL", "Apple Inc.", "Nasdaq", 3571), ("SPY", "SPDR S&P 500 ETF Trust", "NYSE Arca", None)])
+    con.execute("INSERT INTO ideas_holdings(ticker, rank) VALUES ('AAPL', 1)")
+    rows = {r["ticker"]: r for r in journal.stock_rows(con)}
+    assert rows["AAPL"]["sector"] == "Technology" and rows["AAPL"]["in_portfolio"] == 1 and rows["AAPL"]["is_fund"] == 0
+    assert rows["SPY"]["sector"] == "Fund / ETF" and rows["SPY"]["is_fund"] == 1 and rows["SPY"]["in_portfolio"] == 0
+    conn = FakeConn()
+    journal.replace_all(conn, "stocks", list(rows.values()))
+    assert conn.sql[0][0] == "DELETE FROM dbo.stocks" and conn.sql[1][0].startswith("INSERT INTO dbo.stocks (ticker, name")
+
+
+def test_the_star_schema_script_is_complete():
+    from trend_bot import collect, daytrade, intraday
+
+    batches = journal.dw_script()
+    sql = "\n".join(batches)
+    assert "/*" + "PATTERNS*/" not in sql and "/*" + "SERIES*/" not in sql and "/*" + "ACCOUNTS*/" not in sql
+    assert not any(b.upper() == "GO" for b in batches) and batches[0].startswith("--")
+    for p in list(daytrade.PATTERN_TEST) + list(intraday.STRATEGIES) + list(collect.SERIES):
+        assert f"N'{p}'" in sql                                          # every pattern and economic series
+    assert "N'VIX, the market''s fear gauge'" in sql                     # quotes escaped
+    for t in ("DimStock", "DimDate", "FactForecast", "FactDayTrade", "FactNews", "vStockSearch"):
+        assert f"dw.{t}" in sql
+    # Every procedure and view is replaced each night; tables only made when missing.
+    creates = [b for b in batches if "CREATE TABLE" in b]
+    assert creates and all("IF OBJECT_ID" in b.split("CREATE TABLE")[0] for b in creates)

@@ -283,6 +283,68 @@ SELECT snapshot_date, rank, ticker, score, sector FROM dbo.ranking_snapshots WHE
 ORDER BY snapshot_date DESC, rank;
 ```
 
+### The star schema (schema `dw`): search stocks like in a BI tool
+
+On top of the `dbo` tables (the staging area) the bot builds a **star schema** every night, the way
+a data warehouse for TARGIT or Power BI is built: **dimensions** describe things, **facts** hold the
+numbers, and every fact links to its dimensions by an ID ("key"). `dw.usp_Load` fills it after the
+journal is written (you can also run `EXEC dw.usp_Load` yourself in SSMS); running it again changes
+nothing. Every dimension has an *Unknown* row with key **-1** for facts whose stock/pattern is missing.
+
+| Dimensions | What's in it |
+|---|---|
+| `dw.DimStock` (**StockKey**) | every listed stock: ticker, name, exchange, sector (or *Fund / ETF*), CIK, latest close, $ traded a day, in the portfolio now |
+| `dw.DimDate` (**DateKey** = yyyymmdd) | 1990–2040: year, quarter, month, weekday, weekend |
+| `dw.DimPattern` | the day-trading patterns, live or tested only, with their latest 10-year test |
+| `dw.DimAccount` | monthly demo, day-trading demo, S&P 500 |
+| `dw.DimMeasure` | the measures behind the ranking (ROE, earnings surprise, ...) |
+| `dw.DimSeries` | the FRED economy series |
+| `dw.DimNews` | each headline (text, source, link, tone) |
+
+| Facts | One row per | Keys |
+|---|---|---|
+| `dw.FactForecast` | stock and snapshot day: rank, score, top-% | DateKey, StockKey |
+| `dw.FactForecastMeasure` | stock, day and measure: its rank on that measure | DateKey, StockKey, MeasureKey |
+| `dw.FactDayTrade` | day trade: price expected vs got, spread, return, $ | DateKey, StockKey, PatternKey |
+| `dw.FactDayPattern` | day and pattern: $ result, trades | DateKey, PatternKey |
+| `dw.FactAccountValue` | account and day: value, % change | DateKey, AccountKey |
+| `dw.FactHolding` | monthly update and stock held | DateKey, StockKey |
+| `dw.FactSafetyEvent` | warning or emergency exit | DateKey, StockKey |
+| `dw.FactNews` | headline and stock it mentions: tone | NewsId, DateKey, StockKey |
+| `dw.FactMacro` | series and day: value | DateKey, SeriesKey |
+
+Ready-made views: **`dw.vStockSearch`** (one row per stock: what it is plus the bot's latest
+forecast, last 30 days' news and day trades), `dw.vForecast` (every ranking, readable) and
+`dw.vDayTrades`. In SSMS, *Database Diagrams → New* with the `dw` tables draws the star.
+
+```sql
+-- Search a stock by name or ticker
+SELECT * FROM dw.vStockSearch WHERE Name LIKE '%nvidia%' OR Ticker = 'NVDA';
+
+-- The bot's current top 20 with their sectors
+SELECT TOP 20 Ticker, Name, Sector, ForecastRank, ForecastScore, InPortfolio
+FROM dw.vStockSearch WHERE ForecastRank IS NOT NULL ORDER BY ForecastRank;
+
+-- One stock's forecast over time
+SELECT [Date], [Rank], Score FROM dw.vForecast WHERE Ticker = 'AAPL' ORDER BY [Date];
+
+-- Star join: day-trading results by pattern and weekday
+SELECT p.Pattern, d.DayName, COUNT(*) AS Trades, SUM(f.Pnl) AS Dollars, AVG(f.Ret) AS AvgReturn
+FROM dw.FactDayTrade f
+JOIN dw.DimPattern p ON p.PatternKey = f.PatternKey
+JOIN dw.DimDate d ON d.DateKey = f.DateKey
+GROUP BY p.Pattern, d.DayName, d.DayOfWeek ORDER BY p.Pattern, d.DayOfWeek;
+
+-- Which measures put a stock where it is (latest snapshot)
+SELECT m.Measure, f.Pct FROM dw.FactForecastMeasure f
+JOIN dw.DimStock s ON s.StockKey = f.StockKey JOIN dw.DimMeasure m ON m.MeasureKey = f.MeasureKey
+WHERE s.Ticker = 'AAPL' AND f.DateKey = (SELECT MAX(DateKey) FROM dw.FactForecastMeasure)
+ORDER BY f.Pct DESC;
+```
+
+(Prices stay in `TrendBotMarket`: Azure SQL can't join across databases, so a price fact may come
+later as its own step.)
+
 ## How the bot keeps things safe
 
 **The portfolio to follow (and its demo account)**
