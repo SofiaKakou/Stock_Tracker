@@ -1,0 +1,72 @@
+# Trading journal now: Actions tab -> "Trading journal" -> Run workflow. Writes the same tables the
+# nightly run writes (SQL Server, open them in SSMS), e.g. to test the setup or refresh it mid-day.
+# Reads the bot's data, opens the Azure SQL firewall for this run only, writes, closes it again.
+
+name: Trading journal
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: trading-journal
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  journal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AZURE_SQL_SERVER: ${{ secrets.AZURE_SQL_SERVER }}
+      AZURE_SQL_USER: ${{ secrets.AZURE_SQL_USER }}
+      AZURE_SQL_PASSWORD: ${{ secrets.AZURE_SQL_PASSWORD }}
+      AZURE_SQL_DATABASE: ${{ secrets.AZURE_SQL_DATABASE }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+      ALPACA_DAY_KEY_ID: ${{ secrets.ALPACA_DAY_KEY_ID }}
+      ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Restore database
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |            # must list the same files as the nightly run's save, or the cache isn't found
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+      - name: Restore day-trading results
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: daytrade.json
+          key: daytrade-state-${{ github.run_id }}
+          restore-keys: daytrade-state-
+      - name: Restore day-trading study
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: intraday.db
+          key: intraday-db-${{ github.run_id }}
+          restore-keys: intraday-db-
+      - name: Demo accounts' latest values
+        run: python -m trend_bot accounts || true
+      - name: Open the database firewall for this run
+        run: scripts/azure_firewall.sh open
+      - name: Write the journal
+        run: python -m trend_bot journal
+      - name: Close the firewall again
+        if: always()
+        run: scripts/azure_firewall.sh close
