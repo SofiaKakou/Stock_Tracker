@@ -185,6 +185,16 @@ def yahoo_download(tickers: list[str], start: str | None = None, period: str | N
     return out
 
 
+def incomplete(counts: dict[str, int]) -> str:
+    """Why tonight's prices are incomplete ('' if they aren't): worth trying again a bit later."""
+    tried = counts["updated"] + counts["new"] + counts["reloaded"] + counts["failed"]
+    if counts.get("gave_up"):
+        return "Yahoo stopped sending prices partway (probably a rate limit)"
+    if tried >= 100 and counts["failed"] > tried / 2:
+        return f"Yahoo sent nothing for {counts['failed']:,} of {tried:,} stocks"
+    return ""
+
+
 def _rows(ticker: str, df: pd.DataFrame) -> list[tuple]:
     df = df.dropna(subset=["Close"])
     adj = df["Adj Close"] if "Adj Close" in df else df["Close"]
@@ -247,15 +257,6 @@ def backfill_splits(con: sqlite3.Connection, downloader: Downloader = yahoo_down
     return len(todo)
 
 
-def split_factor_after(splits: pd.DataFrame, ticker: str, dates: pd.DatetimeIndex) -> pd.Series:
-    """Product of split ratios strictly after each date: turns a split-adjusted price into the actual one."""
-    s = splits[splits["ticker"] == ticker]
-    out = pd.Series(1.0, index=dates)
-    for d, r in zip(pd.to_datetime(s["date"]), s["ratio"]):
-        out[dates < d] *= r
-    return out
-
-
 def _save(con: sqlite3.Connection, ticker: str, df: pd.DataFrame, replace_all: bool) -> None:
     _save_splits(con, ticker, df, full_history=replace_all)
     if replace_all:
@@ -296,7 +297,7 @@ def update_prices(
     todo = con.execute(q + " ORDER BY last_date IS NOT NULL, ticker", [cutoff]).fetchall()
     if limit:
         todo = todo[:limit]
-    counts = {"updated": 0, "new": 0, "reloaded": 0, "failed": 0}
+    counts = {"updated": 0, "new": 0, "reloaded": 0, "failed": 0, "gave_up": 0}
     if not todo:
         log("[prices] everything is up to date")
         return counts
@@ -323,6 +324,7 @@ def update_prices(
             if backoff > 3:
                 log("[prices] Yahoo keeps returning nothing (probably rate-limiting). "
                     "Progress is saved - run the update again later.")
+                counts["gave_up"] = 1
                 break
             wait = 30 * 2 ** (backoff - 1)
             log(f"[prices] empty batch, waiting {wait}s before retrying...")

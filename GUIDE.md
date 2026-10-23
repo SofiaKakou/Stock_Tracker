@@ -63,7 +63,9 @@ buying more. Checked weekly, so it can be a few days late.
 where several insiders bought. Ideas to look into, not tips.
 
 **⚠️ Bot health**: something went wrong with the bot itself, not with your stocks (for example
-old prices, or the SEC asking it to slow down). It usually fixes itself; **no message means
+old prices, the SEC asking it to slow down, or a recommended stock whose company hasn't
+reported new quarterly figures in 5 months, which makes its earnings scores old). If Yahoo
+refuses prices, the nightly run tries again an hour later. It usually fixes itself; **no message means
 everything is fine**. "✅ all fine again" means it cleared, and **✅ SEC data is back** tells you
 what it caught up on after a break.
 

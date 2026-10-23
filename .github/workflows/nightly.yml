@@ -52,7 +52,16 @@ jobs:
       - name: Update data
         run: |
           mkdir -p reports
-          python -m trend_bot db update || { echo "::warning::db update did not finish (see log); continuing"; echo "the data update didn't finish" >> reports/problems.txt; }
+          python -m trend_bot db update --flag-incomplete reports/prices_incomplete || { echo "::warning::db update did not finish (see log); continuing"; echo "the data update didn't finish" >> reports/problems.txt; }
+
+      # If Yahoo refused or stopped partway (usually a short rate limit), wait an hour and try the
+      # prices once more, so tonight's messages use today's prices instead of waiting for tomorrow.
+      - name: Retry prices later
+        if: hashFiles('reports/prices_incomplete') != ''
+        run: |
+          echo "::warning::$(cat reports/prices_incomplete); trying again in an hour"
+          sleep 3600
+          python -m trend_bot db update --prices-only --max-age-hours 0.5 || echo "the price retry didn't finish" >> reports/problems.txt
 
       # Monthly honesty checks: once a month (the first night of days 1-3 that hasn't done them, so a
       # failed night is retried but a good one isn't repeated), plus the two retired models quarterly.
