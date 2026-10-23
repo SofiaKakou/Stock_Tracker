@@ -147,3 +147,44 @@ def test_command_does_nothing_without_keys(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv(daytrade.KEY_ENV, raising=False)
     assert main(["daytrade", "--state", str(tmp_path / "s.json")]) == 0
     assert "isn't set up" in capsys.readouterr().out
+
+
+def test_trade_log_compares_expected_and_actual_prices(tmp_path):
+    t = "td-20261026"
+    orders = [
+        {"symbol": "AAA", "side": "buy", "status": "filled", "filled_qty": "10", "filled_avg_price": "100.10",
+         "client_order_id": f"{t}-breakout-AAA", "filled_at": "2026-10-26T14:30:50Z"},
+        {"symbol": "AAA", "side": "sell", "status": "filled", "filled_qty": "10", "filled_avg_price": "102",
+         "client_order_id": f"{t}-x-AAA-exit"},
+        {"symbol": "BBB", "side": "sell", "status": "filled", "filled_qty": "4", "filled_avg_price": "49.95",
+         "client_order_id": f"{t}-gap-BBB", "filled_at": "2026-10-26T13:31:10Z"},
+        {"symbol": "BBB", "side": "buy", "status": "filled", "filled_qty": "4", "filled_avg_price": "49",
+         "client_order_id": f"{t}-x-BBB-exit"}]
+    entries = [{"date": "2026-10-26", "time": "10:30", "pattern": "breakout", "symbol": "AAA", "side": 1, "qty": 10,
+                "expected": 100.0, "signal": 0.004}]                       # BBB: from before the log existed
+    rows = {r["symbol"]: r for r in daytrade.trade_log(orders, entries, DAY)}
+    assert rows["AAA"]["slippage"] == pytest.approx(0.001) and rows["AAA"]["ret"] == pytest.approx(102 / 100.1 - 1)
+    assert rows["AAA"]["pnl"] == pytest.approx(19) and rows["AAA"]["signal"] == 0.004 and rows["AAA"]["time"] == "10:30"
+    assert rows["BBB"]["slippage"] is None and rows["BBB"]["ret"] == pytest.approx(-(49 / 49.95 - 1))
+    assert rows["BBB"]["pattern"] == "gap" and rows["BBB"]["time"] == "13:31"
+
+    state, e = daytrade.report(orders, 100_000.0, {"pending": entries}, DAY)
+    assert len(state["log"]) == 2 and "pending" not in state
+    assert "Learned so far (2 trades)" in e["description"] and "0.100% worse" in e["description"]
+    path = tmp_path / "log.csv"
+    daytrade.write_csv(state["log"], str(path))
+    text = path.read_text()
+    assert text.splitlines()[0].startswith("date,time,pattern,symbol") and "AAA" in text and len(text.splitlines()) == 3
+    state, _ = daytrade.report(orders, 100_000.0, state, DAY)                # the same day again: not doubled
+    assert len(state["log"]) == 2
+
+
+def test_the_session_records_what_each_order_expected():
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=lambda *_: None,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    e = {x["symbol"]: x for x in s.entries}
+    assert e["GAPPY"]["pattern"] == "gap" and e["GAPPY"]["signal"] == pytest.approx(0.05) and e["GAPPY"]["side"] == -1
+    assert e["BREAKY"]["signal"] == pytest.approx(103 / 101 - 1) and e["BREAKY"]["expected"] == 103.0

@@ -62,6 +62,15 @@ jobs:
       - name: Trade
         run: python -m trend_bot daytrade --phase "${{ inputs.phase || 'auto' }}" --discord
 
+      # Every trade so far (expected vs actual price, result): download it from the run's page.
+      - name: Keep the trade log
+        if: always() && hashFiles('daytrade_log.csv') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: day-trade-log
+          path: daytrade_log.csv
+          retention-days: 90
+
       - name: Save running totals
         if: always() && hashFiles('daytrade.json') != ''
         uses: actions/cache/save@v6

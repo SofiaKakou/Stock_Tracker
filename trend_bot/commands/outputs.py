@@ -338,14 +338,20 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
     symbols = meta.get("universe") or intraday.ETFS + daytrade.FALLBACK_STOCKS
     data = intraday.Data.from_env(daytrade.KEY_ENV, daytrade.SECRET_ENV)
     session = daytrade.Session(broker, data, symbols, now.date())
-    if phase == "morning":
-        session.morning()
-    elif phase == "afternoon":
-        session.afternoon()
+    state = daytrade.load_state(args.state)
+    try:
+        if phase == "morning":
+            session.morning()
+        elif phase == "afternoon":
+            session.afternoon()
+    finally:   # what each order expected, for the trade log (kept even if the session stops early)
+        state.setdefault("pending", []).extend(session.entries)
+        Path(args.state).write_text(json.dumps(state, indent=1))
     if phase in ("afternoon", "report"):
         state, embed = daytrade.report(session.today_orders(), float(broker.account()["equity"]),
-                                       daytrade.load_state(args.state), now.date(), meta.get("results"))
+                                       state, now.date(), meta.get("results"))
         Path(args.state).write_text(json.dumps(state, indent=1))
+        daytrade.write_csv(state["log"], args.log_csv)
         print(embed["description"].replace("**", ""))
         if args.discord and alerts.load_webhook():
             alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [embed]})

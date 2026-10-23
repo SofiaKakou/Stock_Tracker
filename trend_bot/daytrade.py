@@ -131,6 +131,7 @@ class Session:
         self.etfs = [s for s in symbols if s in intraday.ETFS]
         self.stocks = [s for s in symbols if s not in intraday.ETFS]
         self.utc0 = dt.datetime.combine(today, dt.time(9, 0), NY).astimezone(dt.timezone.utc)
+        self.entries: list[dict] = []   # for the trade log: what was expected when each order went out
 
     def at(self, t: dt.time) -> dt.datetime:
         return dt.datetime.combine(self.today, t, NY)
@@ -149,7 +150,8 @@ class Session:
     def budget(self) -> float:
         return float(self.b.account()["equity"]) * INVESTED / (STOCK_SLOTS + ETF_SLOTS)
 
-    def enter(self, pattern: str, signals: list[tuple[str, int]], prices: dict[str, float], slots: int) -> int:
+    def enter(self, pattern: str, signals: list[tuple[str, int]], prices: dict[str, float], slots: int,
+              strength: dict[str, float] | None = None) -> int:
         done = self.traded()
         used = len(done & set(self.stocks if pattern != "momentum" else self.etfs))
         each, sent = self.budget(), 0
@@ -162,6 +164,9 @@ class Session:
             try:
                 self.b.order(sym, qty, "buy" if side > 0 else "sell", f"td-{self.today:%Y%m%d}-{pattern}-{sym}")
                 sent += 1
+                self.entries.append({"date": self.today.isoformat(), "time": self.now().strftime("%H:%M"),
+                                     "pattern": pattern, "symbol": sym, "side": side, "qty": qty,
+                                     "expected": prices[sym], "signal": (strength or {}).get(sym)})
                 self.log(f"[day] {pattern}: {'buy' if side > 0 else 'short'} {qty} {sym} (~${qty * prices[sym]:,.0f})")
             except PaperError as e:   # e.g. a stock that can't be shorted today
                 self.log(f"[day] {pattern}: {sym} refused ({str(e)[:80]})")
@@ -192,7 +197,8 @@ class Session:
             first = self._bars(self.stocks, "1Min", self.at(dt.time(9, 30)))
             opens = {s: b[0]["o"] for s, b in first.items() if b}
             last = {s: b[-1]["c"] for s, b in first.items() if b}
-            self.enter("gap", gap_signals(opens, prev), last, STOCK_SLOTS)
+            self.enter("gap", gap_signals(opens, prev), last, STOCK_SLOTS,
+                       {s: opens[s] / prev[s] - 1 for s in opens if prev.get(s)})
         else:
             self.log("[day] started too late for the gap fade today")
         self.breakouts(MORNING_CHECKS)
@@ -206,9 +212,10 @@ class Session:
             bars = self._bars(self.stocks, "30Min", self.at(dt.time(9, 30)))
             done_bars = {s: [x for x in b if self._end(x) <= self.now()] for s, b in bars.items()}
             last = {s: b[-1]["c"] for s, b in done_bars.items() if len(b) >= 2}
-            sig = breakout_signals({s: b["h"] for s, b in first.items()}, {s: b["l"] for s, b in first.items()},
-                                   last, self.traded())
-            self.enter("breakout", sig, last, STOCK_SLOTS)
+            high0, low0 = {s: b["h"] for s, b in first.items()}, {s: b["l"] for s, b in first.items()}
+            sig = breakout_signals(high0, low0, last, self.traded())
+            beyond = {s: (last[s] / high0[s] - 1) if side > 0 else (last[s] / low0[s] - 1) for s, side in sig}
+            self.enter("breakout", sig, last, STOCK_SLOTS, beyond)
 
     def _end(self, bar: dict) -> dt.datetime:
         return dt.datetime.fromisoformat(bar["t"].replace("Z", "+00:00")) + dt.timedelta(minutes=30)
@@ -219,7 +226,9 @@ class Session:
         prev = self.prev_closes(self.etfs)
         first = self.first_half_hour(self.etfs)
         now_px = {s: b[-1]["c"] for s, b in self._bars(self.etfs, "1Min", self.at(dt.time(15, 25))).items() if b}
-        self.enter("momentum", momentum_signals({s: b["c"] for s, b in first.items()}, prev), now_px, ETF_SLOTS)
+        close0 = {s: b["c"] for s, b in first.items()}
+        self.enter("momentum", momentum_signals(close0, prev), now_px, ETF_SLOTS,
+                   {s: close0[s] / prev[s] - 1 for s in close0 if prev.get(s)})
         self.breakouts(AFTERNOON_CHECKS[-1:])
         self.flatten()
 
@@ -239,10 +248,72 @@ class Session:
             self.log("[day] closed what was left at 15:58")
 
 
+LOG_FIELDS = ["date", "time", "pattern", "symbol", "side", "qty", "signal", "expected", "entry", "exit",
+              "slippage", "ret", "pnl"]
+
+
+def trade_log(orders: list[dict], entries: list[dict], today: dt.date) -> list[dict]:
+    """One row per trade today: what was expected vs what happened.
+
+    slippage: how much worse the entry price was than the price the bot saw when it decided (a positive
+    number is a cost: paid more on a buy, got less on a short). ret: the trade's return, entry to exit."""
+    by_sym: dict[str, dict] = {}
+    for o in orders:
+        tag = str(o.get("client_order_id", ""))
+        if o.get("status") != "filled" or not o.get("filled_avg_price") or not tag.startswith("td-"):
+            continue
+        r = by_sym.setdefault(o["symbol"], {})
+        key = "exit" if tag.endswith("-exit") or tag.split("-")[2] == "x" else "entry"
+        r[key] = o
+    expected = {e["symbol"]: e for e in entries if e["date"] == today.isoformat()}
+    rows = []
+    for sym, r in sorted(by_sym.items()):
+        if "entry" not in r:
+            continue
+        e, o = expected.get(sym, {}), r["entry"]
+        side = 1 if o["side"] == "buy" else -1
+        entry = float(o["filled_avg_price"])
+        exit_ = float(r["exit"]["filled_avg_price"]) if "exit" in r else None
+        qty = float(o["filled_qty"])
+        exp = e.get("expected")
+        rows.append({"date": today.isoformat(), "time": e.get("time") or str(o.get("filled_at", ""))[11:16],
+                     "pattern": str(o["client_order_id"]).split("-")[2], "symbol": sym, "side": side, "qty": qty,
+                     "signal": e.get("signal"), "expected": exp, "entry": entry, "exit": exit_,
+                     "slippage": side * (entry / exp - 1) if exp else None,
+                     "ret": side * (exit_ / entry - 1) if exit_ else None,
+                     "pnl": side * qty * (exit_ - entry) if exit_ else None})
+    return rows
+
+
+def learned(log: list[dict]) -> str:
+    """What the live trades say so far, in one line."""
+    done = [r for r in log if r.get("ret") is not None]
+    if not done:
+        return ""
+    rets = [r["ret"] for r in done]
+    parts = [f"average trade **{np.mean(rets):+.2%}**", f"right {np.mean([x > 0 for x in rets]):.0%} of the time"]
+    slip = [r["slippage"] for r in log if r.get("slippage") is not None]
+    if slip:
+        parts.insert(0, f"entry prices **{abs(np.mean(slip)):.3%} {'worse' if np.mean(slip) >= 0 else 'better'}** "
+                        f"than when the bot decided (the 10-year test assumes {intraday.COST['stock'] / 2:.3%} a side)")
+    return f"**Learned so far ({len(done)} trades):** " + " · ".join(parts)
+
+
+def write_csv(log: list[dict], path: str) -> None:
+    import csv
+
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=LOG_FIELDS)
+        w.writeheader()
+        w.writerows({k: r.get(k) for k in LOG_FIELDS} for r in log)
+
+
 def report(orders: list[dict], equity: float, state: dict, today: dt.date, tested: dict | None = None) -> tuple[dict, dict]:
-    """Add today's results to the running state; returns (state, Discord embed)."""
+    """Add today's results to the running state (and the trade log); returns (state, Discord embed)."""
     from trend_bot.alerts import GOLD, GREEN, RED, lead
 
+    rows = trade_log(orders, state.pop("pending", []), today)
+    state["log"] = [r for r in state.get("log", []) if r["date"] != today.isoformat()] + rows
     day = pnl(orders)
     state.setdefault("start_equity", equity - sum(r["pnl"] for r in day.values()))
     state.setdefault("days", {})[today.isoformat()] = {p: {"pnl": r["pnl"], "trades": r["trades"]} for p, r in day.items()}
@@ -269,6 +340,9 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
                      f"{', '.join(r['symbols'][:8])}); since the start ${t.get('pnl', 0):+,.0f} over "
                      f"{t.get('trades', 0)} trades{tline}")
     start = state["start_equity"]
+    lesson = learned(state["log"])
+    if lesson:
+        lines += ["", lesson]
     lines += ["", f"**Today: ${today_total:+,.0f}** · account ${equity:,.0f} "
                   f"(**{equity / start - 1:+.2%}** since {min(state['days'])}, {len(state['days'])} trading day"
                   f"{'s' if len(state['days']) != 1 else ''})"]
