@@ -61,12 +61,18 @@ def cmd_db(args: argparse.Namespace) -> int:
             market_data.update_etf_flags(con)
         if everything or args.prices_only:
             counts = market_data.update_prices(con, period=args.period, batch_size=args.batch, pause=args.pause,
-                                               retry_failed=args.retry_failed, limit=args.limit)
+                                               retry_failed=args.retry_failed, limit=args.limit,
+                                               max_age_hours=args.max_age_hours)
             from trend_bot import runs
 
             runs.note("prices", counts)
             print(f"[prices] new {counts['new']:,}, updated {counts['updated']:,}, "
                   f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}")
+            why = market_data.incomplete(counts)
+            if why and args.flag_incomplete:
+                Path(args.flag_incomplete).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.flag_incomplete).write_text(why + "\n")
+                print(f"[prices] incomplete: {why}. Flagged for a retry later ({args.flag_incomplete}).")
             market_data.backfill_splits(con, pause=args.pause)
         if (everything and not args.no_short) or args.short_only:
             from trend_bot import short_interest

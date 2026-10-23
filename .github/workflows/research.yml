@@ -12,7 +12,7 @@ on:
         default: factors
         options: [factors, ml, mllab, ideas, candidates, lookahead, audit, forecast, model, insiders, momentum, trend]
       args:
-        description: "Extra options, e.g. --benchmark IWM --since 2016-01-01 (optional)"
+        description: "Extra options, e.g. --benchmark IWM --since 2016-01-01, or for lookahead --months yearly (~1.5 h) (optional)"
         type: string
         default: ""
       refresh:

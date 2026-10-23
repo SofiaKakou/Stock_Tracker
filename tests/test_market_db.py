@@ -541,3 +541,20 @@ def test_sec_pause_after_rate_limit(full_db, tmp_path, monkeypatch, capsys):
 
     assert main(args + ["--ignore-sec-pause"]) == 1  # unless asked to
     assert len(calls) == 2
+
+
+def test_prices_flagged_for_a_retry_when_yahoo_gives_up(con, monkeypatch):
+    monkeypatch.setattr(market_data.time, "sleep", lambda s: None)
+    market_data.update_universe(con)
+    nothing = lambda tickers, start=None, period=None: {}
+    counts = market_data.update_prices(con, downloader=nothing, pause=0, log=lambda *_: None)
+    assert counts["gave_up"] == 1 and "stopped sending prices" in market_data.incomplete(counts)
+    counts = market_data.update_prices(con, downloader=FakeYahoo(), pause=0, log=lambda *_: None)
+    assert counts["new"] == 7 and market_data.incomplete(counts) == ""      # one missing stock is normal
+    assert "nothing for 80 of 100" in market_data.incomplete(
+        {"updated": 20, "new": 0, "reloaded": 0, "failed": 80, "gave_up": 0})
+    # The retry an hour later picks up even the stocks refreshed earlier tonight.
+    con.execute("UPDATE tickers SET updated_at = strftime('%Y-%m-%dT%H:%M:%S', updated_at, '-1 hour')")
+    assert market_data.update_prices(con, downloader=FakeYahoo(), pause=0, log=lambda *_: None)["updated"] == 0
+    again = market_data.update_prices(con, downloader=FakeYahoo(), pause=0, log=lambda *_: None, max_age_hours=0.5)
+    assert again["updated"] + again["reloaded"] == 7

@@ -144,6 +144,10 @@ def make_parser() -> argparse.ArgumentParser:
                      help="try the SEC even if it asked us to slow down in the last 20 hours")
     dbp.add_argument("--insiders-all-companies", action="store_true",
                      help="read recent filings for every company, not just ones the screen can show")
+    dbp.add_argument("--max-age-hours", type=float, default=6,
+                     help="prices: skip stocks refreshed less than this many hours ago (default 6)")
+    dbp.add_argument("--flag-incomplete", metavar="FILE",
+                     help="prices: write the reason to FILE if Yahoo left tonight's prices incomplete")
     only = dbp.add_mutually_exclusive_group()
     only.add_argument("--universe-only", action="store_true")
     only.add_argument("--prices-only", action="store_true")
@@ -177,7 +181,7 @@ def make_parser() -> argparse.ArgumentParser:
     st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml",
                                        "ideas", "candidates", "lookahead", "mllab", "audit"])
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
-    st.add_argument("--months", help="lookahead: month-ends to check, e.g. 2012-06-30,2021-06-30")
+    st.add_argument("--months", help="lookahead: month-ends to check, e.g. 2012-06-30,2021-06-30, or 'yearly' (one per year)")
     st.add_argument("--trees", type=int, default=300, help="ml: boosting rounds (default 300)")
     st.add_argument("--first-year", type=int, default=2011,
                     help="forecast: first year to predict (each year uses only earlier years)")

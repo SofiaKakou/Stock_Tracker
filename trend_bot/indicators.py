@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 
@@ -27,21 +26,3 @@ def rsi(close: pd.Series, window: int = 14) -> pd.Series:
     out = 100 - 100 / (1 + rs)
     # No losses in the window means RSI is 100, not NaN.
     return out.where(avg_loss != 0, 100.0).where(avg_gain.notna())
-
-
-def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
-    """MACD line, signal line and histogram."""
-    line = ema(close, fast) - ema(close, slow)
-    sig = line.ewm(span=signal, adjust=False).mean()
-    return pd.DataFrame({"macd": line, "signal": sig, "hist": line - sig})
-
-
-def slope(series: pd.Series, window: int = 20) -> pd.Series:
-    """Percent change per bar of a linear fit over the last `window` bars."""
-    x = np.arange(window)
-
-    def _fit(y: np.ndarray) -> float:
-        m = np.polyfit(x, y, 1)[0]
-        return m / y.mean() * 100
-
-    return series.rolling(window, min_periods=window).apply(_fit, raw=True)

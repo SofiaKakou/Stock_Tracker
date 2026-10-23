@@ -146,7 +146,7 @@ def _ideas_section(con: sqlite3.Connection, esc) -> list[str]:
 def _glance_section(con: sqlite3.Connection, esc) -> list[str]:
     """The dashboard at the top: the portfolio to follow, how it's really doing vs the S&P 500,
     red flags in its stocks, and the signals on probation."""
-    from trend_bot import candidates, events, ideas
+    from trend_bot import events, ideas
 
     parts = ["<h2>📋 The portfolio to follow</h2>",
              '<p class="explain">20 stocks chosen from the top ideas, equal amounts in each, checked once a month. '

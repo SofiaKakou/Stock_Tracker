@@ -37,3 +37,22 @@ def test_a_peek_at_the_future_is_caught(model_db, tmp_path, monkeypatch):  # noq
     clean, bad = lookahead.verdict(res)
     assert not clean and bad
     assert "Look-ahead suspected in:" in lookahead.text(res)
+
+
+def test_months_to_check():
+    assert lookahead.parse_months(None) == list(lookahead.DEFAULT_MONTHS)
+    assert lookahead.parse_months("2012-06-30, 2021-06-30") == ["2012-06-30", "2021-06-30"]
+    yearly = lookahead.yearly_months(pd.Timestamp("2026-10-23"))
+    assert yearly[0] == f"{lookahead.FIRST_YEAR}-06-30" and yearly[-1] == "2025-06-30" and len(yearly) == 17
+
+
+def test_many_months_get_a_summary_of_where_each_signal_differed():
+    ok = pd.DataFrame({"stocks": [10, 10], "differ": [0, 0], "max_gap": [0.0, 0.0], "examples": ["", ""]},
+                      index=["sue", "roe"])
+    bad = ok.copy()
+    bad.loc["sue", ["differ", "max_gap", "examples"]] = [2, 0.5, "X 1/2"]
+    uni = {"both": 10, "only_full": 0, "only_cut": 0}
+    res = {"2010-06": (ok, uni), "2011-06": (bad, uni), "2012-06": (ok, uni), "2013-06": (bad, uni)}
+    out = lookahead.text(res)
+    assert "sue                    2 of 4 months: 2011-06 (2), 2013-06 (2)" in out
+    assert "roe" not in out.split("Where each")[1].split("Look-ahead")[0]

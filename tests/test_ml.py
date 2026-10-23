@@ -77,15 +77,11 @@ def test_study_ml_end_to_end(model_db, tmp_path, monkeypatch, capsys):
 
 
 def test_model_ideas_only_shown_when_it_passed(model_db, monkeypatch):
-    from trend_bot import alerts, report
+    from trend_bot import report
 
     ranking = {"date": "2026-09-30", "top": [{"ticker": "S79", "close": 80.0}], "bottom": [{"ticker": "S00", "close": 9.0}]}
     failed = {"passed": False, "ic": 0.01, "mix_ic": 0.02, "text": "NOT PASSED"}
-    assert alerts.ml_embed(failed, ranking) is None
-    assert "aren't shown" in alerts.ml_status_line(failed)
     passed = dict(failed, passed=True, ic=0.04)
-    e = alerts.ml_embed(passed, ranking)
-    assert "S79" in e["description"] and "S00" in e["description"] and alerts.ml_status_line(passed) == ""
 
     monkeypatch.setattr(ml.dt, "date", type("D", (ml.dt.date,), {"today": classmethod(lambda c: ml.dt.date(2026, 10, 5))}))
     db.set_meta(model_db, "ml_ranking", json.dumps(ranking))
