@@ -54,16 +54,21 @@ jobs:
           mkdir -p reports
           python -m trend_bot db update || { echo "::warning::db update did not finish (see log); continuing"; echo "the data update didn't finish" >> reports/problems.txt; }
 
-      # Monthly (and on manual runs): re-test the 30-day outlook for its "How reliable is this?" note, and
-      # re-test the all-signal model (its ideas are only shown if it passes; its picks are tracked either way).
+      # Monthly honesty checks: once a month (the first night of days 1-3 that hasn't done them, so a
+      # failed night is retried but a good one isn't repeated), plus the two retired models quarterly.
+      # Manual runs do everything. See trend_bot/commands/data.py: cmd_monthly_due.
       - name: Monthly honesty check
         if: github.event_name == 'workflow_dispatch' || github.event.schedule != ''
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date +%d)" -le 3 ]; then
-            mkdir -p reports
-            for step in "study forecast" "study ml" "study ideas" "study candidates" "study audit" "ideas"; do
-              python -m trend_bot $step || { echo "::warning::$step failed"; echo "'$step' failed" >> reports/problems.txt; }
-            done
+          mkdir -p reports
+          force=""; [ "${{ github.event_name }}" = "workflow_dispatch" ] && force="--force"
+          steps="$(python -m trend_bot monthly-due $force)"
+          if [ -n "$steps" ]; then
+            ok=1
+            while IFS= read -r step; do
+              python -m trend_bot $step || { ok=0; echo "::warning::$step failed"; echo "'$step' failed" >> reports/problems.txt; }
+            done <<< "$steps"
+            [ "$ok" = 1 ] && python -m trend_bot monthly-due --mark
           fi
 
       - name: Discord alerts

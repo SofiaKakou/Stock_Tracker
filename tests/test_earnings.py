@@ -123,3 +123,13 @@ def test_a_quarter_first_filed_later_does_not_change_an_earlier_surprise():
     after = earnings.surprises(earnings.quarterly_series(pd.concat([f, late], ignore_index=True), "net_income"))
     merged = before.merge(after, on=["end", "filed"], suffixes=("_b", "_a"))
     assert len(merged) == len(before) and np.allclose(merged["sue_b"], merged["sue_a"])
+
+
+def test_fourth_quarter_uses_only_quarters_filed_by_the_annual_report():
+    # No 9-month figure; Q1 is only reported (restated) after the 10-K came out.
+    rows = [(1, "net_income", 0, "2020-04-01", "2020-06-30", "2020-07-10", 20.0),
+            (1, "net_income", 0, "2020-07-01", "2020-09-30", "2020-10-10", 30.0),
+            (1, "net_income", 0, "2020-01-01", "2020-12-31", "2021-02-15", 100.0),
+            (1, "net_income", 0, "2020-01-01", "2020-03-31", "2021-05-10", 10.0)]   # filed after the 10-K
+    q = earnings.quarterly_series(facts_frame(rows), "net_income")
+    assert pd.Timestamp("2020-12-31") not in set(q["end"])     # Q4 couldn't be worked out on 2021-02-15

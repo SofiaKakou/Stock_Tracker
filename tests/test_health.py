@@ -118,3 +118,35 @@ def test_sec_data_is_back_said_once_after_a_gap(tmp_path, monkeypatch):
     args = ["health", "--db", str(tmp_path / "m.db"), "--discord"]
     assert main(args) == 0 and main(args) == 0
     assert [p["embeds"][0]["title"] for p in sent].count("✅ SEC data is back") == 1
+
+
+def test_monthly_checks_run_once_a_month_and_retired_models_quarterly(tmp_path, monkeypatch, capsys):
+    from trend_bot.cli import main
+    from trend_bot.commands import data
+
+    path = str(tmp_path / "m.db")
+    db.connect(path).close()
+
+    class Day(dt.date):
+        value = dt.date(2026, 11, 2)
+
+        @classmethod
+        def today(cls):
+            return cls.value
+
+    monkeypatch.setattr(data.dt, "date", Day)
+    assert main(["monthly-due", "--db", path]) == 0
+    steps = capsys.readouterr().out.split("\n")
+    assert "study ideas" in steps and "study audit" in steps and "study ml" not in steps     # November: not quarterly
+    assert main(["monthly-due", "--db", path, "--mark"]) == 0
+    capsys.readouterr()
+    main(["monthly-due", "--db", path])
+    assert capsys.readouterr().out == ""                                                   # done for the month
+    Day.value = dt.date(2027, 1, 1)
+    main(["monthly-due", "--db", path])
+    assert "study ml" in capsys.readouterr().out.split("\n")                               # January: quarterly
+    Day.value = dt.date(2027, 1, 15)
+    main(["monthly-due", "--db", path])
+    assert capsys.readouterr().out == ""                                                   # past day 3
+    main(["monthly-due", "--db", path, "--force"])
+    assert "study forecast" in capsys.readouterr().out                                     # manual runs: everything

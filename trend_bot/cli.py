@@ -25,7 +25,7 @@ from trend_bot.commands.watchlist import (
     cmd_news,
     cmd_insiders,
 )
-from trend_bot.commands.data import cmd_db, cmd_price_check, cmd_screen, cmd_sec_check
+from trend_bot.commands.data import cmd_db, cmd_monthly_due, cmd_price_check, cmd_screen, cmd_sec_check
 from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
@@ -243,6 +243,12 @@ def make_parser() -> argparse.ArgumentParser:
     sc2 = sub.add_parser("sec-check", help="one small SEC request: is the SEC still refusing us? (lifts the pause if not)")
     sc2.add_argument("--db", default="market.db", help="database file (default: market.db)")
     sc2.set_defaults(func=cmd_sec_check)
+
+    md2 = sub.add_parser("monthly-due", help="list the monthly checks due tonight (used by the nightly run)")
+    md2.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    md2.add_argument("--mark", action="store_true", help="record that this month's checks are done")
+    md2.add_argument("--force", action="store_true", help="list every check (manual runs)")
+    md2.set_defaults(func=cmd_monthly_due)
 
     wy = sub.add_parser("why", help="why is (or isn't) a stock in the ranking?")
     wy.add_argument("tickers", nargs="+", help="one or more tickers, e.g. AAPL BRK-B")
