@@ -126,6 +126,7 @@ def test_study_ideas_end_to_end(model_db, tmp_path, monkeypatch, capsys):
                  "--split-year", "2026"]) == 0
     out = capsys.readouterr().out
     assert "Top ideas + weather filter" in out and "S&P 500 (buy & hold)" in out and "Year by year" in out
+    assert "Luck check" in out and "random portfolios" in out
     assert json.loads(db.get_meta(model_db, "ideas_backtest"))["hold"] == 5
 
 
@@ -287,3 +288,16 @@ def test_construction_includes_the_sell_rules_when_flags_exist():
     m = ideas.construction_test(df, spy)
     assert {"stop30", "no_flags"} <= set(m.columns)
     assert "no_flags" not in ideas.construction_test(df.drop(columns=["red_flags", "late_filing"]), spy)
+
+
+def test_luck_test_tells_skill_from_chance():
+    df = panel_with_edge(months=48, n=180).dropna(subset=["ret"]).reset_index(drop=True)
+    split = pd.Timestamp("2021-01-01")
+    skill = ideas.luck_test(df, df["ret"], n=300, split=split)          # knows next month's returns
+    assert list(skill.index) == ["All years", "before 2021", "2021 on"]
+    assert (skill["beats_share"] == 1.0).all() and (skill["top"] > skill["random_p95"]).all()
+    assert "very unlikely to be luck" in ideas.luck_verdict(skill.loc["All years"])
+    noise = pd.Series(np.random.default_rng(3).random(len(df)), index=df.index)
+    chance = ideas.luck_test(df, noise, n=300).loc["All years"]
+    assert chance["random_p5"] < chance["top"] < chance["random_p95"]  # inside the random range
+    assert ideas.luck_test(df.head(10), df["ret"].head(10)).empty

@@ -233,6 +233,22 @@ def _construction_section(df, spy, ideas, con, args) -> None:
         print(f"  {ideas.CONSTRUCTION[c]:<38} beats the S&P 500 in both halves: {yes(r['beats_spy_both_halves'])}; "
               f"more return per risk than the top 20 in both: {yes(r['better_risk_than_top20_both'])}")
     print("Nothing here changes the portfolio by itself: a switch is your call after seeing these numbers.")
+    _luck_section(df, ideas, con, split)
+
+
+def _luck_section(df, ideas, con, split) -> None:
+    """Is the top 20 better than picking 20 stocks at random? (a check against luck, not a strategy)"""
+    base = ideas.scores(df.dropna(subset=["ret"]).reset_index(drop=True), ideas.method(con) == "industry_mix",
+                        ideas.extra(con))
+    luck = ideas.luck_test(df.dropna(subset=["ret"]).reset_index(drop=True), base, split=split)
+    if luck.empty:
+        return
+    print("\n\n##### Luck check: the top 20 vs 1,000 random 20-stock portfolios #####")
+    print("Each month, 1,000 portfolios of 20 stocks picked at random from the same stocks, equally weighted.\n"
+          "Yearly returns before trading costs (random picks change every month, so costs would be unfair to them).")
+    for label, r in luck.iterrows():
+        print(f"  {label:<10} top 20 {r['top']:+.1%}/yr; random: median {r['random_median']:+.1%}, "
+              f"90% between {r['random_p5']:+.1%} and {r['random_p95']:+.1%} -> {ideas.luck_verdict(r)}")
 
 
 def _study_forecast(con, args: argparse.Namespace) -> None:
