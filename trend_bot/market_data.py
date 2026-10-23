@@ -16,7 +16,8 @@ from trend_bot.db import set_meta
 UNIVERSE_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
 MAIN_EXCHANGES = ("NYSE", "Nasdaq", "CBOE")
 # Always tracked (used as the market benchmark), even if the SEC list lacks them.
-BENCHMARKS = {"SPY": "SPDR S&P 500 ETF", "QQQ": "Invesco QQQ (Nasdaq-100)", "IWM": "iShares Russell 2000"}
+BENCHMARKS = {"SPY": "SPDR S&P 500 ETF", "QQQ": "Invesco QQQ (Nasdaq-100)", "IWM": "iShares Russell 2000",
+              "RSP": "Invesco S&P 500 Equal Weight ETF"}
 
 Downloader = Callable[..., dict[str, pd.DataFrame]]
 

@@ -36,6 +36,7 @@ SERIES = {
     "SPY": np.linspace(300, 400, N),
     "QQQ": np.linspace(300, 400, N),
     "IWM": np.linspace(150, 200, N),
+    "RSP": np.linspace(140, 180, N),
 }
 
 
@@ -71,11 +72,11 @@ def con(tmp_path, monkeypatch):
 
 
 def test_universe_and_prices(con):
-    assert market_data.update_universe(con) == 4 + 3  # 4 listed + SPY/QQQ/IWM
+    assert market_data.update_universe(con) == 4 + 4  # 4 listed + SPY/QQQ/IWM/RSP
     yahoo = FakeYahoo()
     counts = market_data.update_prices(con, downloader=yahoo, pause=0, log=lambda *_: None)
-    assert counts["new"] == 6 and counts["failed"] == 1
-    assert db.status(con)["price_rows"] == 6 * N
+    assert counts["new"] == 7 and counts["failed"] == 1
+    assert db.status(con)["price_rows"] == 7 * N
     flip = db.load_prices(con, "FLIP")
     assert flip["Close"].iloc[-1] == pytest.approx(140)
 
@@ -86,7 +87,7 @@ def test_universe_and_prices(con):
     con.execute("UPDATE tickers SET updated_at = '2000-01-01'")
     yahoo.calls.clear()
     counts = market_data.update_prices(con, downloader=yahoo, pause=0, log=lambda *_: None)
-    assert counts["updated"] == 6
+    assert counts["updated"] == 7
     # Known tickers are fetched incrementally; only GHST (never had data) asks for full history.
     assert all(start or tickers == ("GHST",) for tickers, start, _ in yahoo.calls)
 
@@ -94,7 +95,7 @@ def test_universe_and_prices(con):
     con.execute("UPDATE tickers SET updated_at = '2000-01-01'")
     yahoo.factor = 0.9
     counts = market_data.update_prices(con, downloader=yahoo, pause=0, log=lambda *_: None)
-    assert counts["reloaded"] == 6
+    assert counts["reloaded"] == 7
     assert db.load_prices(con, "FLIP")["Close"].iloc[-1] == pytest.approx(126)
 
 

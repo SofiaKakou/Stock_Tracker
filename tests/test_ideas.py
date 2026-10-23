@@ -110,7 +110,8 @@ def test_portfolio_backtest_of_the_top_ideas(tmp_path):
 
     con = db.connect(tmp_path / "m.db")
     ideas.save_backtest(con, m, 20)
-    assert "Following the top 20 from" in ideas.backtest_note(con)
+    assert "Following the top 20 from" in ideas.backtest_note(con) and "likely somewhere between" in ideas.backtest_note(con)
+    assert "The difference:" in ideas.backtest_note(con)
     curve = ideas.growth_curve(con)
     assert curve is not None and curve.iloc[0].between(0.5, 1.5).all() and list(curve.columns) == ["portfolio", "spy"]
 
@@ -129,6 +130,7 @@ def test_study_ideas_end_to_end(model_db, tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Top ideas + weather filter" in out and "S&P 500 (buy & hold)" in out and "Year by year" in out
     assert "Luck check" in out and "random portfolios" in out and "Kinds of market" in out and "Robustness" in out
+    assert "How sure are these numbers" in out
     assert json.loads(db.get_meta(model_db, "ideas_backtest"))["hold"] == 5
 
 
