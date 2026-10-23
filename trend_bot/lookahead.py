@@ -24,7 +24,6 @@ import gc
 import sqlite3
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 # Table -> the date column after which a row wasn't known yet.
@@ -39,6 +38,22 @@ CUTOFFS = {
 }
 SKIP_COLUMNS = {"month", "ticker", "ret", "gone"}   # 'ret' is next month's return by design
 DEFAULT_MONTHS = ("2012-06-30", "2016-06-30", "2021-06-30")
+FIRST_YEAR = 2009          # company financials (and so most signals) start around here
+
+
+def yearly_months(today: pd.Timestamp | None = None) -> list[str]:
+    """One month-end per year (June), from FIRST_YEAR to last year: the whole history, ~4 min a month."""
+    last = (today or pd.Timestamp.today()).year - 1
+    return [f"{y}-06-30" for y in range(FIRST_YEAR, last + 1)]
+
+
+def parse_months(value: str | None) -> list[str]:
+    """--months: 'yearly', or month-ends separated by commas (default: three spread-out months)."""
+    if not value:
+        return list(DEFAULT_MONTHS)
+    if value.strip() == "yearly":
+        return yearly_months()
+    return [m.strip() for m in value.split(",") if m.strip()]
 
 
 def truncated_copy(con: sqlite3.Connection, path: Path, when: pd.Timestamp) -> sqlite3.Connection:
@@ -125,6 +140,12 @@ def text(results: dict[str, tuple[pd.DataFrame, dict]]) -> str:
                          + (f", largest gap {r['max_gap']:.4g} (e.g. {r['examples']}: with all data / up to then)"
                             if r["differ"] else ""))
     clean, bad = verdict(results)
+    if len(results) > 3 and bad:
+        lines.append("\nWhere each suspect signal differed:")
+        for c in bad:
+            where = [f"{m} ({int(t.loc[c, 'differ'])})" for m, (t, _) in results.items()
+                     if c in t.index and t.loc[c, "differ"] > 0]
+            lines.append(f"  {c:<22} {len(where)} of {len(results)} months: {', '.join(where)}")
     lines.append("\n" + ("Clean: every signal was the same with only the data known at the time. No look-ahead found."
                          if clean else
                          f"Look-ahead suspected in: {', '.join(bad)}. These signals changed when future data was "

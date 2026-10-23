@@ -111,7 +111,7 @@ def _study_lookahead(con, args: argparse.Namespace) -> None:
     if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
         print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
         return
-    months = [m.strip() for m in args.months.split(",")] if args.months else lookahead.DEFAULT_MONTHS
+    months = lookahead.parse_months(args.months)
     print("Look-ahead check: for each month below, the signals are rebuilt from a copy of the database\n"
           "cut off at that date, and compared with the normal table built from all the data.\n"
           "Any difference means a signal used information from the future.")
