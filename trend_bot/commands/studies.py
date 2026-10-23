@@ -556,7 +556,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             from trend_bot import coverage
 
             print("Data audit: checks on the stored data for mistakes that quietly distort tests.\n")
-            print(coverage.audit_text(coverage.audit(con)))
+            results = coverage.audit(con)
+            coverage.save_audit(con, results)
+            print(coverage.audit_text(results))
             return 0
         if args.signal == "mllab":
             _study_ml_lab(con, args)

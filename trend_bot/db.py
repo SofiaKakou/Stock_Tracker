@@ -243,14 +243,25 @@ def set_meta(con: sqlite3.Connection, key: str, value: str) -> None:
     con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
 
 
+BLIP = 4.0     # a one-day move of 4x up (or down to a quarter) that reverses the next day is a bad tick
+
+
 def _adjust(df: pd.DataFrame) -> pd.DataFrame:
-    """Raw rows -> fully adjusted OHLCV with the same columns load_prices returns."""
-    factor = (df["adj_close"] / df["close"]).where(df["close"] > 0, 1.0).fillna(1.0)
+    """Raw rows -> fully adjusted OHLCV with the same columns load_prices returns.
+
+    Cleaning (found by the data audit): a zero, negative or missing price is a missing day, never a
+    price (it would make that day's return infinite); and a one-day blip that jumps 4x away and comes
+    straight back is a bad tick, so that day is dropped too."""
+    df = df[(df["close"] > 0) & (df["adj_close"].isna() | (df["adj_close"] > 0))]
+    factor = (df["adj_close"] / df["close"]).fillna(1.0)
     out = pd.DataFrame({
         "Open": df["open"] * factor, "High": df["high"] * factor, "Low": df["low"] * factor,
         "Close": df["adj_close"].fillna(df["close"]), "Volume": df["volume"],
     })
-    return out
+    c = out["Close"]
+    up, back = c / c.shift(1), c.shift(-1) / c
+    blip = ((up > BLIP) & (back < 1 / BLIP)) | ((up < 1 / BLIP) & (back > BLIP))
+    return out[~blip]
 
 
 def load_prices(con: sqlite3.Connection, ticker: str, start: str | None = None) -> pd.DataFrame:

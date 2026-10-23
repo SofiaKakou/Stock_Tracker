@@ -87,50 +87,75 @@ def why(con: sqlite3.Connection, ticker: str, universe: int = 1000, min_price: f
 HOLIDAYS = ["01-01", "07-04", "12-25"]     # US market closed (when on a weekday)
 
 
-def audit(con: sqlite3.Connection, examples: int = 5) -> list[dict]:
-    """Checks on the stored data: [{check, ok, found, detail}], each explained in plain words."""
-    out = []
+COVER_PAGE_ITEMS = ("shares", "public_float")   # cover-page counts are dated a few days after filing: normal
 
-    def add(check, found, detail, rows=()):
+
+def _rankable(con: sqlite3.Connection) -> str:
+    """SQL for the tickers that could ever be ranked: one per company, not a fund."""
+    from trend_bot import factors
+
+    tickers = list(factors.primary_tickers(con).values())
+    con.execute("CREATE TEMP TABLE IF NOT EXISTS _rankable (ticker TEXT PRIMARY KEY)")
+    con.execute("DELETE FROM _rankable")
+    con.executemany("INSERT OR IGNORE INTO _rankable VALUES (?)", [(t,) for t in tickers])
+    return "SELECT ticker FROM _rankable"
+
+
+def audit(con: sqlite3.Connection, examples: int = 5) -> list[dict]:
+    """Checks on the stored data: [{check, ok, found, detail, handled}], each in plain words. Price checks
+    only look at stocks that could be ranked (one share class per company, no funds, $5 or more), so
+    the list shows what can matter. 'handled' marks problems the bot already cleans up when it reads."""
+    out = []
+    rankable = _rankable(con)
+
+    def add(check, found, detail, rows=(), handled=""):
         ex = ", ".join(str(r) for r in list(rows)[:examples])
-        out.append({"check": check, "ok": found == 0, "found": int(found),
+        out.append({"check": check, "ok": found == 0 or bool(handled), "found": int(found), "handled": handled,
                     "detail": detail + (f" e.g. {ex}" if found and ex else "")})
 
     today = dt.date.today().isoformat()
-    rows = con.execute("SELECT ticker, date FROM prices WHERE strftime('%w', date) IN ('0', '6') LIMIT 1000").fetchall()
+    rows = con.execute(f"SELECT ticker, date FROM prices WHERE strftime('%w', date) IN ('0', '6') "
+                       f"AND ticker IN ({rankable}) LIMIT 1000").fetchall()
     add("Prices dated on a weekend", len(rows), "A weekend price usually means dates were filed in the wrong "
         "timezone (shifted by a day).", [f"{t} {d}" for t, d in rows])
     holiday = " OR ".join(f"substr(date, 6, 5) = '{h}'" for h in HOLIDAYS)
     rows = con.execute(f"SELECT ticker, date FROM prices WHERE ({holiday}) AND strftime('%w', date) NOT IN ('0','6') "
-                       "LIMIT 1000").fetchall()
+                       f"AND ticker IN ({rankable}) LIMIT 1000").fetchall()
     add("Prices dated on a market holiday", len(rows), "New Year's Day, July 4th and Christmas: the market is "
         "closed, so a price there is misdated.", [f"{t} {d}" for t, d in rows])
     rows = con.execute("SELECT ticker, date FROM prices WHERE date > ? LIMIT 1000", (today,)).fetchall()
     add("Prices from the future", len(rows), "Dates after today.", [f"{t} {d}" for t, d in rows])
-    rows = con.execute("SELECT ticker, date, close FROM prices WHERE close IS NULL OR close <= 0 OR adj_close <= 0 "
-                       "LIMIT 1000").fetchall()
-    add("Impossible prices", len(rows), "Missing, zero or negative closing prices.", [f"{t} {d}" for t, d, _ in rows])
-    rows = con.execute("""
+    rows = con.execute(f"SELECT ticker, date FROM prices WHERE (close IS NULL OR close <= 0 OR adj_close <= 0) "
+                       f"AND ticker IN ({rankable}) LIMIT 1000").fetchall()
+    add("Impossible prices", len(rows), "Missing, zero or negative closing prices.", [f"{t} {d}" for t, d in rows],
+        handled="treated as missing days when prices are read")
+    rows = con.execute(f"""
         SELECT p.ticker, p.date, ROUND(p.adj_close / p.prev - 1, 2) FROM (
             SELECT ticker, date, adj_close, LAG(adj_close) OVER (PARTITION BY ticker ORDER BY date) AS prev
-            FROM prices) p
-        WHERE p.prev > 0 AND (p.adj_close / p.prev > 4 OR p.adj_close / p.prev < 0.25)
+            FROM prices WHERE ticker IN ({rankable}) AND adj_close > 0) p
+        WHERE p.prev > 0 AND (p.adj_close >= 5 OR p.prev >= 5)
+          AND (p.adj_close / p.prev > 4 OR p.adj_close / p.prev < 0.25)
           AND NOT EXISTS (SELECT 1 FROM splits s WHERE s.ticker = p.ticker
                           AND s.date BETWEEN date(p.date, '-5 days') AND date(p.date, '+5 days'))
         LIMIT 1000""").fetchall()
     add("Unexplained one-day jumps", len(rows), "A day where the price rose more than 4x or fell more than 75% with "
-        "no stock split nearby: often a data error (some are real, e.g. bankruptcies).",
-        [f"{t} {d} ({c:+.0%})" for t, d, c in rows])
-    rows = con.execute("""
-        SELECT ticker, prev, date, CAST(julianday(date) - julianday(prev) AS INT) FROM (
-            SELECT ticker, date, LAG(date) OVER (PARTITION BY ticker ORDER BY date) AS prev FROM prices)
+        "no stock split nearby (in stocks at $5 or more).", [f"{t} {d} ({c:+.0%})" for t, d, c in rows],
+        handled="one-day blips are dropped when prices are read, and the month of a lasting jump is left out of "
+                "the tests")
+    rows = con.execute(f"""
+        SELECT ticker, prev, date FROM (
+            SELECT ticker, date, LAG(date) OVER (PARTITION BY ticker ORDER BY date) AS prev FROM prices
+            WHERE ticker IN ({rankable}))
         WHERE prev IS NOT NULL AND julianday(date) - julianday(prev) > 20 LIMIT 1000""").fetchall()
     add("Long gaps inside a price history", len(rows), "More than 20 days with no price while the stock was "
         "listed: trading halts, or missing data that would stretch returns over the gap.",
-        [f"{t} {a}..{b}" for t, a, b, _ in rows])
-    rows = con.execute("SELECT cik, item, end, filed FROM facts WHERE filed < end LIMIT 1000").fetchall()
+        [f"{t} {a}..{b}" for t, a, b in rows])
+    skip = ",".join(f"'{i}'" for i in COVER_PAGE_ITEMS)
+    rows = con.execute(f"SELECT cik, item, end, filed FROM facts WHERE filed < end AND item NOT IN ({skip}) "
+                       "LIMIT 1000").fetchall()
     add("Financials filed before their period ended", len(rows), "A report can't be filed before the period it "
-        "covers ends: a date mix-up that would leak future numbers.", [f"cik {c} {i} {e}/{f}" for c, i, e, f in rows])
+        "covers ends: a date mix-up that would leak future numbers. (Cover-page share counts, which are dated "
+        "a few days after filing, are normal and not counted.)", [f"cik {c} {i} {e}/{f}" for c, i, e, f in rows])
     rows = con.execute("SELECT accession, filed FROM filings WHERE filed > ? UNION ALL "
                        "SELECT accession, filed FROM events WHERE filed > ? LIMIT 1000", (today, today)).fetchall()
     add("Filings from the future", len(rows), "Filing dates after today.", rows)
@@ -139,12 +164,22 @@ def audit(con: sqlite3.Connection, examples: int = 5) -> list[dict]:
     return out
 
 
+def save_audit(con: sqlite3.Connection, results: list[dict]) -> None:
+    set_meta(con, "data_audit", json.dumps({"date": dt.date.today().isoformat(),
+                                            "problems": [r["check"] for r in results if not r["ok"]]}))
+    con.commit()
+
+
 def audit_text(results: list[dict]) -> str:
     lines = []
     for r in results:
-        lines.append(f"  {'OK ' if r['ok'] else '!! '}{r['check']}: "
-                     + ("none found." if r["ok"] else f"{r['found']:,}{'+' if r['found'] >= 1000 else ''} found. "
-                                                      f"{r['detail']}"))
+        n = f"{r['found']:,}{'+' if r['found'] >= 1000 else ''} found"
+        if r["found"] == 0:
+            lines.append(f"  OK {r['check']}: none found.")
+        elif r.get("handled"):
+            lines.append(f"  OK {r['check']}: {n}, handled ({r['handled']}). {r['detail']}")
+        else:
+            lines.append(f"  !! {r['check']}: {n}. {r['detail']}")
     bad = [r["check"] for r in results if not r["ok"]]
     lines.append("\n" + ("Clean: no problems found in the stored data." if not bad else
                          f"To look into: {', '.join(bad)}. These don't change anything by themselves; each one is "

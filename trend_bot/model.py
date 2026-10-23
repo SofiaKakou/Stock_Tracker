@@ -70,7 +70,10 @@ def model_tickers(con: sqlite3.Connection) -> list[str]:
 def monthly_panel(con: sqlite3.Connection, chunk: int = 300) -> dict[str, pd.DataFrame]:
     """Month-end features for every stock: {feature: months x tickers}."""
     cols: dict[str, dict[str, pd.Series]] = {f: {} for f in FEATURES}
+    jumps: dict[str, pd.Series] = {}
     tickers = model_tickers(con)
+    splits = pd.read_sql_query("SELECT ticker, date FROM splits", con, parse_dates=["date"])
+    split_days = {t: pd.DatetimeIndex(g["date"]) for t, g in splits.groupby("ticker")}
     for i in range(0, len(tickers), chunk):
         for t, df in load_many(con, tickers[i : i + chunk]).items():
             if len(df) < 60:
@@ -80,7 +83,31 @@ def monthly_panel(con: sqlite3.Connection, chunk: int = 300) -> dict[str, pd.Dat
             m.index = _month_end(m.index)
             for name in FEATURES:
                 cols[name][t] = m[name]
-    return {name: pd.DataFrame(series) for name, series in cols.items()}
+            j = unexplained_jumps(df["Close"], split_days.get(t))
+            if j.any():
+                flag = j.groupby(j.index.to_period("M")).any()
+                flag.index = flag.index.to_timestamp() + pd.offsets.MonthEnd(0)
+                jumps[t] = flag
+    panel = {name: pd.DataFrame(series) for name, series in cols.items()}
+    # Months with a jump no split explains (often an unrecorded reverse split): their return is not
+    # trusted, so the signal tests leave it out (see factors.monthly_factors).
+    panel["jump"] = (pd.DataFrame(jumps).reindex(index=panel["close"].index, columns=panel["close"].columns)
+                     .fillna(False).astype(bool)) if len(panel["close"].columns) else pd.DataFrame()
+    return panel
+
+
+JUMP = 4.0   # a day's close more than 4x the previous one (or under a quarter of it)
+
+
+def unexplained_jumps(close: pd.Series, splits: pd.DatetimeIndex | None = None, days: int = 5) -> pd.Series:
+    """True on days the price jumped 4x up or 75% down with no recorded split within `days` days."""
+    r = close / close.shift(1)
+    big = (r > JUMP) | (r < 1 / JUMP)
+    if big.any() and splits is not None and len(splits):
+        near = pd.Series([bool(((splits >= d - pd.Timedelta(days=days)) & (splits <= d + pd.Timedelta(days=days))).any())
+                          if b else False for d, b in big.items()], index=big.index)
+        big &= ~near
+    return big.fillna(False)
 
 
 def insider_counts(con: sqlite3.Connection, dates: pd.DatetimeIndex, days: int = INSIDER_DAYS) -> tuple[pd.DataFrame, pd.DataFrame]:
