@@ -65,6 +65,14 @@ def test_update_reads_newest_first_and_remembers_failures(tmp_path):
     assert text_changes.update(con, limit=10, ciks={1}, fetch=fetch, log=lambda *_: None) == 1  # only a.htm left
 
 
+def test_update_stops_at_its_time_limit(tmp_path):
+    con = db.connect(tmp_path / "m.db")
+    add_filings(con, [(f"a{i}", 1, "10-K", f"2025-0{i}-01", None, f"a{i}.htm") for i in range(1, 6)])
+    said = []
+    assert text_changes.update(con, ciks={1}, fetch=lambda url: doc(1), log=said.append, max_minutes=0) == 1
+    assert "stopping after 0 min" in said[-1]
+
+
 def test_changes_compare_the_same_report_a_year_earlier(tmp_path):
     con = db.connect(tmp_path / "m.db")
     add_filings(con, [("k1", 1, "10-K", "2023-02-15", "2022-12-31", "k1.htm"),

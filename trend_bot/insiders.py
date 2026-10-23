@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -89,11 +90,25 @@ _ok_requests = 0
 RATE_LIMIT_WAITS = (60, 180, 600)  # seconds to back off when the SEC starts refusing
 
 
-def _get(url: str) -> bytes:
-    """GET from the SEC, paced, and waiting it out if the SEC rate-limits us."""
+class SECLimited(RuntimeError):
+    """The SEC refused our requests (rate limit or block). The caller pauses SEC downloads."""
+
+
+def _refusal(resp) -> str:
+    """'429: <first words of the SEC's answer>' so the log says which kind of refusal it was."""
+    body = " ".join(re.sub(r"<[^>]+>", " ", resp.text or "").split())[:160] if hasattr(resp, "text") else ""
+    wait = (getattr(resp, "headers", None) or {}).get("Retry-After")
+    return f"{resp.status_code}" + (f", retry after {wait}s" if wait else "") + (f": {body}" if body else "")
+
+
+def _get(url: str, gap: float | None = None) -> bytes:
+    """GET from the SEC, paced (`gap` seconds apart, REQUEST_GAP by default), waiting it out if the SEC
+    rate-limits us part-way through. Refused on the very first request means a block, not a rate
+    limit: waiting won't help, so it stops at once."""
     global _last_request, _ok_requests
+    gap = REQUEST_GAP if gap is None else gap
     for attempt in range(len(RATE_LIMIT_WAITS) + 1):
-        wait = REQUEST_GAP - (time.time() - _last_request)
+        wait = gap - (time.time() - _last_request)
         if wait > 0:
             time.sleep(wait)
         resp = requests.get(url, headers={"User-Agent": user_agent(), "Accept-Encoding": "gzip, deflate"}, timeout=20)
@@ -102,14 +117,16 @@ def _get(url: str) -> bytes:
             resp.raise_for_status()
             _ok_requests += 1
             return resp.content
-        if resp.status_code == 403 and _ok_requests == 0:
-            # Refused from the very first request: almost always a missing/bad User-Agent.
-            raise RuntimeError("SEC refused the request (403). Check SEC_USER_AGENT in .env has a name and an email.")
+        why = _refusal(resp)
+        if _ok_requests == 0:
+            raise SECLimited(
+                f"The SEC is limiting requests: it refused the very first one ({why}). Either SEC_USER_AGENT "
+                "lacks a name and an email, or the SEC is blocking this identity or these servers for now.")
         if attempt < len(RATE_LIMIT_WAITS):
             pause = RATE_LIMIT_WAITS[attempt]
-            print(f"[sec] the SEC is limiting requests; waiting {pause // 60} min before continuing...")
+            print(f"[sec] the SEC is limiting requests ({why}); waiting {pause // 60} min before continuing...")
             time.sleep(pause)
-    raise RuntimeError("The SEC is still limiting requests. Progress is saved - run the same command again later.")
+    raise SECLimited(f"The SEC is still limiting requests ({why}). Progress is saved - run the same command again later.")
 
 
 def _cached(path: Path, url: str, max_age_hours: float | None) -> bytes:

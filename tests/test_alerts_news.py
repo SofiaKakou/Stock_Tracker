@@ -112,3 +112,20 @@ def test_send_report_posts_the_file(tmp_path, monkeypatch, capsys):
     assert posted["name"] == "latest.html" and posted["body"] == b"<html>hi</html>"
     assert "report" in json.loads(posted["data"]["payload_json"])["content"]
     assert main(["send-report", "--path", str(tmp_path / "missing.html"), "--webhook", "https://hook"]) == 1
+
+
+def test_payloads_stay_under_discords_size_limit():
+    big = {"title": "Top ideas", "description": "x" * 2500}
+    msgs = alerts.payloads([big] * 5)
+    assert [len(p["embeds"]) for p in msgs] == [2, 2, 1]
+    assert all(sum(alerts.embed_size(e) for e in p["embeds"]) <= alerts.MAX_CHARS for p in msgs)
+
+
+def test_one_huge_embed_is_shortened():
+    huge = {"title": "t", "description": "y" * 4000,
+            "fields": [{"name": "f", "value": "z" * 1000} for _ in range(5)]}
+    (msg,) = alerts.payloads([huge])
+    e = msg["embeds"][0]
+    assert alerts.embed_size(e) <= alerts.MAX_CHARS and e["fields"] and "shortened" not in e["description"]
+    alone = alerts.payloads([{"title": "t", "description": "y" * 7000}])[0]["embeds"][0]
+    assert alerts.embed_size(alone) <= alerts.MAX_CHARS and alone["description"].endswith("see the report)")

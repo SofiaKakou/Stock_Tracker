@@ -27,6 +27,7 @@ RED = 0xD03B3B
 GRAY = 0x8D8C86
 GOLD = 0xEDA100
 MAX_EMBEDS = 10  # Discord's limit per message
+MAX_CHARS = 5900  # Discord allows 6,000 characters of embed text per message; a little margin
 
 
 def load_webhook(env_file: str | Path = ".env") -> str | None:
@@ -153,12 +154,41 @@ def summary_embed(rows: list[dict], strategy_label: str) -> dict:
     }
 
 
+def embed_size(embed: dict) -> int:
+    """The characters Discord counts against its per-message limit (title, description, fields, footer, author)."""
+    n = len(embed.get("title") or "") + len(embed.get("description") or "")
+    n += sum(len(f.get("name") or "") + len(f.get("value") or "") for f in embed.get("fields") or [])
+    n += len((embed.get("footer") or {}).get("text") or "") + len((embed.get("author") or {}).get("name") or "")
+    return n
+
+
+def _fit(embed: dict) -> dict:
+    """Shorten a single embed that is too big on its own: drop fields from the end, then cut the description."""
+    if embed_size(embed) <= MAX_CHARS:
+        return embed
+    embed = {**embed, "fields": list(embed.get("fields") or [])}
+    while embed["fields"] and embed_size(embed) > MAX_CHARS:
+        embed["fields"].pop()
+    over = embed_size(embed) - MAX_CHARS
+    if over > 0:
+        desc = embed.get("description") or ""
+        embed["description"] = desc[: max(0, len(desc) - over - 30)] + "\n… (shortened; see the report)"
+    return embed
+
+
 def payloads(embeds: list[dict]) -> list[dict]:
-    """Split embeds into as many Discord messages as needed."""
-    return [
-        {"username": "Trend Bot", "embeds": embeds[i : i + MAX_EMBEDS]}
-        for i in range(0, len(embeds), MAX_EMBEDS)
-    ]
+    """Split embeds into as many Discord messages as needed: at most 10 and 6,000 characters each."""
+    out, batch, size = [], [], 0
+    for e in map(_fit, embeds):
+        n = embed_size(e)
+        if batch and (len(batch) == MAX_EMBEDS or size + n > MAX_CHARS):
+            out.append({"username": "Trend Bot", "embeds": batch})
+            batch, size = [], 0
+        batch.append(e)
+        size += n
+    if batch:
+        out.append({"username": "Trend Bot", "embeds": batch})
+    return out
 
 
 def send(webhook: str, payload: dict, timeout: float = 15) -> None:
