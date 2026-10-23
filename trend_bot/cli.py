@@ -25,7 +25,7 @@ from trend_bot.commands.watchlist import (
     cmd_news,
     cmd_insiders,
 )
-from trend_bot.commands.data import cmd_db, cmd_monthly_due, cmd_price_check, cmd_screen, cmd_sec_check
+from trend_bot.commands.data import cmd_db, cmd_monthly_due, cmd_screen, cmd_sec_check
 from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
@@ -255,11 +255,6 @@ def make_parser() -> argparse.ArgumentParser:
     wy.add_argument("--db", default="market.db", help="database file (default: market.db)")
     wy.add_argument("--discord", action="store_true", help="also post the answer to Discord")
     wy.set_defaults(func=cmd_why)
-
-    pc = sub.add_parser("price-check", help="does the backup price source (Stooq) answer and agree with our prices?")
-    pc.add_argument("--db", default="market.db", help="database file (default: market.db)")
-    pc.add_argument("--ticker", default="SPY", help="ticker to check (default: SPY)")
-    pc.set_defaults(func=cmd_price_check)
 
     em = sub.add_parser("send-email", help="email the daily report (needs EMAIL_USER and EMAIL_APP_PASSWORD)")
     em.add_argument("--db", default="market.db", help="database file (default: market.db)")

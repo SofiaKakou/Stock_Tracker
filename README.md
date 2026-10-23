@@ -35,7 +35,7 @@ New to the market? Start with **[GUIDE.md](GUIDE.md)**: what every message means
 - New measures stay **on trial** until they pass in both halves of history; nothing changes without your OK
 - **ML lab**: six machine-learning variants (several from FreqAI) tested against the simple average; none has beaten it yet
 
-**Data (all free)**: prices from Yahoo Finance with Stooq as backup; financials, filings, insider
+**Data (all free)**: prices from Yahoo Finance; financials, filings, insider
 trades and red flags from the SEC; short selling from FINRA. Gentle on every source (pacing, pauses,
 automatic recovery).
 
@@ -46,7 +46,7 @@ Everything runs in the cloud on **GitHub Actions**; nothing needs to run on your
 | Workflow | When | What |
 |---|---|---|
 | `nightly.yml` | weekdays 22:30 UTC | update data, send messages, report and email; monthly honesty checks on the 1st-3rd |
-| `research.yml` | by hand (Actions tab) | any study (`ideas`, `ml`, `mllab`, `lookahead`, `audit`, `candidates`, ...), data refreshes, `sec-check`, `price-check`, `email-test` |
+| `research.yml` | by hand (Actions tab) | any study (`ideas`, `ml`, `mllab`, `lookahead`, `audit`, `candidates`, ...), data refreshes, `sec-check`, `email-test` |
 | `why.yml` | by hand | "Why is a stock (not) ranked?": type tickers, answer in Discord |
 | `tests.yml` | every push / PR | the test suite |
 | `ai.yml` | by hand, optional | an AI report reader (needs a paid API key; off by default) |
