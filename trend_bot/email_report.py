@@ -52,7 +52,7 @@ def digest(con, problems: list[str], flag_days: int = 30, change_days: int = 35)
     out = []
     live = ideas.live_line(con)
     if live:
-        out.append(("How the portfolio is doing", [plain(live).removeprefix("📈 ")]))
+        out.append(("How the portfolio is really doing", [plain(live).removeprefix("📈 ")]))
     port = ideas.load_portfolio(con)
     if port and (dt.date.today() - dt.date.fromisoformat(port["date"][:10])).days <= change_days:
         lines = [f"Buy {b['ticker']} ({b.get('why') or 'top ranked'})" for b in port["buys"]]
@@ -61,7 +61,7 @@ def digest(con, problems: list[str], flag_days: int = 30, change_days: int = 35)
         out.append((f"This month's changes ({port['date'][:10]})", lines or ["No changes: keep everything."]))
     held = pd.read_sql_query("SELECT ticker, since, entry_price FROM ideas_holdings ORDER BY rank", con)
     if len(held):
-        rows = [["Stock", "Since", "Bought at", "Now", "Return"]]
+        rows = [["Stock", "Held since", "Bought at", "Price now", "Gain or loss"]]
         for h in held.itertuples(index=False):
             last = con.execute("SELECT close FROM prices WHERE ticker = ? ORDER BY date DESC LIMIT 1",
                                (h.ticker,)).fetchone()
@@ -69,7 +69,7 @@ def digest(con, problems: list[str], flag_days: int = 30, change_days: int = 35)
             ret = now / h.entry_price - 1 if now and h.entry_price else None
             rows.append([h.ticker, h.since, f"{h.entry_price:,.2f}" if h.entry_price else "-",
                          f"{now:,.2f}" if now else "-", f"{ret:+.1%}" if ret is not None else "-"])
-        out.append((f"The portfolio to follow ({len(held)} stocks, equal amounts)", rows))
+        out.append((f"The portfolio to follow ({len(held)} stocks, equal amounts in each)", rows))
         cik_of = dict(con.execute(f"SELECT cik, ticker FROM tickers WHERE cik IS NOT NULL AND ticker IN "
                                   f"({','.join('?' * len(held))})", list(held["ticker"])).fetchall())
         flags = events.recent_flags(con, list(cik_of), days=flag_days)
@@ -77,7 +77,29 @@ def digest(con, problems: list[str], flag_days: int = 30, change_days: int = 35)
                     [f"{cik_of[r.cik]} ({r.filed}): {events.describe(r.items)}" for r in flags.itertuples(index=False)]
                     or ["None."]))
     out.append(("Bot health", problems or ["All fine."]))
-    return out
+    return [("In short", in_short(out, problems))] + out
+
+
+def in_short(sections, problems: list[str]) -> list[str]:
+    """Two or three plain sentences: what to do, anything to look at, and whether the bot is OK."""
+    got = dict(sections)
+    todo = next((v for k, v in got.items() if k.startswith("This month's changes")), None)
+    if todo is None:
+        lines = ["Nothing to do today: the portfolio only changes once a month."]
+    elif todo == ["No changes: keep everything."]:
+        lines = ["No changes to the portfolio this month: keep everything."]
+    else:
+        buys = sum(x.startswith("Buy ") for x in todo)
+        sells = sum(x.startswith("Sell ") for x in todo)
+        lines = [f"This month the portfolio sells {sells} and buys {buys} stock{'s' if buys != 1 else ''} "
+                 "(listed below), if you follow it."]
+    flags = next((v for k, v in got.items() if k.startswith("🚩")), ["None."])
+    if flags != ["None."]:
+        lines.append(f"🚩 {len(flags)} warning sign{'s' if len(flags) != 1 else ''} in your stocks: worth a look "
+                     "before buying more.")
+    lines.append("The bot is working normally." if not problems else
+                 "The bot had a problem tonight (details under Bot health in the email and Discord); it usually fixes itself.")
+    return lines
 
 
 def _text(sections) -> str:

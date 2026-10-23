@@ -38,8 +38,8 @@ def test_scoreboard_is_saved_and_posted_once_with_the_ask(tmp_path, monkeypatch)
     candidates.save(con, candidates.scoreboard(table()))
     board = candidates.load(con)
     e = alerts.candidates_embed(board)
-    assert e["description"].startswith("✅ **net_issuance**: PASSES")
-    assert "**net_issuance** passed both tests" in e["description"] and "❌ **litigious**" in e["description"]
+    assert "\n✅ **issuing new shares**: passed the test" in e["description"]
+    assert "**issuing new shares** passed" in e["description"] and "❌ **legal wording**" in e["description"]
 
 
 def test_study_candidates_runs_on_the_real_pipeline(model_db, tmp_path, monkeypatch, capsys):  # noqa: F811
@@ -72,4 +72,4 @@ def test_a_t_stat_between_2_and_3_is_only_promising():
     assert candidates.verdict({**row, "months_first": 10}) == "not enough history yet"
     e = alerts.candidates_embed({"date": "2026-10-02", "rows": {"a": {**row, "verdict": "promising", "ic": 0.015},
                                                                 "b": {"verdict": "not proven", "ic": None}}})
-    assert e["description"].startswith("🔶 **a**: promising") and "None has passed yet" in e["description"]
+    assert "\n🔶 **a**: promising" in e["description"] and "None has passed yet" in e["description"]

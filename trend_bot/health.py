@@ -91,10 +91,12 @@ def embed(kind: str, problems: list[str], run_url: str | None = None) -> dict:
 
     if kind == "recovered":
         return {"title": "✅ Bot health: all fine again", "color": GREEN,
-                "description": "Every check passed tonight: fresh prices, data up to date, no SEC slow-down."}
-    lines = [f"• {p}" for p in problems]
-    lines += ["", "Alerts, the report and the ideas may be missing or out of date until this clears."
-              " The bot retries on its own every night."]
+                "description": "**What this means:** the earlier problem is fixed. Every check passed tonight: "
+                               "fresh prices, data up to date, no SEC slow-down. Nothing to do."}
+    lines = ["**What this means:** something went wrong with the bot itself, not with your stocks. "
+             "It usually fixes itself on a later night; nothing to do unless this keeps coming back.", ""]
+    lines += [f"• {p}" for p in problems]
+    lines += ["", "Until it clears, some messages or the report may be missing or a bit out of date."]
     if run_url:
         lines.append(f"[Open tonight's run]({run_url})")
     return {"title": "⚠️ Bot health", "description": "\n".join(lines)[:4000], "color": RED}

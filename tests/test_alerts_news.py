@@ -79,7 +79,7 @@ def test_cli_alert_sends_changes_and_saves_state(up_then_down, tmp_path, monkeyp
     assert main(args) == 0
     assert len(sent) == 1
     titles = [e["title"] for e in sent[0]["embeds"]]
-    assert titles[0].startswith("🔴 SELL") and titles[1] == "Daily trend summary"
+    assert titles[0].startswith("🔴 Price trend turned down") and titles[1] == "👀 Your watchlist today"
     assert json.loads(state.read_text())[str(csv)]["trend"] == "DOWN/FLAT"
 
     sent.clear()

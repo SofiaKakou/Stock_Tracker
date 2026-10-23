@@ -273,21 +273,15 @@ def cmd_alert(args: argparse.Namespace) -> int:
                         ftrack.record_forecast(con, preds, date)
                         fdb.set_meta(con, "forecast_week", week)
                         con.commit()
-                    from trend_bot import ideas as fideas, ml as fml
+                    from trend_bot import ideas as fideas
 
                     e = alerts.ideas_embed(fideas.load(con), fmodel.weather_status(con), fideas.reliability_note(con),
                                            fideas.live_line(con))
                     if e:
                         embeds.append(e)
-
-                    verdict, ranking = fml.load(con)
-                    note = forecast.reliability_note(forecast.load_scorecard(con))
-                    extra = alerts.ml_status_line(verdict)
-                    embeds.append(alerts.forecast_embed(preds, date, fmodel.weather_status(con),
-                                                        f"{note} {extra}".strip()))
-                    e = alerts.ml_embed(verdict, ranking)
-                    if e:
-                        embeds.append(e)
+                    # The weekly outlook and the all-signal model are no longer posted: both failed their
+                    # honesty tests every time, which mostly confused. Their picks are still recorded above
+                    # (graded in the scorecard) and shown in the report.
     if args.market:
         embeds.extend(_market_embeds(args, strategy))
     if args.summary:
