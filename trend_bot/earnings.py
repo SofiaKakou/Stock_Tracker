@@ -37,7 +37,9 @@ def quarterly_series(facts: pd.DataFrame, item: str) -> pd.DataFrame:
     if f.empty:
         return pd.DataFrame(columns=["cik", "end", "filed", "val"])
     days = f["days"] if "days" in f else (f["end"] - f["start"]).dt.days
-    first = lambda df: (df.sort_values(["priority", "filed"]).drop_duplicates(["cik", "end"], keep="first"))
+    # As first reported: the earliest filing wins (the preferred tag only breaks ties within a filing).
+    # Taking a later restatement would let a past month see numbers filed after it (a look-ahead).
+    first = lambda df: (df.sort_values(["filed", "priority"]).drop_duplicates(["cik", "end"], keep="first"))
     q = first(f[days.between(80, 100)])[["cik", "end", "filed", "val"]]
     fy = first(f[days.between(350, 380)])
     ytd9 = first(f[days.between(260, 285)])
@@ -88,10 +90,12 @@ def surprises(q: pd.DataFrame, history: int = 8, min_history: int = 4) -> pd.Dat
 
 
 def announcement_returns(con: sqlite3.Connection, events: pd.DataFrame, tickers: dict[int, str],
-                         benchmark: str = "SPY", chunk: int = 300) -> pd.Series:
-    """Stock minus benchmark return from the close before the filing day to the close after it."""
+                         benchmark: str = "SPY", chunk: int = 300, with_dates: bool = False):
+    """Stock minus benchmark return from the close before the filing day to the close after it.
+    with_dates: also the day that return became known (the close after the filing)."""
     bench = load_prices(con, benchmark)["Close"]
     out = pd.Series(np.nan, index=events.index)
+    known = pd.Series(pd.NaT, index=events.index, dtype="datetime64[ns]")
     events = events[events["cik"].isin(list(tickers))]
     by_ticker = {tickers[c]: g for c, g in events.groupby("cik")}
     names = sorted(by_ticker)
@@ -107,7 +111,8 @@ def announcement_returns(con: sqlite3.Connection, events: pd.DataFrame, tickers:
                 if d0 not in bench.index or d1 not in bench.index:
                     continue
                 out[idx] = (close.iloc[p + 1] / close.iloc[p - 1] - 1) - (bench[d1] / bench[d0] - 1)
-    return out
+                known[idx] = d1
+    return (out, known) if with_dates else out
 
 
 def events(con: sqlite3.Connection, facts: pd.DataFrame, tickers: dict[int, str]) -> pd.DataFrame:
@@ -122,12 +127,17 @@ def events(con: sqlite3.Connection, facts: pd.DataFrame, tickers: dict[int, str]
         s = surprises(quarterly_series(facts, item)).rename(columns={"sue": col})
         s = s.sort_values("end").drop_duplicates(["cik", "filed"], keep="last")[["cik", "filed", col]]
         ev = ev.merge(s, on=["cik", "filed"], how="left")
-    ev["ear"] = announcement_returns(con, ev, tickers) if len(ev) else np.nan
+    if len(ev):
+        ev["ear"], ev["ear_known"] = announcement_returns(con, ev, tickers, with_dates=True)
+    else:
+        ev["ear"], ev["ear_known"] = np.nan, pd.NaT
     return ev
 
 
 def latest(ev: pd.DataFrame, when: pd.Timestamp, fresh_days: int = FRESH_DAYS) -> pd.DataFrame:
     """Per company: the most recent report filed in the `fresh_days` up to `when`."""
-    recent = ev[(ev["filed"] <= when) & (ev["filed"] > when - pd.Timedelta(days=fresh_days))]
+    recent = ev[(ev["filed"] <= when) & (ev["filed"] > when - pd.Timedelta(days=fresh_days))].copy()
+    if "ear_known" in recent:   # the 3-day reaction is only known once the day after the filing has closed
+        recent.loc[recent["ear_known"].isna() | (recent["ear_known"] > when), "ear"] = np.nan
     return recent.sort_values("filed").drop_duplicates("cik", keep="last").set_index("cik")[
         ["sue", "revenue_sue", "ear"]]
