@@ -1,7 +1,8 @@
 """Is the bot itself OK? A short Discord warning when something is wrong, silence when it isn't.
 
 Checks how fresh each kind of data is (prices, company financials, the SEC bulk file,
-short selling data, the monthly ideas list), whether the SEC has asked us to slow down,
+short selling data, the monthly ideas list), whether the stocks it recommends still get new
+quarterly figures (their earnings-surprise scores go stale otherwise), whether the SEC has asked us to slow down,
 and which steps of tonight's cloud run didn't finish. The same warning isn't repeated
 every night: it's sent when the list of problems changes, or again after 3 days, and
 once more ("all fine again") when everything is back to normal.
@@ -19,6 +20,30 @@ import numpy as np
 from trend_bot.db import get_meta, set_meta
 
 REPEAT_AFTER_DAYS = 3
+STALE_EARNINGS_DAYS = 150   # a company reports every ~3 months; the yearly report can take ~4
+NO_NEW_FIGURES_DAYS = 45    # some company reports nearly every week, so six quiet weeks mean trouble
+
+
+def stale_earnings(con: sqlite3.Connection, today: dt.date) -> list[tuple[str, str]]:
+    """Portfolio and top-idea stocks whose newest quarterly figures are old: [(ticker, last filed)]."""
+    watched = {t for (t,) in con.execute("SELECT ticker FROM ideas_holdings")}
+    raw = get_meta(con, "mix_ranking")
+    watched |= {r["ticker"] for r in json.loads(raw).get("top", [])} if raw else set()
+    if not watched:
+        return []
+    marks = ",".join("?" * len(watched))
+    rows = con.execute(f"""
+        SELECT DISTINCT t.ticker, f.filed FROM tickers t JOIN facts f ON f.cik = t.cik
+        WHERE t.ticker IN ({marks}) AND f.item IN ('net_income', 'revenue') AND f.start IS NOT NULL
+        ORDER BY t.ticker, f.filed""", sorted(watched)).fetchall()
+    out = []
+    for t in sorted({t for t, _ in rows}):
+        dates = [dt.date.fromisoformat(d[:10]) for tt, d in rows if tt == t][-5:]
+        gaps = [(b - a).days for a, b in zip(dates, dates[1:])]
+        quarterly = bool(gaps) and sorted(gaps)[len(gaps) // 2] < 120   # yearly-only reporters are left out
+        if quarterly and (today - dates[-1]).days > STALE_EARNINGS_DAYS:
+            out.append((t, dates[-1].isoformat()))
+    return out
 
 
 def _age_days(value: str | None, today: dt.date) -> int | None:
@@ -57,6 +82,17 @@ def check(con: sqlite3.Connection, today: dt.date | None = None, failed_steps: l
             problems.append(f"{label}: never downloaded yet.")
         elif age > limit:
             problems.append(f"{label}: last updated {age} days ago.")
+
+    newest = con.execute("SELECT MAX(filed) FROM facts").fetchone()[0]
+    if newest and get_meta(con, "facts_updated") and _age_days(newest, today) > NO_NEW_FIGURES_DAYS:
+        problems.append(f"Company financials: the updates run, but the newest figures are from {newest[:10]} "
+                        f"({_age_days(newest, today)} days ago). The SEC data may have stopped coming in.")
+    stale = stale_earnings(con, today)
+    if stale:
+        problems.append(f"No new quarterly figures in over {STALE_EARNINGS_DAYS} days for "
+                        f"{len(stale)} stock(s) in the portfolio or top ideas: "
+                        + ", ".join(f"{t} (last {d[:10]})" for t, d in stale[:6])
+                        + ". Their earnings-surprise scores are old: the company may be late, or its SEC data missing.")
 
     audit = json.loads(get_meta(con, "data_audit") or "{}")
     if audit.get("problems") and (_age_days(audit["date"], today) or 0) <= 40:

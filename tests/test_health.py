@@ -150,3 +150,32 @@ def test_monthly_checks_run_once_a_month_and_retired_models_quarterly(tmp_path, 
     assert capsys.readouterr().out == ""                                                   # past day 3
     main(["monthly-due", "--db", path, "--force"])
     assert "study forecast" in capsys.readouterr().out                                     # manual runs: everything
+
+
+def test_stale_earnings_figures_are_flagged(tmp_path):
+    con = healthy(tmp_path)
+    con.executemany("INSERT INTO tickers(ticker, cik, last_date) VALUES (?, ?, '2026-10-06')",
+                    [("FRESH", 1), ("OLD", 2), ("FUND", 3), ("ELSE", 4)])
+    con.execute("INSERT INTO ideas_holdings(ticker, rank) VALUES ('FRESH', 1), ('FUND', 2)")
+    db.set_meta(con, "mix_ranking", json.dumps({"date": "2026-10-01", "top": [{"ticker": "OLD"}], "bottom": []}))
+    facts = [(1, "net_income", "2026-04-01", "2026-06-30", "2026-09-20"),
+             (1, "net_income", "2026-01-01", "2026-03-31", "2026-05-05"),
+             (2, "revenue", "2025-07-01", "2025-09-30", "2025-11-05"),
+             (2, "revenue", "2025-10-01", "2025-12-31", "2026-02-20"),
+             (3, "revenue", "2024-01-01", "2024-12-31", "2025-03-01"),  # reports only once a year: left out
+             (3, "revenue", "2023-01-01", "2023-12-31", "2024-03-01"),
+             (2, "assets", None, "2026-06-30", "2026-08-05"),        # a balance-sheet item doesn't count
+             (4, "revenue", "2024-10-01", "2024-12-31", "2025-02-20")]  # not recommended: not our concern
+    con.executemany("INSERT INTO facts(cik, item, priority, start, end, filed, val) VALUES (?, ?, 0, ?, ?, ?, 1)", facts)
+    assert health.stale_earnings(con, TODAY) == [("OLD", "2026-02-20")]
+    text = "\n".join(health.check(con, today=TODAY))
+    assert "No new quarterly figures in over 150 days for 1 stock(s)" in text and "OLD (last 2026-02-20)" in text
+    assert "SEC data may have stopped" not in text
+
+
+def test_financials_that_stop_coming_in_are_flagged(tmp_path):
+    con = healthy(tmp_path)
+    con.execute("INSERT INTO facts(cik, item, priority, start, end, filed, val) "
+                "VALUES (1, 'revenue', 0, '2026-04-01', '2026-06-30', '2026-08-20', 1)")
+    text = "\n".join(health.check(con, today=TODAY))
+    assert "newest figures are from 2026-08-20 (48 days ago)" in text
