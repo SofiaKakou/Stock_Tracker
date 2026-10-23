@@ -105,13 +105,21 @@ def _headline_lines(items: list[Headline], limit: int = 1000) -> str:
     return "\n".join(out)
 
 
+def lead(text: str) -> str:
+    """The first line of every message: what it means for you, in plain words."""
+    return f"**What this means:** {text}"
+
+
 def change_embed(row: dict, strategy_label: str, earnings: str = "", news: list[Headline] | None = None,
                  insiders: InsiderSummary | None = None) -> dict:
     up = row["trend"] == "UP"
+    rsi = row.get("rsi")
     fields = [
-        {"name": "Close", "value": f"{row['close']:,.2f}", "inline": True},
-        {"name": "20-day change", "value": row["20d_chg"], "inline": True},
-        {"name": "RSI", "value": str(row["rsi"]) if row.get("rsi") is not None else "–", "inline": True},
+        {"name": "Price", "value": f"{row['close']:,.2f}", "inline": True},
+        {"name": "Last 20 trading days", "value": row["20d_chg"], "inline": True},
+        {"name": "Speed gauge (RSI)", "value": (f"{rsi} " + ("(ran up fast)" if rsi >= 70 else "(fell fast)"
+                                                             if rsi <= 30 else "(normal)")) if rsi is not None else "–",
+         "inline": True},
     ]
     if earnings:
         fields.append({"name": "Next earnings", "value": earnings, "inline": True})
@@ -119,9 +127,15 @@ def change_embed(row: dict, strategy_label: str, earnings: str = "", news: list[
         fields.append({"name": "Insiders (90 days)", "value": insiders.short, "inline": True})
     if news:
         fields.append({"name": "Recent headlines", "value": _headline_lines(news), "inline": False})
+    what = ("its price has been climbing lately: the average price of the last 50 days rose above the average "
+            "of the last 200 days." if up else
+            "its price has been sliding lately: the average price of the last 50 days fell below the average "
+            "of the last 200 days.")
     return {
-        "title": f"{'🟢 BUY' if up else '🔴 SELL'}  {row['ticker']}",
-        "description": f"Trend turned **{'up' if up else 'down'}** ({strategy_label}), as of {row['date']}.",
+        "title": f"{'🟢 Price trend turned up' if up else '🔴 Price trend turned down'}: {row['ticker']}",
+        "description": (lead(f"{row['ticker']}, on your watchlist, {what}") +
+                        "\nA prompt to take a look, not a reason to buy or sell on its own: in our tests this "
+                        f"signal alone didn't beat the market. (As of {row['date']}.)"),
         "color": GREEN if up else RED,
         "fields": fields,
     }
@@ -132,24 +146,29 @@ def insider_embed(ticker: str, cluster: list[InsiderTrade], trend: str | None = 
     total = sum(t.value for t in cluster)
     lines = []
     for t in cluster[:8]:
-        price = f" @ {t.price:,.2f}" if t.price else ""
-        lines.append(f"• {t.date:%b %d}  **{t.insider}** ({t.role}): {t.shares:,.0f} sh{price}")
-    trend_note = f"\nPrice trend right now: **{trend}**." if trend else ""
+        price = f" at {t.price:,.2f}" if t.price else ""
+        lines.append(f"• {t.date:%b %d}  **{t.insider}** ({t.role}): bought {t.shares:,.0f} shares{price}")
+    trend_note = (f"\nThe price trend right now is **{'up' if trend == 'UP' else 'down' if trend == 'DOWN' else trend}**."
+                  if trend else "")
     return {
-        "title": f"🔔 Insider buying  {ticker}",
-        "description": (f"{len(buyers)} insiders bought shares on the open market "
-                        f"(about ${total:,.0f} in total).{trend_note}\n\n" + "\n".join(lines)),
+        "title": f"🔔 Insiders are buying: {ticker}",
+        "description": (lead(f"{len(buyers)} insiders (people who run {ticker}: executives or board members) "
+                             f"bought its shares with their own money, about ${total:,.0f} in total. They know "
+                             "the company best, so it can be a good sign; on its own it hasn't beaten the "
+                             f"market in our tests.") + f"{trend_note}\n\n" + "\n".join(lines)),
         "color": GOLD,
     }
 
 
 def summary_embed(rows: list[dict], strategy_label: str) -> dict:
-    lines = [f"{'Ticker':<7}{'Close':>10}{'20d':>8}  Trend"]
+    lines = [f"{'Stock':<7}{'Price':>10}{'20 days':>9}  Trend"]
     for r in rows:
-        lines.append(f"{r['ticker']:<7}{r['close']:>10,.2f}{r['20d_chg']:>8}  {r['trend']}")
+        trend = {"UP": "up", "DOWN": "down"}.get(r["trend"], r["trend"])
+        lines.append(f"{r['ticker']:<7}{r['close']:>10,.2f}{r['20d_chg']:>9}  {trend}")
     return {
-        "title": "Daily trend summary",
-        "description": f"{strategy_label}\n```\n" + "\n".join(lines) + "\n```",
+        "title": "👀 Your watchlist today",
+        "description": ("Price, change over the last 20 trading days (about a month) and the price trend "
+                        "(up = the 50-day average is above the 200-day average).\n```\n" + "\n".join(lines) + "\n```"),
         "color": GRAY,
     }
 
@@ -213,10 +232,11 @@ def market_embed(flips, clusters, strategy_label: str, limit: int = 10,
                  new: set[tuple[str, str]] | None = None) -> dict:
     """Strong insider picks first, then new uptrends, then the biggest insider clusters."""
     new = new or set()
-    lines = []
+    lines = [lead("stocks across the whole market whose price started climbing today, or where several "
+                  "insiders bought shares. Ideas to look into, not tips."), ""]
     strong = clusters[clusters["strong"]] if len(clusters) and "strong" in clusters else clusters.iloc[0:0]
     if len(strong):
-        lines.append(f"**🔔 Strong insider buying in an uptrend** ({len(strong)})")
+        lines.append(f"**🔔 Strong insider buying, price climbing** ({len(strong)})")
         for t, r in strong.head(limit).iterrows():
             tag = " **NEW**" if (t, "strong_insider") in new else ""
             lines.append(f"`{t:<6}` {int(r['buyers'])} insiders bought ${r['buy_value']:,.0f}, "
@@ -224,50 +244,62 @@ def market_embed(flips, clusters, strategy_label: str, limit: int = 10,
         lines.append("")
     buys = flips[flips["signal"] == "BUY"] if len(flips) else flips
     if len(buys):
-        lines.append(f"**New uptrends today** ({len(buys)} stocks)")
+        lines.append(f"**New uptrends today** ({len(buys)} stocks; change over 20 trading days)")
         for t, r in buys.head(limit).iterrows():
             star = " 🔔" if r["cluster"] else ""
-            lines.append(f"`{t:<6}` {r['close']:>9,.2f}  {r['chg_20d']:+.1%} 20d{star}")
+            lines.append(f"`{t:<6}` {r['close']:>9,.2f}  {r['chg_20d']:+.1%}{star}")
     sells = flips[flips["signal"] == "SELL"] if len(flips) else flips
     if len(sells):
         lines.append(f"\n**New downtrends today:** {len(sells)} stocks")
     others = clusters[~clusters["strong"]] if len(clusters) and "strong" in clusters else clusters
     if len(others):
-        lines.append(f"\n**Other insider buying clusters** ({len(others)} stocks, top by $)")
+        lines.append(f"\n**Other insider buying** ({len(others)} stocks, biggest first)")
         for t, r in others.head(limit).iterrows():
             tag = " NEW" if (t, "insider_cluster") in new else ""
-            lines.append(f"`{t:<6}` {int(r['buyers'])} insiders  ${r['buy_value']:,.0f}  trend {r['trend']}{tag}")
-    if not lines:
-        lines.append("No new trend flips or insider clusters today.")
-    text = "\n".join(lines)
+            trend = {"UP": "up", "DOWN": "down"}.get(r["trend"], r["trend"])
+            lines.append(f"`{t:<6}` {int(r['buyers'])} insiders  ${r['buy_value']:,.0f}  trend {trend}{tag}")
+    if len(lines) == 2:
+        lines.append("Nothing new today.")
     return {
         "title": "🌎 Market screen",
-        "description": (f"{strategy_label}\n\n" + text)[:4000],
+        "description": "\n".join(lines)[:4000],
         "color": GOLD if len(strong) else GRAY,
     }
+
+
+def weather_line(invest: bool) -> str:
+    return ("☀️ **Market mood: steady.** The S&P 500 (the 500 biggest US companies) is above its average "
+            "price of the last 200 trading days." if invest else
+            "🌧️ **Market mood: shaky.** The S&P 500 (the 500 biggest US companies) is below its average price "
+            "of the last 200 trading days, so expect a bumpier ride. The portfolio stays invested: in testing, "
+            "moving to cash in these spells cost more than it saved.")
 
 
 def model_embed(res: dict) -> dict | None:
     """Monthly model update (buys/sells), or a note when the market weather changes. None otherwise."""
     invest = res["weather"] == "invest"
-    weather = ("☀️ **Invest** - the S&P 500 is above its 200-day average" if invest
-               else "🌧️ **Caution** - the S&P 500 is below its 200-day average; the model holds cash")
     if res["rebalanced"]:
         scores = res["scores"]
-        buy = [f"`{t:<6}` score {scores.loc[t, 'score']:.0f}, price {scores.loc[t, 'close']:,.2f}"
-               for t in res["buys"] if t in scores.index]
-        lines = [weather, "", f"**🟢 Buy ({len(res['buys'])})**", *(buy or ["nothing new"]),
+        buy = [f"`{t:<6}` price {scores.loc[t, 'close']:,.2f}" for t in res["buys"] if t in scores.index]
+        lines = [lead("an older, simpler model, kept to compare with the top-ideas portfolio. It picks 20 "
+                      "stocks whose prices have been rising steadily, and holds cash when the market mood is "
+                      "shaky. Its monthly changes:"), "",
+                 f"**🟢 Buy ({len(res['buys'])})**", *(buy or ["nothing new"]),
                  "", f"**🔴 Sell ({len(res['sells'])})**", ", ".join(f"`{t}`" for t in res["sells"]) or "nothing",
-                 "", f"Holding {len(res['holdings'])} stocks, equal amounts. Next check: first run of next month."]
-        return {"title": "📈 Trend Score model - monthly check", "description": "\n".join(lines)[:4000],
+                 "", f"Holding {len(res['holdings'])} stocks, equal amounts. Next check: early next month.",
+                 "", weather_line(invest)]
+        return {"title": "📈 Trend model: monthly check", "description": "\n".join(lines)[:4000],
                 "color": GREEN if invest else RED}
     if res["weather_changed"]:
-        return {"title": "🌦️ Market weather changed", "description": weather, "color": GREEN if invest else RED}
+        return {"title": "🌦️ The market mood changed",
+                "description": weather_line(invest) + ("" if invest else
+                                                       "\nNothing to do: this is a heads-up only."),
+                "color": GREEN if invest else RED}
     return None
 
 
 def forecast_embed(preds, date: str, weather: dict, note: str, n: int = 10) -> dict:
-    """Weekly outlook: market weather first, then warnings, then ideas, with how reliable they've been."""
+    """Weekly outlook (no longer posted: it never showed skill; kept for the record and the report)."""
     from trend_bot.model import weather_text
 
     line = lambda t, r: f"`{t:<6}` {r['p_beat']:.0%} chance to beat the S&P 500 · {r['why']}"
@@ -280,21 +312,18 @@ def forecast_embed(preds, date: str, weather: dict, note: str, n: int = 10) -> d
 
 
 def ml_embed(verdict: dict | None, ranking: dict | None) -> dict | None:
-    """The all-signal model's ideas - only when it beat the simple mix on years it never saw."""
+    """The all-signal model's ideas (no longer posted; shown in the report if it ever passes)."""
     if not verdict or not ranking or not verdict.get("passed"):
         return None
     line = lambda p: f"`{p['ticker']:<6}`" + (f" {p['close']:,.2f}" if p.get("close") else "")
     lines = [f"Passed its honesty test: on years it never saw it ranked stocks better than a simple mix of "
              f"the same signals (IC {verdict['ic']:+.3f} vs {verdict['mix_ic']:+.3f}).", "",
              "**⚠️ Most likely to lag**", *[line(p) for p in ranking["bottom"]], "",
-             "**💡 Top ideas**", *[line(p) for p in ranking["top"]], "",
-             f"_Ranking from {ranking['date']}, refreshed monthly. Its picks are tracked forward "
-             "(see the report). Odds, not certainties._"]
+             "**💡 Top ideas**", *[line(p) for p in ranking["top"]]]
     return {"title": "🤖 All-signal model", "description": "\n".join(lines)[:4000], "color": GOLD}
 
 
 def ml_status_line(verdict: dict | None) -> str:
-    """One line for the weekly outlook when the model's ideas are not shown."""
     if verdict and not verdict.get("passed"):
         return ("The all-signal model hasn't beaten a simple mix of the same signals on years it never saw, "
                 "so its ideas aren't shown. Its picks are still tracked forward.")
@@ -305,17 +334,19 @@ def ideas_embed(ranking: dict | None, weather: dict, note: str, live: str = "") 
     """Monthly top ideas from the simple mix (every signal ranked and averaged), with its track record."""
     if not ranking:
         return None
-    from trend_bot.model import weather_text
-
     line = lambda p: (f"`{p['ticker']:<6}`" + (f" {p['close']:,.2f}" if p.get("close") else "")
                       + (f" · {p['sector']}" if p.get("sector") else "") + f" · {p['why']}")
-    lines = [weather_text(weather, markdown=True), "",
-             "**⚠️ Most likely to lag**", *[line(p) for p in ranking["bottom"]], "",
-             "**💡 Top ideas**", *[line(p) for p in ranking["top"]], "",
+    lines = [lead(f"the bot scored {ranking['stocks']:,} large, actively traded US stocks on about 20 "
+                  "measures (is it cheap for what it earns? profitable? are fewer people betting against it? has "
+                  "its price been rising?) and averaged them. These are the best and worst scores this month. "
+                  "Use them as ideas to research, not as advice."), "",
+             "**💡 Best scores**", *[line(p) for p in ranking["top"]], "",
+             "**⚠️ Worst scores (more likely to lag)**", *[line(p) for p in ranking["bottom"]], "",
              *([live, ""] if live else []),
-             f"_How reliable is this? {note}_",
-             f"Ranked {ranking['stocks']:,} stocks on {ranking['date']}; refreshed monthly. Not financial advice."]
-    return {"title": "💡 Top ideas (every signal, simple mix)", "description": "\n".join(lines)[:4000],
+             f"_How reliable is this? {note}_", "",
+             weather_line(bool(weather.get("invest", True))),
+             f"Ranked on {ranking['date']}; refreshed monthly. Not financial advice."]
+    return {"title": "💡 Top ideas this month", "description": "\n".join(lines)[:4000],
             "color": GREEN if weather.get("invest") else RED}
 
 
@@ -323,47 +354,65 @@ def ideas_portfolio_embed(port: dict, note: str, live: str = "") -> dict:
     """Monthly: what to buy, sell and keep in the top-ideas portfolio (the rule study ideas tests)."""
     buy = lambda p: (f"`{p['ticker']:<6}` {p['close']:,.2f}" + (f" · {p['sector']}" if p.get("sector") else "")
                      + f" · {p['why']}")
-    sell = lambda p: (f"`{p['ticker']:<6}` " + (f"fell to rank {p['rank']}" if p.get("rank") else "no longer ranked")
+    sell = lambda p: (f"`{p['ticker']:<6}` " + (f"dropped to #{p['rank']} in the ranking" if p.get("rank")
+                                               else "no longer ranked")
                       + (f", {p['return']:+.0%} since {p['since']}" if p.get("return") is not None else ""))
-    weather = ("☀️ Market weather: the S&P 500 is above its 200-day average." if port["invest"] else
-               "🌧️ **Heads-up**: the S&P 500 is below its 200-day average, so expect a bumpier ride. The portfolio "
-               "stays invested: in testing, moving to cash during these spells cost more than it saved.")
-    lines = [weather, "",
-             f"**🟢 Buy ({len(port['buys'])})**" + (" - starting the portfolio" if port.get("first") else ""),
-             *([buy(p) for p in port["buys"]] or ["nothing new"]), "",
-             f"**🔴 Sell ({len(port['sells'])})**", *([sell(p) for p in port["sells"]] or ["nothing"]), "",
+    nb, ns = len(port["buys"]), len(port["sells"])
+    todo = ("start the portfolio: buy these " + str(nb) + " stocks in equal amounts." if port.get("first") else
+            "no changes this month: keep everything." if not nb and not ns else
+            f"sell {ns}, buy {nb}, keep the other {len(port['holds'])}. Equal amounts in each.")
+    lines = [lead("the bot's 20-stock portfolio, built from the top ideas, if you choose to follow it. "
+                  f"This month: {todo}"), "",
+             f"**🟢 Buy ({nb})**", *([buy(p) for p in port["buys"]] or ["nothing new"]), "",
+             f"**🔴 Sell ({ns})**", *([sell(p) for p in port["sells"]] or ["nothing"]), "",
              f"**Keep ({len(port['holds'])})**: " + (", ".join(f"`{p['ticker']}`" for p in port["holds"]) or "-"), "",
              *([live, ""] if live else []),
-             "Equal amounts in each. A stock is only sold once it drops out of the top 40, so trades stay rare.",
-             f"_How reliable is this? {note}_", f"As of {port['date']}. Not financial advice."]
-    return {"title": "📋 Top-ideas portfolio - monthly update", "description": "\n".join(lines)[:4000],
+             "A stock is only sold once it falls out of the top 40, so trades stay rare.",
+             f"_How reliable is this? {note}_", "",
+             weather_line(port["invest"]).replace("Market mood: shaky.", "Heads-up, market mood: shaky."),
+             f"As of {port['date']}. Not financial advice."]
+    return {"title": "📋 The portfolio to follow: monthly update", "description": "\n".join(lines)[:4000],
             "color": GREEN if port["invest"] else RED}
 
 
 def scorecard_embed(card) -> dict:
     """Monthly: how every kind of pick has really done since it was made, vs the S&P 500."""
-    lines = []
+    lines = [lead("every pick the bot has ever made, checked against what the S&P 500 did over the same "
+                  "days. ✅ = working so far, ❌ = not. For \"should lag\" picks (warnings), lagging counts as "
+                  "working."), ""]
     for r in card.itertuples(index=False):
         mark = "✅" if r.worked else "❌"
         aim = "should lag" if r.meant_to_lag else "should beat"
-        lines.append(f"{mark} **{r.label}** ({aim}): {r.picks} picks, avg {r.avg_days:.0f} days, "
-                     f"**{r.avg_vs_bench:+.1%}** vs S&P 500, beat it {r.beat_rate:.0%} of the time")
-    lines += ["", "Every pick the bot made, graded on prices that came after it, the one test nobody can "
-              "tune. Only picks at least 20 days old count; early numbers swing a lot."]
+        lines.append(f"{mark} **{r.label}** ({aim}): {r.picks} picks, held about {r.avg_days:.0f} days, "
+                     f"**{r.avg_vs_bench:+.1%}** vs the S&P 500 on average, ahead {r.beat_rate:.0%} of the time")
+    lines += ["", "Only picks at least 20 days old count; early numbers swing a lot."]
     worked = int(card["worked"].sum())
-    return {"title": f"📊 Pick scorecard: {worked} of {len(card)} signals working so far",
+    return {"title": f"📊 Pick scorecard: {worked} of {len(card)} kinds of picks working so far",
             "description": "\n".join(lines)[:4000], "color": GREEN if worked * 2 >= len(card) else RED}
 
 
 def red_flags_embed(flags: list[tuple[str, str, str, str]]) -> dict:
     """flags: (ticker, where it's from, filing date, what happened)."""
-    lines = [f"**{t}** ({where}), {filed}: {what}" for t, where, filed, what in flags[:15]]
+    lines = [f"**{t}** (in your {where}), filed {filed}: {what}" for t, where, filed, what in flags[:15]]
     return {
-        "title": "🚩 8-K red flags",
-        "description": "\n".join(lines) + "\n\nWarning signs a company reported to the SEC. In past research these "
-                       "came before weaker returns on average; worth a look before buying more. (Checked weekly.)",
+        "title": "🚩 Warning signs in your stocks",
+        "description": lead("a company you hold or watch reported a warning sign to the SEC (the US market "
+                            "regulator): for example its past results were wrong, its auditor left, or its "
+                            "report will be late. These have tended to come before weaker returns, so it's "
+                            "worth a look.") + "\n\n" + "\n".join(lines) + "\n\n(Checked weekly.)",
         "color": 0xE67E22,
     }
+
+
+PLAIN_NAMES = {
+    "report_change": "report rewritten a lot", "tone_negative": "gloomy wording in reports",
+    "tone_change": "wording got gloomier", "uncertainty": "uncertain wording", "litigious": "legal wording",
+    "risk_change": "risks section rewritten", "risk_growth": "risks section grew", "red_flags": "8-K warning signs",
+    "exec_changes": "executives leaving or joining", "late_filing": "late reports", "net_issuance": "issuing new shares",
+}
+VERDICT_WORDS = {"PASSES": "passed the test", "promising": "promising, needs more proof",
+                 "not proven": "didn't prove itself", "not enough history yet": "too new to judge",
+                 "no data yet": "no data yet"}
 
 
 def candidates_embed(board: dict) -> dict:
@@ -372,20 +421,22 @@ def candidates_embed(board: dict) -> dict:
     passing = [n for n, r in rows.items() if r.get("verdict") == "PASSES"]
     icon = {"PASSES": "✅", "promising": "🔶", "not proven": "❌", "not enough history yet": "⏳",
             "no data yet": "⏳"}
-    lines = []
+    lines = [lead("new measures the bot is testing before it's allowed to use them. Nothing changes unless "
+                  "you say yes."), ""]
     order = {"PASSES": 0, "promising": 1}
     for n, r in sorted(rows.items(), key=lambda kv: (order.get(kv[1].get("verdict"), 2), kv[0])):
         ic = r.get("ic")
-        detail = f" IC {ic:+.3f}, t {r['ic_t']:+.1f}" if ic is not None and r.get("ic_t") is not None else ""
-        lines.append(f"{icon.get(r.get('verdict'), '•')} **{n}**: {r.get('verdict')}{detail}")
-    ask = (f"\n\n**{', '.join(passing)}** passed both tests. Reply to Claude if you want "
+        detail = f" _(IC {ic:+.3f}, t {r['ic_t']:+.1f})_" if ic is not None and r.get("ic_t") is not None else ""
+        name = PLAIN_NAMES.get(n, n.replace("_", " "))
+        lines.append(f"{icon.get(r.get('verdict'), '•')} **{name}**: {VERDICT_WORDS.get(r.get('verdict'), r.get('verdict'))}{detail}")
+    ask = (f"\n\n**{', '.join(PLAIN_NAMES.get(n, n) for n in passing)}** passed. Tell Claude if you want "
            f"{'it' if len(passing) == 1 else 'them'} added to the top ideas." if passing else
-           "\n\nNone has passed yet; they stay on probation and are re-checked next month.")
+           "\n\nNone has passed yet; they're checked again next month.")
     return {
-        "title": "🧪 Signals on probation: monthly check",
-        "description": "\n".join(lines) + ask + "\n\nPassing means: worked the expected way in both halves of "
-                       "its history (t-stat 3+, a high bar because many signals are tested at once), and made the "
-                       "simple mix better in both halves. 🔶 promising: all of that but t between 2 and 3; "
-                       "watched, not trusted yet.",
+        "title": "🧪 Measures on trial: monthly check",
+        "description": "\n".join(lines) + ask + "\n\nPassing means it picked better stocks in both halves of "
+                       "its history, by a wide enough margin that luck is unlikely, and made the top ideas "
+                       "better too. (For experts: IC = how well it ranked stocks; t = how sure we are it isn't luck, "
+                       "3+ needed.)",
         "color": 0x9B59B6 if passing else 0x95A5A6,
     }

@@ -181,10 +181,9 @@ def reliability_note(con: sqlite3.Connection) -> str:
     if s.get("extra"):
         how += "It also counts calm stocks and stocks near their 52-week high (that tested better too). "
     months = f", {s['months']:.0f} months" if s.get("months") else ""
-    return (f"{how}Tested {s['from']}-{s['to']}{months} (nothing is fitted, so there's no hindsight in how it adds up the "
-            f"signals): the top 10% returned "
-            f"{s['top10_per_year']:+.1%} a year after costs vs {s['average_stock_per_year']:+.1%} for the average "
-            f"stock, and the ranking pointed the right way in {s['ic_positive']:.0%} of months, {steady}. "
+    return (f"{how}Tested on {s['from']}-{s['to']}{months}: the best-scored 10% of stocks grew "
+            f"{s['top10_per_year']:+.1%} a year after trading costs vs {s['average_stock_per_year']:+.1%} for the "
+            f"average stock, and the scores pointed the right way in {s['ic_positive']:.0%} of months, {steady}. "
             f"{backtest_note(con) + ' ' if backtest_note(con) else ''}"
             "A small edge on average in the past, not a promise for any one stock.")
 
@@ -516,9 +515,9 @@ def backtest_note(con: sqlite3.Connection) -> str:
         return ""
     b = json.loads(raw)
     capped = f", at most {MAX_PER_INDUSTRY} per industry," if b.get("cap") else ""
-    return (f"Holding the top {b['hold']}{capped}, always invested, {b['from']}-{b['to']}: {b['cagr']:+.1%} a year "
-            f"(worst drop {b['max_drawdown']:.0%}) vs the S&P 500's {b['spy_cagr']:+.1%} "
-            f"(worst drop {b['spy_max_drawdown']:.0%}).")
+    return (f"Following the top {b['hold']}{capped} from {b['from']} to {b['to']} would have grown "
+            f"{b['cagr']:+.1%} a year (biggest fall along the way {b['max_drawdown']:.0%}), vs {b['spy_cagr']:+.1%} "
+            f"a year for an S&P 500 index fund (biggest fall {b['spy_max_drawdown']:.0%}).")
 
 
 # --- The portfolio to follow: monthly buys and sells -------------------------------------------------

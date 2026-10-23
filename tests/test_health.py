@@ -88,8 +88,10 @@ def test_real_guide_covers_every_message():
     from pathlib import Path
 
     text = (Path(__file__).parent.parent / "GUIDE.md").read_text()
-    for title in ("Market weather", "Top ideas", "Top-ideas portfolio", "Pick scorecard", "Weekly outlook",
-                  "Insider buying", "Market screen", "All-signal model", "Bot health", "Research run"):
+    for title in ("Market weather", "Top ideas this month", "The portfolio to follow", "Pick scorecard",
+                  "Insiders are buying", "Price trend turned up", "Warning signs in your stocks", "Market screen",
+                  "Measures on trial", "Your watchlist today", "Bot health", "SEC data is back", "Daily email",
+                  "Research run", "What this means", "Start here"):
         assert title in text
 
 

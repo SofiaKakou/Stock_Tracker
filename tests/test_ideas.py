@@ -110,7 +110,7 @@ def test_portfolio_backtest_of_the_top_ideas(tmp_path):
 
     con = db.connect(tmp_path / "m.db")
     ideas.save_backtest(con, m, 20)
-    assert "Holding the top 20, always invested" in ideas.backtest_note(con)
+    assert "Following the top 20 from" in ideas.backtest_note(con)
 
 
 def test_study_ideas_end_to_end(model_db, tmp_path, monkeypatch, capsys):
@@ -183,7 +183,7 @@ def test_monthly_portfolio_message_is_sent_once(model_db, tmp_path, monkeypatch)
             "--state", str(tmp_path / "s.json"), "--no-news", "--no-insiders", "--model"]
     assert main(args) == 0
     titles = [e["title"] for p in sent for e in p["embeds"]]
-    assert titles.count("📋 Top-ideas portfolio - monthly update") == 1
+    assert titles.count("📋 The portfolio to follow: monthly update") == 1
     sent.clear()
     assert main(args) == 0
     assert not any(e["title"].startswith("📋") for p in sent for e in p["embeds"])

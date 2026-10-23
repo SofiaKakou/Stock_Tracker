@@ -82,10 +82,13 @@ def test_email_carries_the_essentials(tmp_path):
     changes = next(v for k, v in sections.items() if k.startswith("This month's changes"))
     assert changes == ["Buy AAA (cheap vs sales)", "Sell OLD (-4.0% since 2026-08-31)"]
     table = next(v for k, v in sections.items() if k.startswith("The portfolio to follow"))
-    assert table[0][0] == "Stock" and table[1] == ["AAA", "2026-09-30", "100.00", "110.00", "+10.0%"]
+    assert table[0][:2] == ["Stock", "Held since"] and table[1] == ["AAA", "2026-09-30", "100.00", "110.00", "+10.0%"]
     flags = next(v for k, v in sections.items() if k.startswith("🚩"))
     assert flags[0].startswith("BBB") and "can't be relied on" in flags[0]
     assert sections["Bot health"] == ["Prices are 3 trading days old."]
+    assert sections["In short"] == ["This month the portfolio sells 1 and buys 1 stock (listed below), if you follow it.",
+                                    "🚩 1 warning sign in your stocks: worth a look before buying more.",
+                                    "The bot had a problem tonight (details under Bot health in the email and Discord); it usually fixes itself."]
 
     cfg = {"EMAIL_USER": "me@gmail.com", "EMAIL_APP_PASSWORD": "x", "EMAIL_TO": "me@gmail.com"}
     msg = email_report.build(cfg, email_report.digest(con, []), None)

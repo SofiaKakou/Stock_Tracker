@@ -64,7 +64,22 @@ svg.spark { display: block; }
 .weather.sun { background: color-mix(in srgb, var(--up) 12%, var(--card)); }
 .weather.rain { background: color-mix(in srgb, var(--down) 12%, var(--card)); }
 .weather .wl { font-size: 13px; color: var(--ink-2); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.weather .wt { font-size: 18px; font-weight: 600; margin-top: 4px; }
+.weather .wt { font-size: 16px; font-weight: 600; margin-top: 4px; }
+.start { background: var(--card); border: 2px solid var(--accent); border-radius: 14px; padding: 18px 20px;
+         margin: 8px 0 24px; }
+.start h2 { margin: 0 0 8px; }
+.start p { margin: 6px 0; }
+.start .todo { font-size: 17px; font-weight: 650; }
+details.curious { margin-top: 40px; border-top: 1px solid var(--line); padding-top: 12px; }
+details.curious > summary { cursor: pointer; font-size: 18px; font-weight: 650; padding: 8px 0; }
+details.curious > summary .hint { font-weight: 400; color: var(--ink-2); font-size: 14px; }
+.explain { color: var(--ink-2); font-size: 14px; margin: 0 0 10px; }
+@media (max-width: 600px) {
+  main { padding: 20px 12px 48px; }
+  h1 { font-size: 21px; }
+  .tile .n { font-size: 21px; }
+  th, td { padding: 6px 7px; font-size: 14px; }
+}
 """
 
 
@@ -117,12 +132,13 @@ def _ideas_section(con: sqlite3.Connection, esc) -> list[str]:
         return []
     row = lambda p: [f"<b>{esc(p['ticker'])}</b>", f"{p['close']:,.2f}" if p.get("close") else "–",
                      esc(p.get("sector") or "–"), esc(p["why"])]
-    heads = ["Ticker", "Close", "Industry", "Mostly because"]
-    return ["<h2>💡 Top ideas (every signal, simple mix)</h2>",
-            f'<p class="sub">{r["stocks"]:,} most traded stocks ranked on every signal on {esc(r["date"])}; '
-            "refreshed monthly.</p>",
-            "<h3>⚠️ Most likely to lag</h3>", _table(heads, [row(p) for p in r["bottom"]], left={0, 2, 3}),
-            "<h3>💡 Top ideas</h3>", _table(heads, [row(p) for p in r["top"]], left={0, 2, 3}),
+    heads = ["Stock", "Price", "Industry", "Mostly because"]
+    return ["<h2>💡 Top ideas this month</h2>",
+            f'<p class="explain">The bot scored {r["stocks"]:,} large, actively traded US stocks on about 20 measures '
+            "(is it cheap for what it earns? profitable? are fewer people betting against it? has its price been "
+            f"rising?) and averaged them, on {esc(r['date'])}. Ideas to research, not advice.</p>",
+            "<h3>💡 Best scores</h3>", _table(heads, [row(p) for p in r["top"]], left={0, 2, 3}),
+            "<h3>⚠️ Worst scores (more likely to lag)</h3>", _table(heads, [row(p) for p in r["bottom"]], left={0, 2, 3}),
             *([f'<p class="note">{esc(ideas.live_line(con).replace("**", ""))}</p>'] if ideas.live_line(con) else []),
             f'<p class="note"><b>How reliable is this?</b> {esc(ideas.reliability_note(con))}</p>']
 
@@ -132,11 +148,13 @@ def _glance_section(con: sqlite3.Connection, esc) -> list[str]:
     red flags in its stocks, and the signals on probation."""
     from trend_bot import candidates, events, ideas
 
-    parts = ["<h2>📋 At a glance</h2>"]
+    parts = ["<h2>📋 The portfolio to follow</h2>",
+             '<p class="explain">20 stocks chosen from the top ideas, equal amounts in each, checked once a month. '
+             "Follow it only if you want to: in testing it did not reliably beat an S&P 500 index fund.</p>"]
     rec = ideas.live_record(con)
     if rec and rec["spy"] is not None and rec["days"] >= 1:
         ahead = rec["portfolio"] - rec["spy"]
-        tiles = [(_pct(rec["portfolio"]), f"top-ideas portfolio since {esc(rec['start'])}"),
+        tiles = [(_pct(rec["portfolio"]), f"top-ideas portfolio since {esc(rec['start'])} (real, not a test)"),
                  (_pct(rec["spy"]), "S&P 500 over the same days"),
                  (f'<span class="{"up" if ahead >= 0 else "down"}">{ahead:+.1%}</span>',
                   "ahead of the S&P 500" if ahead >= 0 else "behind the S&P 500")]
@@ -160,31 +178,43 @@ def _glance_section(con: sqlite3.Connection, esc) -> list[str]:
                          f"{h.entry_price:,.2f}" if h.entry_price else "–", f"{now:,.2f}",
                          _pct(now / h.entry_price - 1 if h.entry_price else None),
                          esc(h.sector or "–"), esc(h.why or "")])
-        parts += ["<h3>The portfolio to follow</h3>",
-                  _table(["Ticker", "Since", "6 months", "Bought at", "Now", "Return", "Industry", "Mostly because"],
-                         rows, left={0, 1, 6, 7})]
+        parts += ["<h3>What it holds now</h3>",
+                  _table(["Stock", "Held since", "Last 6 months", "Bought at", "Price now", "Gain or loss", "Industry",
+                          "Mostly because"], rows, left={0, 1, 6, 7})]
         cik_of = dict(con.execute(f"SELECT cik, ticker FROM tickers WHERE cik IS NOT NULL AND ticker IN "
                                   f"({','.join('?' * len(held))})", list(held["ticker"])).fetchall())
         flags = events.recent_flags(con, list(cik_of), days=90)
-        parts.append("<h3>🚩 Red flags in these stocks (last 90 days)</h3>")
-        parts.append(_table(["Ticker", "Filed", "What happened"],
+        parts.append("<h3>🚩 Warning signs in these stocks (last 90 days)</h3>")
+        parts.append('<p class="explain">Problems a company reported to the SEC (the US market regulator), such as '
+                     "wrong past results, an auditor leaving or a late report. These have tended to come before "
+                     "weaker returns.</p>")
+        parts.append(_table(["Stock", "Filed", "What happened"],
                             [[f"<b>{esc(cik_of[r.cik])}</b>", esc(r.filed), esc(events.describe(r.items))]
                              for r in flags.itertuples(index=False)], left={0, 1, 2})
                      if len(flags) else '<p class="empty">None.</p>')
 
-    board = candidates.load(con)
-    if board:
-        icon = {"PASSES": "✅", "promising": "🔶", "not proven": "❌"}
-        order = {"PASSES": 0, "promising": 1, "not proven": 2}
-        rows = [[f"{icon.get(r.get('verdict'), '⏳')} <b>{esc(n)}</b>", esc(r.get("verdict") or ""),
-                 f"{r['ic']:+.3f}" if r.get("ic") is not None else "–",
-                 f"{r['ic_t']:+.1f}" if r.get("ic_t") is not None else "–", esc(r.get("from") or "–")]
-                for n, r in sorted(board["rows"].items(), key=lambda kv: (order.get(kv[1].get("verdict"), 3), kv[0]))]
-        parts += [f"<h3>🧪 Signals on probation (checked {esc(board['date'])})</h3>",
-                  _table(["Signal", "Verdict", "IC", "t-stat", "Since"], rows, left={0, 1}),
-                  '<p class="note">✅ passed (t 3+, works in both halves and improves the mix); 🔶 promising '
-                  "(t 2-3); ❌ not proven; ⏳ not enough history. Nothing joins the top ideas without your OK.</p>"]
     return parts
+
+
+def _probation_section(con: sqlite3.Connection, esc) -> list[str]:
+    """New measures being tested before the bot may use them."""
+    from trend_bot import alerts, candidates
+
+    board = candidates.load(con)
+    if not board:
+        return []
+    icon = {"PASSES": "✅", "promising": "🔶", "not proven": "❌"}
+    order = {"PASSES": 0, "promising": 1, "not proven": 2}
+    rows = [[f"{icon.get(r.get('verdict'), '⏳')} <b>{esc(alerts.PLAIN_NAMES.get(n, n))}</b>",
+             esc(alerts.VERDICT_WORDS.get(r.get("verdict"), r.get("verdict") or "")),
+             f"{r['ic']:+.3f}" if r.get("ic") is not None else "–",
+             f"{r['ic_t']:+.1f}" if r.get("ic_t") is not None else "–", esc(r.get("from") or "–")]
+            for n, r in sorted(board["rows"].items(), key=lambda kv: (order.get(kv[1].get("verdict"), 3), kv[0]))]
+    return [f"<h2>🧪 Measures on trial (checked {esc(board['date'])})</h2>",
+            '<p class="explain">New measures the bot tests before it may use them. Nothing joins the top ideas '
+            "without your OK.</p>",
+            _table(["Measure", "Verdict", "Ranking quality (IC)", "Sure it's not luck (t, 3+ needed)", "Data since"],
+                   rows, left={0, 1})]
 
 
 def _ml_section(con: sqlite3.Connection, esc) -> list[str]:
@@ -234,6 +264,27 @@ def _outlook(con: sqlite3.Connection, esc) -> list[str]:
             f'<p class="note"><b>How reliable is this?</b> {esc(note)} Learned from {esc(trained_on)}.</p>']
 
 
+def _start_here(con: sqlite3.Connection, esc) -> list[str]:
+    """The box at the top: what the bot is, what it found, and what to do this month, in plain words."""
+    from trend_bot import email_report, health
+
+    try:
+        problems = health.check(con)
+    except Exception:  # noqa: BLE001 - the box must never break the report
+        problems = []
+    short = email_report.in_short(email_report.digest(con, problems)[1:], problems)
+    return ['<div class="start"><h2>👋 Start here</h2>',
+            "<p><b>What is this?</b> A research assistant. Every month it scores about 1,000 large US stocks on "
+            "about 20 measures and suggests a 20-stock portfolio. It also warns you about problems in your "
+            "stocks.</p>",
+            "<p><b>What has it found?</b> In 20 years of testing, its best-scored stocks beat the average stock, "
+            "but they did not reliably beat simply owning an <b>S&P 500 index fund</b> (one fund holding the 500 "
+            "biggest US companies), especially since 2018. For real money, an index fund is the honest default.</p>",
+            *[f'<p class="todo">{esc(x)}</p>' for x in short[:1]],
+            *[f"<p>{esc(x)}</p>" for x in short[1:]],
+            "</div>"]
+
+
 def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "SPY", limit: int = 25,
                  new: set[tuple[str, str]] | None = None, **screen_args) -> str:
     new = new or set()
@@ -250,7 +301,7 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
     strong = clusters[clusters["strong"]] if len(clusters) else clusters
     tiles = [
         (f"{len(states):,}", "stocks screened"),
-        (f"{up_share:.0%}" if pd.notna(up_share) else "–", "in an uptrend (market breadth)"),
+        (f"{up_share:.0%}" if pd.notna(up_share) else "–", "with a rising price trend"),
         (f"{len(buys)} / {len(sells)}", "new uptrends / downtrends"),
         (f"{len(clusters)}", "insider buying clusters"),
         (f"{len(strong)}", "🔔 strong insider picks"),
@@ -259,22 +310,25 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
         from trend_bot.model import weather_status, weather_text
 
         ws = weather_status(con, benchmark)
-        banner = (f'<div class="weather {"sun" if ws["invest"] else "rain"}"><div class="wl">Market weather</div>'
+        banner = (f'<div class="weather {"sun" if ws["invest"] else "rain"}"><div class="wl">Market weather (market mood)</div>'
                   f'<div class="wt">{esc(weather_text(ws))}</div></div>')
     except Exception:  # no benchmark prices yet
         banner = ""
-    parts = [
-        f"<h1>Market report · {esc(date)}</h1>",
-        f'<p class="sub">{esc(strategy.label)} · stocks over $5 trading $1M+ a day · funds left out</p>',
-        banner,
-        '<div class="tiles">' + "".join(f'<div class="tile"><div class="n">{n}</div><div class="l">{l}</div></div>'
-                                        for n, l in tiles) + "</div>",
-    ]
+    parts = [f"<h1>Your Trend Bot report · {esc(date)}</h1>", *_start_here(con, esc), banner]
     parts += _glance_section(con, esc)
     parts += _ideas_section(con, esc)
+    parts.append('<details class="curious"><summary>🔍 For the curious: more research and market screens '
+                 '<span class="hint">(tap to open)</span></summary>')
+    parts.append('<p class="explain">Everything below is extra detail. None of it changes what the portfolio does.</p>')
+    parts.append('<div class="tiles">' + "".join(f'<div class="tile"><div class="n">{n}</div><div class="l">{l}</div></div>'
+                                                 for n, l in tiles) + "</div>")
+    parts.append(f'<p class="note">Screened: {esc(strategy.label)} · stocks over $5 trading $1M+ a day · funds left out</p>')
+    parts += _probation_section(con, esc)
     parts += _outlook(con, esc)
     parts += _ml_section(con, esc)
     parts.append("<h2>🔔 Strong insider buying in an uptrend</h2>")
+    parts.append('<p class="explain">Several people who run a company (executives, board members) bought its shares '
+                 "with their own money while its price was climbing.</p>")
     if len(strong):
         cards = []
         for t, r in strong.head(limit).iterrows():
@@ -296,8 +350,10 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
                  f"{int(r['buyers'])} · {_money(r['buy_value'])}" if r["buyers"] else ""]
                 for t, r in df.head(limit).iterrows()]
 
-    heads = ["Ticker", "Company", "6 months", "Close", "20 days", "RSI", "Insiders buying"]
-    parts += [f"<h2>New uptrends ({len(buys)})</h2>", _table(heads, flip_rows(buys)),
+    heads = ["Stock", "Company", "Last 6 months", "Price", "Last 20 days", "Speed (RSI)", "Insiders buying"]
+    parts += [f"<h2>New uptrends ({len(buys)})</h2>",
+              '<p class="explain">Prices that just started climbing: the 50-day average rose above the 200-day average. '
+              "RSI above 70 means the price ran up fast, below 30 that it fell fast.</p>", _table(heads, flip_rows(buys)),
               f"<h2>New downtrends ({len(sells)})</h2>", _table(heads, flip_rows(sells))]
 
     cl_rows = [[f"<b>{esc(t)}</b>", esc(str(r["name"])), sparkline(closes.get(t, pd.Series(dtype=float))),
@@ -306,11 +362,11 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
                 "🔔" if r["strong"] else ""]
                for t, r in clusters.head(limit).iterrows()]
     parts += [f"<h2>Insider buying clusters, last 30 days ({len(clusters)})</h2>",
-              _table(["Ticker", "Company", "6 months", "Insiders", "Bought", "Trend", "Strong"], cl_rows)]
+              _table(["Stock", "Company", "Last 6 months", "Insiders", "Bought", "Trend", "Strong"], cl_rows)]
 
     held = pd.read_sql_query("SELECT * FROM model_holdings ORDER BY rank", con)
     weather = con.execute("SELECT value FROM meta WHERE key = 'model_weather'").fetchone()
-    parts.append("<h2>📈 Trend Score model portfolio</h2>")
+    parts.append("<h2>📈 Trend Score model portfolio (an older model, kept for comparison)</h2>")
     if weather:
         parts.append('<p class="sub">Market weather: ' + (
             '<b class="up">☀️ Invest</b>: the S&P 500 is above its 200-day average' if weather[0] == "invest"
@@ -329,12 +385,15 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
             mrows.append([f"<b>{esc(h.ticker)}</b>", esc(str(h.since)), sparkline(c), f"{h.entry_price:,.2f}",
                           f"{now:,.2f}", _pct(now / h.entry_price - 1 if h.entry_price else None),
                           f"{h.score:.0f}"])
-        parts.append(_table(["Ticker", "Since", "6 months", "Bought at", "Now", "Return", "Score"], mrows, left={0, 1}))
+        parts.append(_table(["Stock", "Held since", "Last 6 months", "Bought at", "Price now", "Gain or loss", "Score"],
+                            mrows, left={0, 1}))
         parts.append('<p class="note">Equal amounts in each stock. Checked once a month: stocks that fall out of the '
                      "top 40 are sold and the best new ones bought. Theoretical, not advice.</p>")
 
     perf = track.performance(con, benchmark=benchmark)
-    parts.append(f"<h2>Track record (vs {esc(benchmark)})</h2>")
+    parts.append(f"<h2>Track record of every pick (vs {esc(benchmark)})</h2>")
+    parts.append('<p class="explain">How each kind of pick really did after the bot made it, compared with the '
+                 "S&P 500 over the same days.</p>")
     if perf.empty:
         parts.append('<p class="empty">No picks recorded yet. They are saved every night from now on.</p>')
     else:
@@ -347,8 +406,9 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
         parts.append(f'<p class="note">Since {perf["date"].min()}. For new downtrends and model sells, a negative return '
                      "means the sell signal was right. Picks need months before these numbers mean much.</p>")
 
-    parts.append(f'<p class="note">Generated {dt.datetime.now():%Y-%m-%d %H:%M} by trend_bot. '
-                 "Not financial advice.</p>")
+    parts.append("</details>")
+    parts.append(f'<p class="note">Generated {dt.datetime.now():%Y-%m-%d %H:%M} by trend_bot. Past patterns, not '
+                 "certainties. Not financial advice.</p>")
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
             f"<title>Market report {esc(date)}</title><style>{CSS}</style></head>"

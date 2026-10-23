@@ -163,10 +163,11 @@ def weather_status(con: sqlite3.Connection, benchmark: str = "SPY") -> dict:
 
 def weather_text(ws: dict, markdown: bool = False) -> str:
     b = (lambda s: f"**{s}**") if markdown else (lambda s: s)
-    state = b("☀️ Invest") if ws["invest"] else b("🌧️ Caution")
+    state = b("☀️ Steady market") if ws["invest"] else b("🌧️ Shaky market")
     where = "above" if ws["invest"] else "below"
     return (f"{state} for {ws['days']} days (since {ws['since']}): the S&P 500 is {abs(ws['gap']):.1%} {where} "
-            f"its 200-day average." + ("" if ws["invest"] else " Historically, cash has been safer in these spells."))
+            f"its average price of the last 200 trading days (about 10 months)."
+            + ("" if ws["invest"] else " Expect a bumpier ride; the top-ideas portfolio stays invested."))
 
 
 # --- Backtest ---------------------------------------------------------------------------------

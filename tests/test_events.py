@@ -98,9 +98,9 @@ def test_alert_lists_new_red_flags_once(tmp_path):
                      ("e", 1, "8-K", day(90), "4.02")])                     # too old
     e = _red_flag_embed(con, ["aaa"])
     text = e["description"]
-    assert "**AAA** (watchlist)" in text and "auditor changed" in text
-    assert "**BBB** (top-ideas portfolio)" in text and "will be late" in text
-    assert "CCC" not in text and text.count("**") == 4
+    assert "**AAA** (in your watchlist)" in text and "auditor changed" in text
+    assert "**BBB** (in your top-ideas portfolio)" in text and "will be late" in text
+    assert "CCC" not in text and text.count("**") == 6          # the lead plus two stocks
     assert _red_flag_embed(con, ["aaa"]) is None                   # already sent
     assert _red_flag_embed(con, ["zzz"]) is None                   # nothing for a ticker without events
     assert events.recent_flags(con, [99]).columns.tolist() == ["accession", "cik", "form", "filed", "items"]

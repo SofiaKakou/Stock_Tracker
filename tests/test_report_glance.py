@@ -25,8 +25,13 @@ def test_at_a_glance_shows_portfolio_record_flags_and_probation(model_db):  # no
     assert "top-ideas portfolio since " + start in html and "S&P 500 over the same days" in html
     assert "<b>S79</b>" in html and "cheap, profitable" in html
     assert "<b>S05</b>" in html and "past financial statements can't be relied on" in html   # S05 is cik 6
-    assert html.index("net_issuance") < html.index("litigious") < html.index("report_change")
-    assert "✅ <b>net_issuance</b>" in html and "+3.4" in html
+    board = "".join(report._probation_section(con, str))
+    assert board.index("issuing new shares") < board.index("legal wording") < board.index("report rewritten a lot")
+    assert "✅ <b>issuing new shares</b>" in board and "+3.4" in board and "passed the test" in board
+
+    start_box = "".join(report._start_here(con, str))
+    assert "Start here" in start_box and "index fund" in start_box
+    assert "Nothing to do today" in start_box or "portfolio" in start_box
 
 
 def test_at_a_glance_before_the_first_update(tmp_path):
@@ -34,4 +39,4 @@ def test_at_a_glance_before_the_first_update(tmp_path):
 
     con = db.connect(tmp_path / "m.db")
     html = "".join(report._glance_section(con, str))
-    assert "starts at its first monthly update" in html and "probation" not in html
+    assert "starts at its first monthly update" in html and report._probation_section(con, str) == []

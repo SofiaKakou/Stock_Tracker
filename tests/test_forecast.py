@@ -1,9 +1,11 @@
+import datetime as dt
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from test_model import model_db  # noqa: F401  (fixture: 80 simulated stocks + SPY)
-from trend_bot import forecast, track
+from trend_bot import db, forecast, track
 from trend_bot.cli import main
 
 
@@ -72,12 +74,10 @@ def test_cli_forecast_study_report_alert(model_db, tmp_path, monkeypatch, capsys
     args = ["alert", "S01", "--from-db", "--db", path, "--webhook", "https://h", "--state", str(tmp_path / "s.json"),
             "--no-news", "--no-insiders", "--forecast"]
     assert main(args) == 0
-    outlook = [e for p in sent for e in p["embeds"] if e["title"] == "🌦️ Weekly outlook"]
-    assert outlook and outlook[0]["description"].index("Most likely to lag") < outlook[0]["description"].index("Ideas")
-    assert "How reliable is this?" in outlook[0]["description"]
-    sent.clear()
-    assert main(args) == 0  # same week: not sent again
+    # No longer posted (it never showed skill), but still recorded for the scorecard.
     assert not any(e["title"] == "🌦️ Weekly outlook" for p in sent for e in p["embeds"])
+    week = f"{dt.date.today().isocalendar()[0]}-W{dt.date.today().isocalendar()[1]:02d}"
+    assert db.get_meta(model_db, "forecast_week") == week
 
 
 def test_reasons_describe_the_signal_not_its_effect():

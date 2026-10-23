@@ -168,7 +168,7 @@ def test_cli_alert_sends_insider_cluster_once(fake_sec, tmp_path, monkeypatch, u
             "--state", str(state), "--no-news"]
     assert main(args) == 0
     titles = [e["title"] for p in sent for e in p["embeds"]]
-    assert titles == ["🔔 Insider buying  NVDA"]
+    assert titles == ["🔔 Insiders are buying: NVDA"]
     sent.clear()
     assert main(args) == 0
     assert sent == []  # same cluster isn't announced twice
