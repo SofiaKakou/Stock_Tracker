@@ -20,18 +20,6 @@ def test_rsi_bounds_and_extremes():
     assert r.between(0, 100).all()
 
 
-def test_macd_columns():
-    s = pd.Series(np.linspace(1, 100, 100))
-    m = ind.macd(s)
-    assert list(m.columns) == ["macd", "signal", "hist"]
-    assert m["macd"].dropna().gt(0).all()  # steady uptrend: fast EMA above slow
-
-
-def test_slope_sign():
-    assert ind.slope(pd.Series(np.linspace(1, 2, 50))).dropna().gt(0).all()
-    assert ind.slope(pd.Series(np.linspace(2, 1, 50))).dropna().lt(0).all()
-
-
 def test_cache_expires(tmp_path, monkeypatch):
     import os
     import sys

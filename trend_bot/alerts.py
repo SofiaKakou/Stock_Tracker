@@ -298,38 +298,6 @@ def model_embed(res: dict) -> dict | None:
     return None
 
 
-def forecast_embed(preds, date: str, weather: dict, note: str, n: int = 10) -> dict:
-    """Weekly outlook (no longer posted: it never showed skill; kept for the record and the report)."""
-    from trend_bot.model import weather_text
-
-    line = lambda t, r: f"`{t:<6}` {r['p_beat']:.0%} chance to beat the S&P 500 · {r['why']}"
-    lines = [weather_text(weather, markdown=True), "",
-             "**⚠️ Most likely to lag (next 30 days)**", *[line(t, r) for t, r in preds.tail(n).iloc[::-1].iterrows()], "",
-             "**💡 Ideas to research**", *[line(t, r) for t, r in preds.head(5).iterrows()], "",
-             f"_How reliable is this? {note}_", f"As of {date}. Odds, not certainties."]
-    return {"title": "🌦️ Weekly outlook", "description": "\n".join(lines)[:4000],
-            "color": GREEN if weather["invest"] else RED}
-
-
-def ml_embed(verdict: dict | None, ranking: dict | None) -> dict | None:
-    """The all-signal model's ideas (no longer posted; shown in the report if it ever passes)."""
-    if not verdict or not ranking or not verdict.get("passed"):
-        return None
-    line = lambda p: f"`{p['ticker']:<6}`" + (f" {p['close']:,.2f}" if p.get("close") else "")
-    lines = [f"Passed its honesty test: on years it never saw it ranked stocks better than a simple mix of "
-             f"the same signals (IC {verdict['ic']:+.3f} vs {verdict['mix_ic']:+.3f}).", "",
-             "**⚠️ Most likely to lag**", *[line(p) for p in ranking["bottom"]], "",
-             "**💡 Top ideas**", *[line(p) for p in ranking["top"]]]
-    return {"title": "🤖 All-signal model", "description": "\n".join(lines)[:4000], "color": GOLD}
-
-
-def ml_status_line(verdict: dict | None) -> str:
-    if verdict and not verdict.get("passed"):
-        return ("The all-signal model hasn't beaten a simple mix of the same signals on years it never saw, "
-                "so its ideas aren't shown. Its picks are still tracked forward.")
-    return ""
-
-
 def ideas_embed(ranking: dict | None, weather: dict, note: str, live: str = "") -> dict | None:
     """Monthly top ideas from the simple mix (every signal ranked and averaged), with its track record."""
     if not ranking:
