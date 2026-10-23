@@ -257,6 +257,10 @@ class Session:
         room = float(self.b.account()["equity"]) * INVESTED - sum(
             abs(float(p.get("market_value") or 0)) for p in self.b.positions())
         fresh = self.last_trades([s for s, _ in signals if s not in done])
+        try:   # the bid and ask when each order goes out, for the trade log (what the spread cost)
+            quotes = intraday.latest_quotes(self.data, [s for s, _ in signals if s not in done][:slots])
+        except Exception:  # noqa: BLE001 - a missing quote never stops a trade
+            quotes = {}
         stale_cutoff = self.now() - dt.timedelta(days=1)
         for sym, side in signals:
             if sym in done or used + sent >= slots or not prices.get(sym):
@@ -276,7 +280,8 @@ class Session:
                 sent += 1
                 self.entries.append({"date": self.today.isoformat(), "time": self.now().strftime("%H:%M"),
                                      "pattern": pattern, "symbol": sym, "side": side, "qty": qty,
-                                     "expected": prices[sym], "signal": (strength or {}).get(sym)})
+                                     "expected": prices[sym], "signal": (strength or {}).get(sym),
+                                     "bid": quotes.get(sym, {}).get("bid"), "ask": quotes.get(sym, {}).get("ask")})
                 self.log(f"[day] {pattern}: {'buy' if side > 0 else 'short'} {qty} {sym} (~${qty * prices[sym]:,.0f})")
             except PaperError as e:   # e.g. a stock that can't be shorted today
                 self.log(f"[day] {pattern}: {sym} refused ({str(e)[:80]})")
@@ -459,8 +464,8 @@ def size_factor(share: dict[str, float], pattern: str) -> float:
     return share.get(pattern, 0.0) * len(share) if share else 1.0
 
 
-LOG_FIELDS = ["date", "time", "pattern", "symbol", "side", "qty", "signal", "expected", "entry", "exit",
-              "slippage", "ret", "pnl"]
+LOG_FIELDS = ["date", "time", "pattern", "symbol", "side", "qty", "signal", "expected", "bid", "ask", "spread",
+              "entry", "exit", "slippage", "ret", "pnl"]
 
 
 def trade_log(orders: list[dict], entries: list[dict], today: dt.date) -> list[dict]:
@@ -487,7 +492,9 @@ def trade_log(orders: list[dict], entries: list[dict], today: dt.date) -> list[d
         exit_ = float(r["exit"]["filled_avg_price"]) if "exit" in r else None
         qty = float(o["filled_qty"])
         exp = e.get("expected")
-        rows.append({"date": today.isoformat(), "time": e.get("time") or str(o.get("filled_at", ""))[11:16],
+        bid, ask = e.get("bid"), e.get("ask")
+        spread = (ask - bid) / ((ask + bid) / 2) if bid and ask and ask >= bid else None
+        rows.append({"bid": bid, "ask": ask, "spread": spread,"date": today.isoformat(), "time": e.get("time") or str(o.get("filled_at", ""))[11:16],
                      "pattern": str(o["client_order_id"]).split("-")[2], "symbol": sym, "side": side, "qty": qty,
                      "signal": e.get("signal"), "expected": exp, "entry": entry, "exit": exit_,
                      "slippage": side * (entry / exp - 1) if exp else None,

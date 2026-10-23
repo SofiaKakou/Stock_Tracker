@@ -21,6 +21,9 @@ class FakeConn:
         self.rows.setdefault(table, []).extend(rows)
         self.sql.append((sql, len(rows)))
 
+    def fetchall(self):
+        return []                                   # nothing stored yet
+
     def commit(self):
         pass
 
@@ -34,6 +37,11 @@ def test_the_journal_writes_every_table_once_per_day(tmp_path):
                                                 "exit": [["AAA", "bankruptcy filing"]], "warn": []}))
     con.execute("INSERT INTO run_log(started, command, exit_code) VALUES (?, 'nightly', 0)",
                 (dt.datetime.now().isoformat(timespec="seconds"),))
+    now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    con.execute("INSERT INTO news VALUES (1, ?, 'AAPL', 'Apple beats', 's', 'Benzinga', 'u', 0.1)", (now,))
+    con.executemany("INSERT INTO macro VALUES (?, ?, ?)", [("VIXCLS", "2026-10-22", 18.5), ("DGS10", "2026-10-22", 4.1)])
+    con.execute("INSERT INTO ranking_snapshots VALUES ('2026-10-23', 'AAA', 1, 0.9, 1.0, 'Energy', 15)")
+    con.executemany("INSERT INTO measure_snapshots VALUES ('2026-10-23', 'AAA', ?, ?)", [("roe", 0.8), ("sue", 0.6)])
     con.commit()
     state = {"log": [{"date": "2026-10-23", "symbol": "AAPL", "pattern": "breakout", "side": -1, "qty": 14,
                       "entry": 347.3, "exit": 345.0, "ret": 0.0066, "pnl": 32.2, "time": "10:30"}],
@@ -43,7 +51,10 @@ def test_the_journal_writes_every_table_once_per_day(tmp_path):
     conn = FakeConn()
     written = journal.sync(conn, con, state, results, log=lambda *_: None)
     assert written == {"day_trades": 1, "day_summary": 1, "account_values": 2, "monthly_holdings": 2,
-                       "safety_events": 1, "study_results": 1, "runs": 1}
+                       "safety_events": 1, "study_results": 1, "runs": 1, "news": 1, "macro": 2,
+                       "ranking_snapshots": 1, "measure_snapshots": 2}
+    alters = [s for s, _ in conn.sql if "ALTER TABLE" in s]
+    assert len(alters) == 3                              # bid, ask, spread added to an older day_trades
     creates = [s for s, _ in conn.sql if s.startswith("IF OBJECT_ID")]
     assert len(creates) == len(journal.TABLES)                          # tables made if missing
     deletes = [(s, p) for s, p in conn.sql if s.startswith("DELETE FROM dbo.day_trades")]

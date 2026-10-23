@@ -148,6 +148,7 @@ def cmd_ideas(args: argparse.Namespace) -> int:
 
             coverage.save(con, ranked, date)
             runs.note("left_out_too_few_measures", len(ranked.attrs.get("too_few", {})))
+            runs.note("snapshot", ideas.save_snapshot(con, ranked, date))   # what the bot thought today
         if ranked.empty:
             print("Not enough data.")
             return 1
@@ -378,6 +379,52 @@ def cmd_lookahead_combine(args: argparse.Namespace) -> int:
     print(f"Look-ahead check of {len(results)} months, checked in parallel:")
     print(lookahead.text(results))
     return 0 if lookahead.verdict(results)[0] else 1
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
+    """Collect the extra data: news headlines (Alpaca) and the economy (FRED)."""
+    import datetime as dt
+    import os
+
+    from trend_bot import collect, db
+
+    with closing(db.connect(args.db)) as con:
+        session = collect.alpaca_session()
+        if session is None:
+            print("[news] needs the Alpaca keys (ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY); skipped.")
+        else:
+            last = con.execute("SELECT MAX(created) FROM news").fetchone()[0]
+            since = dt.date.fromisoformat(args.news_since) if args.news_since else \
+                (dt.date.fromisoformat(last[:10]) - dt.timedelta(days=1) if last else dt.date.today() - dt.timedelta(days=7))
+            try:
+                collect.news(con, collect.followed(con), session, since)
+            except Exception as e:  # noqa: BLE001 - one source failing mustn't stop the other
+                print(f"[news] failed: {e}", file=sys.stderr)
+        key = os.environ.get("FRED_API_KEY")
+        if not key:
+            print("[macro] needs a free FRED key (FRED_API_KEY); skipped.")
+        else:
+            try:
+                collect.macro(con, key)
+            except Exception as e:  # noqa: BLE001
+                print(f"[macro] failed: {e}", file=sys.stderr)
+    return 0
+
+
+def cmd_mirror(args: argparse.Namespace) -> int:
+    """Copy the market data into SQL Server (database TrendBotMarket), only what's new."""
+    from trend_bot import db, mirror
+
+    conn = mirror.connect()
+    if conn is None:
+        print("The market mirror isn't set up (AZURE_SQL_* secrets); skipped.")
+        return 0
+    try:
+        with closing(db.connect(args.db)) as con:
+            mirror.sync(conn, con, budget_seconds=args.minutes * 60)
+    finally:
+        conn.close()
+    return 0
 
 
 def cmd_journal(args: argparse.Namespace) -> int:
