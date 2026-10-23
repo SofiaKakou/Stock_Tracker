@@ -77,6 +77,23 @@ def _gone_note(df: pd.DataFrame) -> str:
             "Price-based signals can't be measured for them.")
 
 
+def _study_lookahead(con, args: argparse.Namespace) -> None:
+    import tempfile
+
+    from trend_bot import lookahead
+
+    if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
+        print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
+        return
+    months = [m.strip() for m in args.months.split(",")] if args.months else lookahead.DEFAULT_MONTHS
+    print("Look-ahead check: for each month below, the signals are rebuilt from a copy of the database\n"
+          "cut off at that date, and compared with the normal table built from all the data.\n"
+          "Any difference means a signal used information from the future.")
+    with tempfile.TemporaryDirectory(dir=".") as tmp:
+        results = lookahead.check(con, months, workdir=tmp)
+    print(lookahead.text(results))
+
+
 def _study_candidates(con, args: argparse.Namespace) -> None:
     from trend_bot import candidates, fundamentals, ml
 
@@ -448,6 +465,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "ml":
             _study_ml(con, args)
+            return 0
+        if args.signal == "lookahead":
+            _study_lookahead(con, args)
             return 0
         if args.signal == "candidates":
             _study_candidates(con, args)
