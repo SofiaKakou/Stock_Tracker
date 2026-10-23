@@ -38,3 +38,20 @@ def test_update_portfolio_records_each_month(tmp_path):
     ideas.update_portfolio(con, ranking(names), "2026-09-30", {"invest": True}, hold=5, buffer=10)
     rows = con.execute("SELECT start, ticker, bought FROM ideas_periods ORDER BY ticker").fetchall()
     assert rows == [("2026-09-30", t, 1) for t in names[:5]]
+
+
+def test_live_record_since_a_later_day_counts_only_those_days(model_db):
+    con = model_db
+    d1, mid, d2 = str(DATES[-60].date()), str(DATES[-45].date()), str(DATES[-30].date())
+    first, second = ["S70", "S71"], ["S70", "S79"]
+    con.executemany("INSERT INTO ideas_periods VALUES (?, ?, ?)",
+                    [(d1, t, 1) for t in first] + [(d2, t, int(t == "S79")) for t in second])
+    con.commit()
+    close = lambda t: load_prices(con, t)["Close"]
+    ret = lambda t, a, b=None: close(t).loc[:b].iloc[-1] / close(t).loc[a:].iloc[0] - 1
+    r = ideas.live_record(con, since=mid)                    # e.g. the demo account's first day
+    p1 = np.mean([ret(t, mid, d2) for t in first])           # month under way: bought on `mid`
+    p2 = np.mean([ret(t, d2) for t in second])
+    assert r["portfolio"] == pytest.approx((1 + p1) * (1 - 0.001) * (1 + p2) * (1 - 0.002 * 0.5) - 1)
+    assert r["start"] == mid and r["spy"] == pytest.approx(ret("SPY", mid))
+    assert ideas.live_record(con, since=str(DATES[-1].date()))["updates"] == 1

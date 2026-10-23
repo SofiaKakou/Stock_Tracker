@@ -50,6 +50,7 @@ Everything runs in the cloud on **GitHub Actions**; nothing needs to run on your
 | `research.yml` | by hand (Actions tab) | any study (`ideas`, `ml`, `mllab`, `lookahead`, `audit`, `candidates`, ...), data refreshes, `sec-check`, `email-test` |
 | `why.yml` | by hand | "Why is a stock (not) ranked?": type tickers, answer in Discord |
 | `demo.yml` | by hand | demo account check: its value and the orders it would send (sends nothing) |
+| `demo-morning.yml` | weekdays 14:52 UTC | demo account: how last night's orders filled; retries refusals |
 | `tests.yml` | every push / PR | the test suite |
 | `ai.yml` | by hand, optional | an AI report reader (needs a paid API key; off by default) |
 
