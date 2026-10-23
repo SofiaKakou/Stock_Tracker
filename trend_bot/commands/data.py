@@ -263,3 +263,31 @@ def cmd_price_check(args: argparse.Namespace) -> int:
             gap = max(abs(a / b - 1) for _, a, b in both)
             print(f"[prices] compared {len(both)} days with ours: largest difference {gap:.2%}")
     return 0
+
+
+QUARTER_MONTHS = (1, 4, 7, 10)
+
+
+def cmd_monthly_due(args: argparse.Namespace) -> int:
+    """Which monthly checks are due tonight? Prints the steps (one per line); --mark records they're done.
+
+    The checks run once a month, on the first nightly run of days 1-3 that hasn't done them yet (so a
+    failed night is retried the next day, but a good one isn't repeated). The two retired models (the
+    30-day outlook and the all-signal model) are only re-tested quarterly."""
+    from trend_bot import db
+
+    today = dt.date.today()
+    month = today.strftime("%Y-%m")
+    with closing(db.connect(args.db)) as con:
+        if args.mark:
+            db.set_meta(con, "monthly_checks", month)
+            con.commit()
+            return 0
+        done = db.get_meta(con, "monthly_checks") == month
+    if not args.force and (today.day > 3 or done):
+        return 0
+    steps = ["study ideas", "study candidates", "study audit", "ideas"]
+    if args.force or today.month in QUARTER_MONTHS:
+        steps = ["study forecast", "study ml"] + steps
+    print("\n".join(steps))
+    return 0
