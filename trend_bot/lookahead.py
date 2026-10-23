@@ -12,6 +12,8 @@ peek at the future.
 
 What it can't see: the price data itself comes pre-adjusted for later dividends and splits, so
 price *levels* in the past are slightly off; returns (what the signals use) are not affected.
+The list of splits is kept whole in the copy: it is how the bot undoes that adjustment to get a
+company's true market value back then (dropping it made the copy, not the bot, wrong).
 Companies that later went bankrupt or were bought out are added back by design (with their real
 return), so they are left out of the comparison.
 """
@@ -28,7 +30,6 @@ import pandas as pd
 # Table -> the date column after which a row wasn't known yet.
 CUTOFFS = {
     "prices": "date",
-    "splits": "date",
     "insider_trades": "filed",
     "facts": "filed",
     "filings": "filed",

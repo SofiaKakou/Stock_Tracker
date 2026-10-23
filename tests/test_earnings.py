@@ -43,6 +43,25 @@ def test_first_reported_value_is_used():
     assert q["val"].iloc[0] == 10
 
 
+def test_a_later_filing_never_replaces_the_first_report_even_with_a_preferred_tag():
+    rows = year_rows(1, 2020, [10, 20, 30, 40])
+    rows = [(c, i, 1, st, e, f, v) for c, i, _, st, e, f, v in rows]          # first reports: tag priority 1
+    rows.append((1, "net_income", 0, "2020-01-01", "2020-03-31", "2021-05-10", 999))  # later, preferred tag
+    q = earnings.quarterly_series(facts_frame(rows), "net_income")
+    first = q[q["end"] == pd.Timestamp("2020-03-31")].iloc[0]
+    assert first["val"] == 10 and first["filed"] == pd.Timestamp("2020-04-10")
+
+
+def test_announcement_reaction_only_counts_once_known():
+    ev = pd.DataFrame({"cik": [1, 2], "filed": pd.to_datetime(["2024-01-31", "2024-01-25"]),
+                       "sue": [1.0, 2.0], "revenue_sue": [0.5, 0.5], "ear": [0.03, 0.04],
+                       "ear_known": pd.to_datetime(["2024-02-01", "2024-01-26"])})
+    got = earnings.latest(ev, pd.Timestamp("2024-01-31"))
+    assert np.isnan(got.loc[1, "ear"]) and got.loc[1, "sue"] == 1.0        # filed on the last day: reaction unknown
+    assert got.loc[2, "ear"] == 0.04
+    assert earnings.latest(ev, pd.Timestamp("2024-02-29")).loc[1, "ear"] == 0.03
+
+
 def test_surprise_spikes_on_an_unusual_quarter():
     rows = []
     for i, y in enumerate(range(2015, 2021)):
@@ -64,7 +83,8 @@ def test_surprise_spikes_on_an_unusual_quarter():
 def test_announcement_return_vs_benchmark(model_db):
     tickers = {i + 1: f"S{i:02d}" for i in range(N_STOCKS)}
     ev = pd.DataFrame({"cik": [80, 1], "filed": [DATES[400], DATES[400]]})
-    ear = earnings.announcement_returns(model_db, ev, tickers)
+    ear, known = earnings.announcement_returns(model_db, ev, tickers, with_dates=True)
+    assert known.iloc[0] == DATES[401]
     s79 = model_db.execute("SELECT close FROM prices WHERE ticker='S79' ORDER BY date").fetchall()
     spy = model_db.execute("SELECT close FROM prices WHERE ticker='SPY' ORDER BY date").fetchall()
     expected = (s79[401][0] / s79[399][0] - 1) - (spy[401][0] / spy[399][0] - 1)
