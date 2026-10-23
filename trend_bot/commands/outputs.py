@@ -139,6 +139,10 @@ def cmd_ideas(args: argparse.Namespace) -> int:
             return 1
         print("Ranking the most traded stocks on every signal...")
         ranked, date = ideas.latest(con, universe=args.universe)
+        from trend_bot import runs
+
+        runs.note("stocks_ranked", len(ranked))
+        runs.note("ranking_date", date)
         if ranked.empty:
             print("Not enough data.")
             return 1

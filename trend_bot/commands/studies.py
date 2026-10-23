@@ -288,6 +288,20 @@ def _construction_section(df, spy, ideas, con, args) -> None:
     _market_types_section(test, spy, ideas, split)
     _robustness_section(df, test, ideas, con, split)
     _likely_section(test, split)
+    _bad_times_section(test)
+
+
+def _bad_times_section(test) -> None:
+    """How the portfolio did when things went wrong, next to the S&P 500."""
+    from trend_bot import risk
+
+    print("\n\n##### The bad times (after costs) #####")
+    for col, name in (("top20", "Top 20"), ("large500", "Top 20 of the largest 500"), ("SPY", "S&P 500"),
+                      ("RSP", "Equal-weight S&P 500 (RSP)")):
+        if col in test and test[col].notna().sum() >= 24:
+            print(f"  {name}:")
+            for line in risk.words(risk.summary(test[col]), "It"):
+                print(f"    {line}")
 
 
 def _likely_section(test, split) -> None:
@@ -498,6 +512,9 @@ def cmd_study(args: argparse.Namespace) -> int:
         pct = lambda df: df.to_string(formatters={
             c: "{:+.1%}".format for c in ("avg_return", "median_return", "avg_vs_bench", "median_vs_bench")} | {
             c: "{:.0%}".format for c in ("win_rate", "beat_bench_rate")})
+        from trend_bot import runs
+
+        print(f"Made by: {runs.current_stamp()}")
         print(f"Benchmark: {args.benchmark} (bought and sold on the same days as each stock)\n")
         if args.signal in ("insiders", "both"):
             events = study.cluster_events(con, window_days=args.cluster_days, min_buyers=args.cluster_min,

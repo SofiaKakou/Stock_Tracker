@@ -303,4 +303,15 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
     args = make_parser().parse_args(argv)
-    return args.func(args)
+    from trend_bot import runs
+
+    name = " ".join(str(x) for x in (args.command, getattr(args, "signal", None) or getattr(args, "action", None))
+                    if x) if hasattr(args, "command") else args.func.__name__.removeprefix("cmd_")
+    runs.start(getattr(args, "db", None), name, runs.settings_of(args))
+    try:
+        code = args.func(args)
+    except BaseException as e:
+        runs.finish(1, f"{type(e).__name__}: {e}")
+        raise
+    runs.finish(code or 0)
+    return code

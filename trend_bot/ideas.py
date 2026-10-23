@@ -540,9 +540,10 @@ def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> 
     s = model.summarize(monthly, [col, "SPY"])
     if col not in s.index or "SPY" not in s.index:
         return
-    from trend_bot import uncertainty
+    from trend_bot import risk, uncertainty
 
     both = monthly[[col, "SPY"]].dropna()
+    bad = {"portfolio": risk.summary(both[col]), "spy": risk.summary(both["SPY"])}
     likely = uncertainty.ranges(both[col], both["SPY"])
     grown = (1 + both).cumprod()
     curve = [[f"{m:%Y-%m}", round(float(a), 4), round(float(b), 4)] for m, (a, b) in grown.iterrows()]
@@ -550,8 +551,31 @@ def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> 
         "hold": hold, "from": f"{monthly.index.min():%Y}", "to": f"{monthly.index.max():%Y}", "cap": bool(cap),
         "cagr": float(s.loc[col, "cagr"]), "max_drawdown": float(s.loc[col, "max_drawdown"]),
         "spy_cagr": float(s.loc["SPY", "cagr"]), "spy_max_drawdown": float(s.loc["SPY", "max_drawdown"]),
-        "curve": curve, **{f"likely_{k}": v for k, v in likely.items()}}))
+        "curve": curve, **{f"likely_{k}": v for k, v in likely.items()}, "stamp": _stamp(), "bad_times": bad}))
     con.commit()
+
+
+def _stamp() -> str:
+    from trend_bot import runs
+
+    return runs.current_stamp()
+
+
+def bad_times(con: sqlite3.Connection) -> list[str]:
+    """Plain sentences on the tested portfolio's bad stretches, next to the index fund's."""
+    from trend_bot import risk
+
+    raw = get_meta(con, "ideas_backtest")
+    bad = json.loads(raw).get("bad_times") if raw else None
+    if not bad:
+        return []
+    lines = risk.words(bad["portfolio"], "The portfolio")
+    spy = bad["spy"]
+    if lines and spy:
+        lines.append(f"For comparison, the S&P 500 index fund: longest time below a previous high "
+                     f"{risk.span(spy['recover_months'])}, worst months averaged {spy['worst_months']:+.1%}, and "
+                     f"{spy['without_best']:+.1%} a year without its 5 best months.")
+    return lines
 
 
 def growth_curve(con: sqlite3.Connection) -> pd.DataFrame | None:
