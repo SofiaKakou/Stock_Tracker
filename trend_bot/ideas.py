@@ -302,7 +302,8 @@ STOP_LOSS = 0.30   # stop30: sell a holding once it's this far below its buy pri
 
 
 def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, cost: float,
-                  by_size: bool = False, exclude: pd.Series | None = None, stop: float | None = None) -> pd.Series:
+                  by_size: bool = False, exclude: pd.Series | None = None, stop: float | None = None,
+                  record: list | None = None) -> pd.Series:
     """Monthly returns of holding the top `hold` by `score` (kept while in the top `buffer`), always
     invested, after trading costs. by_size: weighted by market value instead of equally.
     exclude: rows (aligned with df) that may not be held that month (sold if held, never bought).
@@ -332,6 +333,8 @@ def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, co
         ok = r.notna()
         gross = float((r[ok] * w[ok]).sum() / w[ok].sum()) if ok.any() else 0.0
         out[month + pd.offsets.MonthEnd(1)] = gross - cost * len(buys) / hold
+        if record is not None:   # what was held and bought each month (for the bookkeeping tests)
+            record.append({"month": month, "held": list(new), "buys": list(buys)})
         growth = {t: (1.0 if t in buys else growth.get(t, 1.0)) * (1 + (r[t] if pd.notna(r[t]) else 0.0))
                   for t in new}
         held = new
