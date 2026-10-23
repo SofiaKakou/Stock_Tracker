@@ -1,8 +1,9 @@
 # Demo account check: Actions tab -> "Demo account check" -> Run workflow.
 # Connects to the Alpaca paper-trading account (fake money) with the ALPACA_* secrets and shows the
 # account's value and the orders the bot would send to follow the portfolio. Sends nothing, unless
-# you tick "test trade": 1 SPY share bought and sold straight back, to prove orders work.
-# The nightly run does the real syncing (GUIDE.md, "Demo account").
+# you tick "test trade" (1 SPY share bought and sold straight back, to prove orders work) or
+# "follow now" (bring the account to the portfolio now, e.g. to start it during market hours instead
+# of waiting for the nightly run; orders fill within seconds while the market is open).
 
 name: Demo account check
 
@@ -13,12 +14,21 @@ on:
         description: "Also buy 1 SPY share and sell it straight back (fake money; only while the market is open)"
         type: boolean
         default: false
+      follow_now:
+        description: "Follow the portfolio now: send the real demo orders (fake money), as the nightly run would"
+        type: boolean
+        default: false
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Following writes to the database, so then it waits for (and never overlaps) the nightly run.
+    concurrency:
+      group: ${{ inputs.follow_now && 'nightly-market-run' || format('demo-check-{0}', github.run_id) }}
+      cancel-in-progress: false
     timeout-minutes: 15
     env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
       ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
       PYTHONUNBUFFERED: "1"
@@ -49,3 +59,16 @@ jobs:
       - name: Test trade
         if: inputs.test_trade
         run: python -m trend_bot paper --test-trade
+
+      - name: Follow the portfolio now
+        if: inputs.follow_now
+        run: python -m trend_bot paper --discord --changed-flag changed.flag
+
+      - name: Save database
+        if: inputs.follow_now && hashFiles('changed.flag') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
