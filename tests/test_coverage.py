@@ -40,6 +40,8 @@ def test_why_explains_every_kind_of_ticker(tmp_path):
 
 def test_audit_finds_planted_problems(tmp_path):
     con = db.connect(tmp_path / "m.db")
+    con.executemany("INSERT INTO tickers(ticker, cik, last_date) VALUES (?, ?, ?)",
+                    [("AAA", 1, "2024-09-02"), ("BBB", 2, "2024-01-05")])
     future = (TODAY + dt.timedelta(days=30)).isoformat()
     con.executemany("INSERT INTO prices(ticker, date, close, adj_close) VALUES (?, ?, ?, ?)", [
         ("AAA", "2024-01-05", 10, 10), ("AAA", "2024-01-06", 10, 10),          # a Saturday
@@ -48,14 +50,21 @@ def test_audit_finds_planted_problems(tmp_path):
         ("AAA", "2024-09-02", 50, 50),                                          # a 56-day gap
         ("AAA", future, 50, 50), ("BBB", "2024-01-05", 0, 0)])
     con.execute("INSERT INTO facts VALUES (1, 'revenue', 0, '2024-01-01', '2024-12-31', '2024-06-30', 5)")
+    con.execute("INSERT INTO facts VALUES (1, 'shares', 0, NULL, '2024-07-05', '2024-07-01', 5)")  # cover page: normal
     found = {r["check"]: r for r in coverage.audit(con)}
     for check in ("Prices dated on a weekend", "Prices dated on a market holiday", "Prices from the future",
-                  "Impossible prices", "Unexplained one-day jumps", "Long gaps inside a price history",
-                  "Financials filed before their period ended"):
+                  "Long gaps inside a price history", "Financials filed before their period ended"):
         assert not found[check]["ok"], check
+    for check in ("Impossible prices", "Unexplained one-day jumps"):       # found, but already handled
+        assert found[check]["found"] and found[check]["ok"] and found[check]["handled"], check
+    assert found["Financials filed before their period ended"]["found"] == 1  # the cover-page count isn't
     assert found["Filings from the future"]["ok"]
     assert "AAA 2024-01-06" in found["Prices dated on a weekend"]["detail"]
-    assert "To look into:" in coverage.audit_text(list(found.values()))
+    text = coverage.audit_text(list(found.values()))
+    assert "To look into:" in text and "handled (treated as missing days" in text
+    coverage.save_audit(con, list(found.values()))
+    from trend_bot import health
+    assert any("data audit" in p for p in health.check(con))
     clean = coverage.audit(db.connect(tmp_path / "clean.db"))
     assert all(r["ok"] for r in clean) and "Clean" in coverage.audit_text(clean)
 

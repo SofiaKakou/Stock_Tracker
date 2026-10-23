@@ -178,8 +178,10 @@ data from FINRA. All free.
   share class, too little known about it, under $5, not traded enough, no recent prices).
 - **📒 Logbook**: the report's last section lists recent runs, what they did and whether they worked.
   Every result carries a stamp ("code … · data …") saying which code and data made it.
-- **Data audit**: a Research run with study *audit* checks the stored data for misdated, impossible
-  or missing prices and misdated filings.
+- **Data audit**: runs every month (and on demand as a Research run, study *audit*). It checks the
+  data of stocks that could be ranked for misdated, impossible or missing prices and misdated
+  filings. Problems the bot already handles (zero prices, one-day blips, unexplained jumps) are
+  shown as handled; anything else appears in the ⚠️ Bot health message.
 
 ## Optional setup
 

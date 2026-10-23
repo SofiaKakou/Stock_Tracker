@@ -58,6 +58,11 @@ def check(con: sqlite3.Connection, today: dt.date | None = None, failed_steps: l
         elif age > limit:
             problems.append(f"{label}: last updated {age} days ago.")
 
+    audit = json.loads(get_meta(con, "data_audit") or "{}")
+    if audit.get("problems") and (_age_days(audit["date"], today) or 0) <= 40:
+        problems.append(f"The monthly data audit ({audit['date']}) found something to look into: "
+                        f"{', '.join(audit['problems'])}. Details in that night's 'study audit' output.")
+
     raw = get_meta(con, "mix_ranking")
     age = _age_days(json.loads(raw)["date"], today) if raw else None
     if age is None:
