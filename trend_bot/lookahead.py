@@ -71,8 +71,9 @@ def compare(full: pd.DataFrame, cut: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         nan_mismatch = x.isna() != y.isna()
         gap = (x - y).abs().where(~(x.isna() | y.isna()))
         differ = nan_mismatch | (gap > 1e-9 * (1 + x.abs()))
+        examples = [f"{t} {x[t]:.4g}/{y[t]:.4g}" for t in differ[differ].index[:4]]
         rows[c] = {"stocks": int((x.notna() | y.notna()).sum()), "differ": int(differ.sum()),
-                   "max_gap": float(gap.max()) if gap.notna().any() else 0.0}
+                   "max_gap": float(gap.max()) if gap.notna().any() else 0.0, "examples": ", ".join(examples)}
     universe = {"both": len(both), "only_full": len(a.index.difference(b.index)),
                 "only_cut": len(b.index.difference(a.index))}
     return pd.DataFrame(rows).T, universe
@@ -121,7 +122,8 @@ def text(results: dict[str, tuple[pd.DataFrame, dict]]) -> str:
         for c, r in table.sort_values("differ", ascending=False).iterrows():
             mark = "OK " if r["differ"] == 0 else "!! "
             lines.append(f"  {mark}{c:<22} {int(r['stocks']):>5} stocks, {int(r['differ']):>4} differ"
-                         + (f", largest gap {r['max_gap']:.4g}" if r["differ"] else ""))
+                         + (f", largest gap {r['max_gap']:.4g} (e.g. {r['examples']}: with all data / up to then)"
+                            if r["differ"] else ""))
     clean, bad = verdict(results)
     lines.append("\n" + ("Clean: every signal was the same with only the data known at the time. No look-ahead found."
                          if clean else
