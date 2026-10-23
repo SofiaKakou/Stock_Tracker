@@ -36,6 +36,7 @@ SERIES = {
     "SPY": np.linspace(300, 400, N),
     "QQQ": np.linspace(300, 400, N),
     "IWM": np.linspace(150, 200, N),
+    "RSP": np.linspace(140, 180, N),
 }
 
 
@@ -71,11 +72,11 @@ def con(tmp_path, monkeypatch):
 
 
 def test_universe_and_prices(con):
-    assert market_data.update_universe(con) == 4 + 3  # 4 listed + SPY/QQQ/IWM
+    assert market_data.update_universe(con) == 4 + 4  # 4 listed + SPY/QQQ/IWM/RSP
     yahoo = FakeYahoo()
     counts = market_data.update_prices(con, downloader=yahoo, pause=0, log=lambda *_: None)
-    assert counts["new"] == 6 and counts["failed"] == 1
-    assert db.status(con)["price_rows"] == 6 * N
+    assert counts["new"] == 7 and counts["failed"] == 1
+    assert db.status(con)["price_rows"] == 7 * N
     flip = db.load_prices(con, "FLIP")
     assert flip["Close"].iloc[-1] == pytest.approx(140)
 
@@ -86,7 +87,7 @@ def test_universe_and_prices(con):
     con.execute("UPDATE tickers SET updated_at = '2000-01-01'")
     yahoo.calls.clear()
     counts = market_data.update_prices(con, downloader=yahoo, pause=0, log=lambda *_: None)
-    assert counts["updated"] == 6
+    assert counts["updated"] == 7
     # Known tickers are fetched incrementally; only GHST (never had data) asks for full history.
     assert all(start or tickers == ("GHST",) for tickers, start, _ in yahoo.calls)
 
@@ -94,7 +95,7 @@ def test_universe_and_prices(con):
     con.execute("UPDATE tickers SET updated_at = '2000-01-01'")
     yahoo.factor = 0.9
     counts = market_data.update_prices(con, downloader=yahoo, pause=0, log=lambda *_: None)
-    assert counts["reloaded"] == 6
+    assert counts["reloaded"] == 7
     assert db.load_prices(con, "FLIP")["Close"].iloc[-1] == pytest.approx(126)
 
 
@@ -540,3 +541,34 @@ def test_sec_pause_after_rate_limit(full_db, tmp_path, monkeypatch, capsys):
 
     assert main(args + ["--ignore-sec-pause"]) == 1  # unless asked to
     assert len(calls) == 2
+
+
+def test_backup_source_fills_what_yahoo_missed(con, monkeypatch):
+    monkeypatch.setattr(market_data.time, "sleep", lambda s: None)
+    market_data.update_universe(con)
+    market_data.update_prices(con, downloader=FakeYahoo(), pause=0, log=lambda *_: None)
+    last = con.execute("SELECT MAX(date) FROM prices WHERE ticker = 'UPPY'").fetchone()[0]
+    close = con.execute("SELECT close FROM prices WHERE ticker = 'UPPY' AND date = ?", (last,)).fetchone()[0]
+    day = pd.Timestamp(last)
+    asked = []
+
+    def stooq(t, start):
+        asked.append(t)
+        if t == "FLIP":       # a different split adjustment: the last day doesn't match, so it's skipped
+            return pd.DataFrame({"Open": [1.0, 1.0], "High": [1.0, 1.0], "Low": [1.0, 1.0], "Close": [1.0, 1.0],
+                                 "Volume": [1, 1]}, index=[day, day + pd.offsets.BDay(1)])
+        return pd.DataFrame({"Open": [close, 81.0], "High": [close, 82.0], "Low": [close, 80.0],
+                             "Close": [close, 81.5], "Volume": [10, 20]}, index=[day, day + pd.offsets.BDay(1)])
+
+    con.execute("UPDATE tickers SET updated_at = '2000-01-01'")
+    nothing = lambda tickers, start=None, period=None: {}
+    counts = market_data.update_prices(con, downloader=nothing, pause=0, log=lambda *_: None, backup=stooq)
+    assert counts["backup"] == 1 and asked[0] in market_data.BENCHMARKS    # benchmark funds asked first
+    assert asked.index("UPPY") > max(asked.index(b) for b in market_data.BENCHMARKS if b in asked)
+    assert con.execute("SELECT MAX(date) FROM prices WHERE ticker = 'UPPY'").fetchone()[0] > last
+    assert con.execute("SELECT close FROM prices WHERE ticker = 'UPPY' ORDER BY date DESC").fetchone()[0] == 81.5
+    assert con.execute("SELECT MAX(date) FROM prices WHERE ticker = 'FLIP'").fetchone()[0] == last
+
+
+def test_stooq_symbols():
+    assert market_data.stooq_symbol("BRK.B") == "brk-b.us" and market_data.stooq_symbol("AAPL") == "aapl.us"

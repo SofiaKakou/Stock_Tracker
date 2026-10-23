@@ -170,6 +170,7 @@ def _glance_section(con: sqlite3.Connection, esc) -> list[str]:
 
         parts += [f"<h3>What $10,000 would have become in testing ({curve.index[0]:%Y}–{curve.index[-1]:%Y})</h3>",
                   charts.growth_svg(curve),
+                  f'<p class="explain">{esc(ideas.backtest_note(con))}</p>',
                   '<p class="note">A test on past data, after trading costs, always invested. The line is drawn on '
                   "a scale where equal % moves look equal. The real record since the portfolio started is the "
                   "numbers above.</p>"]

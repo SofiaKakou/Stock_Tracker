@@ -287,6 +287,27 @@ def _construction_section(df, spy, ideas, con, args) -> None:
     _large_section(df, test, ideas, con, split)
     _market_types_section(test, spy, ideas, split)
     _robustness_section(df, test, ideas, con, split)
+    _likely_section(test, split)
+
+
+def _likely_section(test, split) -> None:
+    """How sure are these numbers? Likely ranges from re-drawing the history in one-year blocks."""
+    from trend_bot import uncertainty
+
+    print("\n\n##### How sure are these numbers? (likely ranges, 90%) #####")
+    print("The monthly history is re-drawn 2,000 times in one-year blocks and the yearly growth recomputed;\n"
+          "the middle 90% of the results is the likely range. If the gap's range includes zero, the test\n"
+          "can't tell which was really better.")
+    for label, part in (("All years", test), (f"before {split:%Y}", test[test.index < split]),
+                        (f"{split:%Y} on", test[test.index >= split])):
+        for col in ("top20", "large500"):
+            if col not in part or part[col].notna().sum() < 24:
+                continue
+            r = uncertainty.ranges(part[col], part["SPY"])
+            if r:
+                name = "Top 20" if col == "top20" else "Top 20 of the largest 500"
+                print(f"  {label:<12} {name}: {r['value']:+.1%} a year (likely {r['lo']:+.1%} to {r['hi']:+.1%}); "
+                      f"{uncertainty.gap_words(r)}")
 
 
 def _robustness_section(df, test, ideas, con, split) -> None:

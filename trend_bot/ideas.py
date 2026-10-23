@@ -540,14 +540,17 @@ def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> 
     s = model.summarize(monthly, [col, "SPY"])
     if col not in s.index or "SPY" not in s.index:
         return
+    from trend_bot import uncertainty
+
     both = monthly[[col, "SPY"]].dropna()
+    likely = uncertainty.ranges(both[col], both["SPY"])
     grown = (1 + both).cumprod()
     curve = [[f"{m:%Y-%m}", round(float(a), 4), round(float(b), 4)] for m, (a, b) in grown.iterrows()]
     set_meta(con, "ideas_backtest", json.dumps({
         "hold": hold, "from": f"{monthly.index.min():%Y}", "to": f"{monthly.index.max():%Y}", "cap": bool(cap),
         "cagr": float(s.loc[col, "cagr"]), "max_drawdown": float(s.loc[col, "max_drawdown"]),
         "spy_cagr": float(s.loc["SPY", "cagr"]), "spy_max_drawdown": float(s.loc["SPY", "max_drawdown"]),
-        "curve": curve}))
+        "curve": curve, **{f"likely_{k}": v for k, v in likely.items()}}))
     con.commit()
 
 
@@ -568,9 +571,16 @@ def backtest_note(con: sqlite3.Connection) -> str:
         return ""
     b = json.loads(raw)
     capped = f", at most {MAX_PER_INDUSTRY} per industry," if b.get("cap") else ""
+    from trend_bot import uncertainty
+
+    likely = (f" (likely somewhere between {b['likely_lo']:+.1%} and {b['likely_hi']:+.1%})"
+              if b.get("likely_lo") is not None else "")
+    gap = {k.removeprefix("likely_"): v for k, v in b.items() if k.startswith("likely_")}
+    gap_text = f" The difference: {uncertainty.gap_words(gap, 'the index fund')}" if "gap" in gap else ""
     return (f"Following the top {b['hold']}{capped} from {b['from']} to {b['to']} would have grown "
-            f"{b['cagr']:+.1%} a year (biggest fall along the way {b['max_drawdown']:.0%}), vs {b['spy_cagr']:+.1%} "
-            f"a year for an S&P 500 index fund (biggest fall {b['spy_max_drawdown']:.0%}).")
+            f"{b['cagr']:+.1%} a year{likely} (biggest fall along the way {b['max_drawdown']:.0%}), vs "
+            f"{b['spy_cagr']:+.1%} a year for an S&P 500 index fund (biggest fall {b['spy_max_drawdown']:.0%})."
+            f"{gap_text}")
 
 
 # --- The portfolio to follow: monthly buys and sells -------------------------------------------------

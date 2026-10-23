@@ -125,6 +125,12 @@ def scorecard(preds: pd.DataFrame, split_year: int = 2020) -> pd.DataFrame:
     halves = {"before": preds[preds["month"].dt.year < split_year],
               "after": preds[preds["month"].dt.year >= split_year]}
     mix = {h: factors.evaluate(p, "simple_mix")["mean_ic"] for h, p in halves.items()}
+    from trend_bot import uncertainty
+
+    # Each variant is tested on what matters (does it rank better than the simple mix, month by
+    # month?), and the six together are one family for the fluke bar (false discovery rate).
+    beat_t = {v: uncertainty.beats_t(preds, v, "simple_mix") for v in VARIANTS if v in preds}
+    q = uncertainty.q_values({v: uncertainty.p_from_t(t) for v, t in beat_t.items()})
     rows = {}
     for v in VARIANTS + ["simple_mix"]:
         if v not in preds:
@@ -137,8 +143,9 @@ def scorecard(preds: pd.DataFrame, split_year: int = 2020) -> pd.DataFrame:
         if len(p):
             r["top10_per_year"] = (1 + p["net"]).prod() ** (12 / len(p)) - 1
         if v != "simple_mix":
+            r["beats_t"], r["q"] = beat_t.get(v, np.nan), q.get(v, 1.0)
             wins = all(r[f"ic_{h}"] > mix[h] for h in halves)
-            r["verdict"] = ("BEATS the simple mix" if wins and r["ic_t"] > 2 else
+            r["verdict"] = ("BEATS the simple mix" if wins and r["q"] <= 0.05 else
                             "beats it, but could be luck" if wins else "doesn't beat the simple mix")
         else:
             r["verdict"] = "(the bar to beat)"
@@ -149,12 +156,15 @@ def scorecard(preds: pd.DataFrame, split_year: int = 2020) -> pd.DataFrame:
 def text(card: pd.DataFrame, split_year: int) -> str:
     f = lambda v, s: "–" if v is None or (isinstance(v, float) and np.isnan(v)) else s.format(v)
     lines = [f"  {'variant':<12}{'IC':>8}{'t':>6}{'before ' + str(split_year):>13}{str(split_year) + ' on':>9}"
-             f"{'top 10%/yr':>12}  verdict"]
+             f"{'top 10%/yr':>12}{'vs mix t':>10}{'q':>7}  verdict"]
     for v, r in card.iterrows():
         lines.append(f"  {v:<12}{f(r['ic'], '{:+.3f}'):>8}{f(r['ic_t'], '{:+.1f}'):>6}"
                      f"{f(r['ic_before'], '{:+.3f}'):>13}{f(r['ic_after'], '{:+.3f}'):>9}"
-                     f"{f(r.get('top10_per_year'), '{:+.1%}'):>12}  {r['verdict']}")
+                     f"{f(r.get('top10_per_year'), '{:+.1%}'):>12}{f(r.get('beats_t'), '{:+.1f}'):>10}"
+                     f"{f(r.get('q'), '{:.3f}'):>7}  {r['verdict']}")
     winners = [v for v, r in card.iterrows() if r["verdict"] == "BEATS the simple mix"]
+    lines.append("\nvs mix t: how clearly it ranked better than the simple mix, month by month. q: its chance of "
+                 "being a fluke once all six variants are counted (5% or less needed).")
     lines.append("\n" + (f"Winner(s): {', '.join(winners)}. Beat the simple mix on years they never saw, in both "
                          "halves, and unlikely to be luck. Offered to you; nothing changes without your yes."
                          if winners else

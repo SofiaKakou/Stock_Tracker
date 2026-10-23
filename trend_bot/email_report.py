@@ -76,6 +76,9 @@ def digest(con, problems: list[str], flag_days: int = 30, change_days: int = 35)
         out.append((f"🚩 Red flags in these stocks (last {flag_days} days)",
                     [f"{cik_of[r.cik]} ({r.filed}): {events.describe(r.items)}" for r in flags.itertuples(index=False)]
                     or ["None."]))
+    note = ideas.backtest_note(con)
+    if note:
+        out.append(("What 20 years of testing says", [note]))
     out.append(("Bot health", problems or ["All fine."]))
     return [("In short", in_short(out, problems))] + out
 

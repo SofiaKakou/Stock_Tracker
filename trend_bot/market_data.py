@@ -16,7 +16,8 @@ from trend_bot.db import set_meta
 UNIVERSE_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
 MAIN_EXCHANGES = ("NYSE", "Nasdaq", "CBOE")
 # Always tracked (used as the market benchmark), even if the SEC list lacks them.
-BENCHMARKS = {"SPY": "SPDR S&P 500 ETF", "QQQ": "Invesco QQQ (Nasdaq-100)", "IWM": "iShares Russell 2000"}
+BENCHMARKS = {"SPY": "SPDR S&P 500 ETF", "QQQ": "Invesco QQQ (Nasdaq-100)", "IWM": "iShares Russell 2000",
+              "RSP": "Invesco S&P 500 Equal Weight ETF"}
 
 Downloader = Callable[..., dict[str, pd.DataFrame]]
 
@@ -184,6 +185,78 @@ def yahoo_download(tickers: list[str], start: str | None = None, period: str | N
     return out
 
 
+# --- Backup source: Stooq (free CSV) when Yahoo fails --------------------------------------------
+
+STOOQ_URL = "https://stooq.com/q/d/l/?s={symbol}&d1={start}&i=d"
+BACKUP_LIMIT = 300        # stocks per run: Stooq is a small free service, so be gentle
+BACKUP_MATCH = 0.02       # Stooq's close on our last stored day must be within 2% of ours
+
+
+def stooq_symbol(ticker: str) -> str:
+    return ticker.lower().replace(".", "-") + ".us"
+
+
+def stooq_download(ticker: str, start: str) -> pd.DataFrame:
+    """Daily bars from Stooq since `start` (YYYY-MM-DD): [Open, High, Low, Close, Volume]."""
+    import io
+
+    import requests
+
+    url = STOOQ_URL.format(symbol=stooq_symbol(ticker), start=start.replace("-", ""))
+    resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 trend-bot"})
+    resp.raise_for_status()
+    text = resp.text.strip()
+    if not text.lower().startswith("date"):
+        return pd.DataFrame()   # "No data" or an error page
+    df = pd.read_csv(io.StringIO(text), parse_dates=["Date"]).set_index("Date")
+    return df[[c for c in ("Open", "High", "Low", "Close", "Volume") if c in df]].dropna(subset=["Close"])
+
+
+def backup_priority(con: sqlite3.Connection, tickers: list[str]) -> list[str]:
+    """Most important first: benchmark funds, the portfolios' stocks, then the most traded."""
+    held = {t for (t,) in con.execute("SELECT ticker FROM ideas_holdings UNION SELECT ticker FROM model_holdings")}
+    vol = dict(con.execute("SELECT ticker, COALESCE(dollar_vol, 0) FROM tickers"))
+    rank = lambda t: (t not in BENCHMARKS, t not in held, -vol.get(t, 0))
+    return sorted(tickers, key=rank)
+
+
+def fill_from_backup(con: sqlite3.Connection, tickers: list[str], fetch=stooq_download,
+                     limit: int = BACKUP_LIMIT, log: Callable[[str], None] = print) -> int:
+    """Add the days missing since each ticker's last stored date from the backup source. Only for
+    tickers we already have; skipped when the backup's price on our last day doesn't match ours
+    (different split adjustment). Dividend adjustment carries on from our last stored day; the next
+    time Yahoo works it sees the difference and reloads the ticker from Yahoo."""
+    filled = 0
+    for t in backup_priority(con, tickers)[:limit]:
+        last = con.execute("SELECT date, close, adj_close FROM prices WHERE ticker = ? ORDER BY date DESC LIMIT 1",
+                           (t,)).fetchone()
+        if not last:
+            continue
+        try:
+            df = fetch(t, last[0])
+        except Exception:  # noqa: BLE001 - a backup that fails just leaves the ticker as it was
+            continue
+        if df.empty or pd.Timestamp(last[0]) not in df.index:
+            continue
+        theirs = float(df.loc[pd.Timestamp(last[0]), "Close"])
+        if not theirs or abs(theirs / last[1] - 1) > BACKUP_MATCH:
+            continue
+        new = df[df.index > pd.Timestamp(last[0])]
+        if new.empty:
+            continue
+        ratio = (last[2] / last[1]) if last[1] else 1.0
+        rows = [(t, d.strftime("%Y-%m-%d"), r.Open, r.High, r.Low, r.Close, r.Close * ratio, r.Volume)
+                for d, r in new.iterrows()]
+        con.executemany("INSERT OR REPLACE INTO prices VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        con.execute("UPDATE tickers SET last_date = ?, last_close = ?, updated_at = ?, fail_count = 0 WHERE ticker = ?",
+                    (rows[-1][1], rows[-1][5], dt.datetime.now().isoformat(timespec="seconds"), t))
+        filled += 1
+    con.commit()
+    if filled:
+        log(f"[prices] {filled:,} stock(s) filled in from Stooq (backup source)")
+    return filled
+
+
 def _rows(ticker: str, df: pd.DataFrame) -> list[tuple]:
     df = df.dropna(subset=["Close"])
     adj = df["Adj Close"] if "Adj Close" in df else df["Close"]
@@ -282,6 +355,7 @@ def update_prices(
     limit: int | None = None,
     downloader: Downloader = yahoo_download,
     log: Callable[[str], None] = print,
+    backup=None,
 ) -> dict[str, int]:
     """Download new bars for every ticker not refreshed in the last `max_age_hours`.
 
@@ -295,7 +369,8 @@ def update_prices(
     todo = con.execute(q + " ORDER BY last_date IS NOT NULL, ticker", [cutoff]).fetchall()
     if limit:
         todo = todo[:limit]
-    counts = {"updated": 0, "new": 0, "reloaded": 0, "failed": 0}
+    counts = {"updated": 0, "new": 0, "reloaded": 0, "failed": 0, "backup": 0}
+    missed: list[str] = []   # known tickers Yahoo didn't deliver: tried from the backup source at the end
     if not todo:
         log("[prices] everything is up to date")
         return counts
@@ -322,6 +397,7 @@ def update_prices(
             if backoff > 3:
                 log("[prices] Yahoo keeps returning nothing (probably rate-limiting). "
                     "Progress is saved - run the update again later.")
+                missed += [t for t, last in todo[i:] if last is not None]
                 break
             wait = 30 * 2 ** (backoff - 1)
             log(f"[prices] empty batch, waiting {wait}s before retrying...")
@@ -336,6 +412,8 @@ def update_prices(
                 con.execute("UPDATE tickers SET fail_count = fail_count + 1, updated_at = ? WHERE ticker = ?",
                             (dt.datetime.now().isoformat(timespec="seconds"), t))
                 counts["failed"] += 1
+                if last is not None:
+                    missed.append(t)
             elif last is not None and _needs_reload(con, t, df):
                 reload.append(t)
             else:
@@ -357,6 +435,8 @@ def update_prices(
         if i < len(todo) and pause:
             time.sleep(pause)
 
+    if missed and backup is not None:
+        counts["backup"] = fill_from_backup(con, missed, fetch=backup, log=log)
     set_meta(con, "prices_updated", dt.datetime.now().isoformat(timespec="seconds"))
     con.commit()
     return counts
