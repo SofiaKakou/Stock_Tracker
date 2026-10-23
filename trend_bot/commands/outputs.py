@@ -380,6 +380,30 @@ def cmd_lookahead_combine(args: argparse.Namespace) -> int:
     return 0 if lookahead.verdict(results)[0] else 1
 
 
+def cmd_journal(args: argparse.Namespace) -> int:
+    """Write the night's trading journal into SQL Server (Azure SQL; open it in SSMS)."""
+    import json
+
+    from trend_bot import db, intraday, journal
+
+    conn = journal.connect()
+    if conn is None:
+        print("The trading journal isn't set up (AZURE_SQL_SERVER / AZURE_SQL_USER / AZURE_SQL_PASSWORD); skipped.")
+        return 0
+    day_state = json.loads(Path(args.day_state).read_text()) if Path(args.day_state).exists() else {}
+    results = None
+    if Path(args.intraday_db).exists():
+        with closing(intraday.connect(args.intraday_db)) as ic:
+            row = ic.execute("SELECT value FROM meta WHERE key = 'results'").fetchone()
+            results = json.loads(row[0]) if row else None
+    try:
+        with closing(db.connect(args.db)) as con:
+            journal.sync(conn, con, day_state, results)
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_accounts(args: argparse.Namespace) -> int:
     """Both demo accounts' history (for the report's chart); with --weekly on Fridays, the week's summary."""
     import datetime as dt
@@ -423,6 +447,11 @@ def cmd_safety(args: argparse.Namespace) -> int:
 
     with closing(db.connect(args.db)) as con:
         found = safety.check(con)
+        import datetime as dt
+        import json
+
+        db.set_meta(con, "safety_last", json.dumps({**found, "date": dt.date.today().isoformat()}))   # for the journal
+        con.commit()
     e = safety.embed(found, [])
     for kind in ("exit", "warn"):
         for t, why in found[kind]:

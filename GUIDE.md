@@ -224,6 +224,43 @@ Every **Friday evening** "📅 The week" shows both demo accounts and the S&P 50
 the start, the day-trading patterns' week, and a chart of both accounts against the S&P 500. The same
 chart is in the report and the email every day.
 
+## The trading journal in SSMS
+
+Optional: every night the bot writes everything it did into a SQL Server database (Azure SQL, free
+offer) that you can open in **SQL Server Management Studio**. Tables (all in `dbo`):
+`day_trades` (every day trade: expected vs actual price, result), `day_summary` (each day per
+pattern), `account_values` (both demo accounts and the S&P 500 each day), `monthly_holdings`
+(the portfolio after each monthly update), `safety_events`, `study_results` (the 10-year tests)
+and `runs` (the bot's logbook). Rerunning a night replaces that night, never doubles it.
+
+Setup (once):
+1. Azure portal → **SQL databases → Create**, apply the **free offer**, database `TrendBotTrading`,
+   a new server with **SQL authentication**, "auto-pause when the free limit is reached".
+2. Secrets: `AZURE_SQL_SERVER` (e.g. `yourserver.database.windows.net`), `AZURE_SQL_USER`,
+   `AZURE_SQL_PASSWORD` (and `AZURE_SQL_DATABASE` if not `TrendBotTrading`).
+3. So the database never has to accept connections from everywhere, each nightly run lets in only
+   its own address and removes it after. That needs a small Azure app allowed to change the
+   firewall: **Microsoft Entra ID → App registrations → New registration** (e.g. `trend-bot-github`)
+   → **Certificates & secrets → New client secret**. Then on the SQL **server** → **Access control
+   (IAM) → Add role assignment → "SQL Server Contributor"** → that app. Secrets:
+   `AZURE_CLIENT_ID` (the app's Application ID), `AZURE_CLIENT_SECRET` (the secret's value),
+   `AZURE_TENANT_ID` (Directory ID) and `AZURE_RESOURCE_GROUP` (e.g. `trend-bot`).
+
+Some queries to start with:
+
+```sql
+-- Day trading: each pattern so far
+SELECT pattern, COUNT(*) AS trades, AVG(ret) AS avg_return, SUM(pnl) AS dollars,
+       AVG(CASE WHEN ret > 0 THEN 1.0 ELSE 0 END) AS right_share, AVG(slippage) AS avg_slippage
+FROM dbo.day_trades GROUP BY pattern;
+
+-- Both demo accounts vs the S&P 500, day by day
+SELECT value_date, account, value FROM dbo.account_values ORDER BY value_date, account;
+
+-- What the 10-year test said about each pattern
+SELECT * FROM dbo.study_results ORDER BY per_trade DESC;
+```
+
 ## How the bot keeps things safe
 
 **The portfolio to follow (and its demo account)**
