@@ -109,6 +109,9 @@ add the EMAIL_USER and EMAIL_APP_PASSWORD secrets (see `trend_bot/email_report.p
 - **Kinds of market**: the top 20's record split into rising markets (S&P 500 above its 200-day
   average) vs falling ones, and calm vs volatile ones, each month labelled by what was known as it
   began. It shows where any edge comes from; it never moves the portfolio to cash.
+- **Equal-weight S&P 500 (RSP)**: a fund holding every S&P 500 company in equal amounts, like the
+  top-ideas portfolio does. A fairer yardstick than the usual S&P 500, where a few giant companies
+  make up a big share.
 - **Worst drop**: the biggest fall from a peak before recovering.
 - **Report change ("Lazy Prices")**: how much a company rewrote its latest 10-K / 10-Q compared
   with the same report a year earlier. Research found big rewrites tend to come before weaker

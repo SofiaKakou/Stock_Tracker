@@ -236,8 +236,9 @@ def test_construction_variants_use_the_same_ranking():
     df["market_cap"] = np.where(df["ticker"].str[1:].astype(int) < 10, 1e12, 1e9)   # a few giants
     days = pd.bdate_range("2018-12-01", "2023-03-31")
     spy = pd.Series(np.linspace(100, 160, len(days)), index=days)
-    m = ideas.construction_test(df, spy)
+    m = ideas.construction_test(df, spy, rsp=spy * 0.9)
     assert list(m.columns) == list(ideas.CONSTRUCTION)
+    assert np.allclose(m["RSP"], m["SPY"], equal_nan=True)                 # same moves, scaled
     # The equal-weight top 20 is exactly the "always invested" rule the main backtest uses.
     main = ideas.backtest(df, spy, hold=20, buffer=40)
     pd.testing.assert_series_equal(m["top20"], main["mix_always"].reindex(m.index), check_names=False)
@@ -245,7 +246,7 @@ def test_construction_variants_use_the_same_ranking():
     assert (m["top50"] != m["top20"]).any() and (m["top20_size"] != m["top20"]).any()
     assert m["top20"].mean() > m["top50"].mean() > 0          # the edge is strongest at the very top here
     v = ideas.construction_verdicts(m)
-    assert set(v.index) == {"top50", "top20_size", "core70", "core50", "mom3", "stop30", "no_flags"}
+    assert set(v.index) == {"top50", "top20_size", "core70", "core50", "mom3", "stop30", "no_flags", "large500"}
     assert v.dtypes.apply(lambda d: d == bool or d == object).all()
 
 

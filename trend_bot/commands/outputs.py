@@ -266,7 +266,7 @@ def cmd_send_report(args: argparse.Namespace) -> int:
 
 def cmd_send_email(args: argparse.Namespace) -> int:
     """Email the daily report with a short summary (only when EMAIL_USER and EMAIL_APP_PASSWORD are set)."""
-    from trend_bot import db, email_report, health, ideas
+    from trend_bot import db, email_report, health
 
     cfg = email_report.settings()
     if not cfg:
@@ -275,10 +275,8 @@ def cmd_send_email(args: argparse.Namespace) -> int:
     summary = []
     if Path(args.db).exists():
         with closing(db.connect(args.db)) as con:
-            summary.append(ideas.live_line(con))
             problems = health.check(con, failed_steps=health.read_problems_file(args.problems))
-            summary.append("Bot health: all fine." if not problems else
-                           "Bot health:\n" + "\n".join(f"  - {p}" for p in problems))
+            summary = email_report.digest(con, problems)
     report = Path(args.path)
     msg = email_report.build(cfg, summary, report if report.exists() else None)
     if args.dry_run:

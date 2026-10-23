@@ -57,3 +57,39 @@ def test_email_has_summary_and_report(tmp_path, monkeypatch):
     email_report.send(cfg, msg)
     assert sent == {"host": ("smtp.gmail.com", 465), "login": ("me@gmail.com", "x"),
                     "subject": "Trend Bot daily report, Fri 23 Oct 2026"}
+
+
+def test_email_carries_the_essentials(tmp_path):
+    import json
+
+    from trend_bot import db
+
+    con = db.connect(tmp_path / "m.db")
+    today = dt.date.today()
+    recent = (today - dt.timedelta(days=5)).isoformat()
+    con.executemany("INSERT INTO tickers(ticker, cik) VALUES (?, ?)", [("AAA", 1), ("BBB", 2)])
+    con.executemany("INSERT INTO prices(ticker, date, close) VALUES (?, ?, ?)",
+                    [("AAA", recent, 110.0), ("BBB", recent, 45.0)])
+    con.executemany("INSERT INTO ideas_holdings VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [("AAA", 1, "2026-09-30", 100.0, 0.9, "Technology", "cheap"),
+                     ("BBB", 2, "2026-09-30", 50.0, 0.8, "Energy", "momentum")])
+    con.execute("INSERT INTO events VALUES ('acc1', 2, '8-K', ?, '4.02')", (recent,))
+    db.set_meta(con, "ideas_portfolio", json.dumps({
+        "date": recent, "buys": [{"ticker": "AAA", "why": "cheap vs sales"}],
+        "sells": [{"ticker": "OLD", "since": "2026-08-31", "return": -0.04}], "holds": []}))
+    con.commit()
+    sections = dict(email_report.digest(con, ["Prices are 3 trading days old."]))
+    changes = next(v for k, v in sections.items() if k.startswith("This month's changes"))
+    assert changes == ["Buy AAA (cheap vs sales)", "Sell OLD (-4.0% since 2026-08-31)"]
+    table = next(v for k, v in sections.items() if k.startswith("The portfolio to follow"))
+    assert table[0][0] == "Stock" and table[1] == ["AAA", "2026-09-30", "100.00", "110.00", "+10.0%"]
+    flags = next(v for k, v in sections.items() if k.startswith("🚩"))
+    assert flags[0].startswith("BBB") and "can't be relied on" in flags[0]
+    assert sections["Bot health"] == ["Prices are 3 trading days old."]
+
+    cfg = {"EMAIL_USER": "me@gmail.com", "EMAIL_APP_PASSWORD": "x", "EMAIL_TO": "me@gmail.com"}
+    msg = email_report.build(cfg, email_report.digest(con, []), None)
+    text = msg.get_body(("plain",)).get_content()
+    html = msg.get_body(("html",)).get_content()
+    assert "AAA  2026-09-30  100.00  110.00  +10.0%" in text and "All fine." in text
+    assert "<table" in html and "<td" in html and "+10.0%" in html and "BBB (" in html

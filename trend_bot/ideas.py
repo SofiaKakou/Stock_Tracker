@@ -294,8 +294,11 @@ CONSTRUCTION = {
     "mom3": "Top 20, momentum counted 3x",
     "no_flags": "Top 20, selling on 8-K red flags",
     "stop30": "Top 20, selling after a 30% drop",
+    "large500": "Top 20 of the 500 largest companies",
     "SPY": "S&P 500 (buy & hold)",
+    "RSP": "S&P 500, every company equal (RSP)",
 }
+LARGE = 500   # large500: pick only among this many largest companies each month
 STOP_LOSS = 0.30   # stop30: sell a holding once it's this far below its buy price
 
 
@@ -336,8 +339,15 @@ def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, co
     return pd.Series(out, dtype=float)
 
 
+def largest(df: pd.DataFrame, n: int = LARGE) -> pd.Series:
+    """True for rows among the `n` largest companies (market value) of their month."""
+    if "market_cap" not in df or df["market_cap"].isna().all():
+        return pd.Series(False, index=df.index)
+    return df.groupby("month")["market_cap"].rank(ascending=False, method="first").le(n).fillna(False)
+
+
 def construction_test(df: pd.DataFrame, spy: pd.Series, extra: bool = False, by_sector: bool = False,
-                      cost_bps: float = 10) -> pd.DataFrame:
+                      cost_bps: float = 10, rsp: pd.Series | None = None) -> pd.DataFrame:
     """Monthly returns (always invested) of different ways to build the portfolio from the same ranking."""
     from trend_bot import model
 
@@ -355,9 +365,14 @@ def construction_test(df: pd.DataFrame, spy: pd.Series, extra: bool = False, by_
     flags = [c for c in ("red_flags", "late_filing") if c in df and df[c].notna().any()]
     if flags:
         res["no_flags"] = _hold_returns(df, base, 20, 40, cost, exclude=(df[flags].fillna(0) > 0).any(axis=1))
-    spy_m = model._monthly_last(spy)
+    large = largest(df)
+    if large.sum() >= 3 * 20 * df["month"].nunique() / 2:     # sizes known for most months
+        res["large500"] = _hold_returns(df, base, 20, 40, cost, exclude=~large)
     months = res.index - pd.offsets.MonthEnd(1)
-    res["SPY"] = (spy_m.shift(-1) / spy_m - 1).reindex(months).to_numpy()
+    for name, prices in (("SPY", spy), ("RSP", rsp)):
+        if prices is not None and len(prices.dropna()):
+            m = model._monthly_last(prices.dropna())
+            res[name] = (m.shift(-1) / m - 1).reindex(months).to_numpy()
     # An index core rebalanced monthly back to its share.
     res["core70"] = 0.7 * res["SPY"] + 0.3 * res["top20"]
     res["core50"] = 0.5 * res["SPY"] + 0.5 * res["top20"]
@@ -450,7 +465,7 @@ def construction_verdicts(monthly: pd.DataFrame) -> pd.DataFrame:
     halves = [monthly[monthly.index < mid], monthly[monthly.index >= mid]]
     rows = {}
     for c in monthly.columns:
-        if c in ("SPY", "top20"):
+        if c in ("SPY", "RSP", "top20"):
             continue
         s = [model.summarize(h, [c, "SPY", "top20"]) for h in halves]
         if not all({c, "SPY", "top20"} <= set(x.index) for x in s):

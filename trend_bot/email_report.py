@@ -43,16 +43,87 @@ def plain(text: str) -> str:
     return re.sub(r"\*\*(.+?)\*\*", r"\1", text)
 
 
-def build(cfg: dict, summary: list[str], report: Path | None, today: dt.date | None = None) -> EmailMessage:
+def digest(con, problems: list[str], flag_days: int = 30, change_days: int = 35) -> list[tuple[str, list]]:
+    """The essentials for the email, as (heading, lines) sections; a line is text or a table row (list)."""
+    import pandas as pd
+
+    from trend_bot import events, ideas
+
+    out = []
+    live = ideas.live_line(con)
+    if live:
+        out.append(("How the portfolio is doing", [plain(live).removeprefix("📈 ")]))
+    port = ideas.load_portfolio(con)
+    if port and (dt.date.today() - dt.date.fromisoformat(port["date"][:10])).days <= change_days:
+        lines = [f"Buy {b['ticker']} ({b.get('why') or 'top ranked'})" for b in port["buys"]]
+        lines += [f"Sell {s['ticker']}" + (f" ({s['return']:+.1%} since {s['since']})" if s.get("return") is not None
+                                          else "") for s in port["sells"]]
+        out.append((f"This month's changes ({port['date'][:10]})", lines or ["No changes: keep everything."]))
+    held = pd.read_sql_query("SELECT ticker, since, entry_price FROM ideas_holdings ORDER BY rank", con)
+    if len(held):
+        rows = [["Stock", "Since", "Bought at", "Now", "Return"]]
+        for h in held.itertuples(index=False):
+            last = con.execute("SELECT close FROM prices WHERE ticker = ? ORDER BY date DESC LIMIT 1",
+                               (h.ticker,)).fetchone()
+            now = last[0] if last else None
+            ret = now / h.entry_price - 1 if now and h.entry_price else None
+            rows.append([h.ticker, h.since, f"{h.entry_price:,.2f}" if h.entry_price else "-",
+                         f"{now:,.2f}" if now else "-", f"{ret:+.1%}" if ret is not None else "-"])
+        out.append((f"The portfolio to follow ({len(held)} stocks, equal amounts)", rows))
+        cik_of = dict(con.execute(f"SELECT cik, ticker FROM tickers WHERE cik IS NOT NULL AND ticker IN "
+                                  f"({','.join('?' * len(held))})", list(held["ticker"])).fetchall())
+        flags = events.recent_flags(con, list(cik_of), days=flag_days)
+        out.append((f"🚩 Red flags in these stocks (last {flag_days} days)",
+                    [f"{cik_of[r.cik]} ({r.filed}): {events.describe(r.items)}" for r in flags.itertuples(index=False)]
+                    or ["None."]))
+    out.append(("Bot health", problems or ["All fine."]))
+    return out
+
+
+def _text(sections) -> str:
+    parts = []
+    for title, lines in sections:
+        rows = [("  ".join(str(c) for c in x) if isinstance(x, list) else x) for x in lines]
+        parts.append(title + "\n" + "\n".join(f"  {r}" for r in rows))
+    return "\n\n".join(parts)
+
+
+def _html(sections, footer: list[str]) -> str:
+    from html import escape
+
+    cell = "padding:3px 10px 3px 0;text-align:left;border-bottom:1px solid #eee"
+    out = ['<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;color:#222;'
+           'max-width:640px">']
+    for title, lines in sections:
+        out.append(f'<h3 style="margin:18px 0 6px">{escape(title)}</h3>')
+        table = [x for x in lines if isinstance(x, list)]
+        text = [x for x in lines if not isinstance(x, list)]
+        if text:
+            out.append("<ul style=\"margin:0;padding-left:18px\">" +
+                       "".join(f"<li>{escape(t)}</li>" for t in text) + "</ul>")
+        if table:
+            head, *body = table
+            out.append('<table style="border-collapse:collapse;font-size:14px">'
+                       + "<tr>" + "".join(f'<th style="{cell}">{escape(h)}</th>' for h in head) + "</tr>"
+                       + "".join("<tr>" + "".join(f'<td style="{cell}">{escape(str(c))}</td>' for c in r) + "</tr>"
+                                 for r in body) + "</table>")
+    out += [f'<p style="color:#777;font-size:13px;margin-top:18px">{escape(f)}</p>' for f in footer]
+    return "".join(out) + "</div>"
+
+
+def build(cfg: dict, summary, report: Path | None, today: dt.date | None = None) -> EmailMessage:
+    """`summary`: digest() sections, or plain lines (shown as one section)."""
     today = today or dt.date.today()
     msg = EmailMessage()
     msg["Subject"] = f"Trend Bot daily report, {today:%a %d %b %Y}"
     msg["From"], msg["To"] = cfg["EMAIL_USER"], cfg["EMAIL_TO"]
-    body = [plain(line) for line in summary if line]
-    body.append("The full report is attached: open it in your browser (charts included)." if report
-                else "No report file was made tonight.")
-    body.append("\nPast patterns, not certainties; not financial advice.")
-    msg.set_content("\n".join(body))
+    sections = summary if summary and isinstance(summary[0], tuple) else \
+        [("Summary", [plain(x) for x in summary if x])] if summary else []
+    footer = ["The full report with charts is attached: open it in your browser." if report
+              else "No report file was made tonight.",
+              "Past patterns, not certainties; not financial advice."]
+    msg.set_content(_text(sections) + "\n\n" + "\n".join(footer))
+    msg.add_alternative(_html(sections, footer), subtype="html")
     if report:
         msg.add_attachment(report.read_bytes(), maintype="text", subtype="html", filename=f"report-{today}.html")
     return msg
