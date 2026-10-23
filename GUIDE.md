@@ -196,7 +196,9 @@ patterns live every weekday so you can watch them: big opening gaps faded at 9:3
 breakouts from the first half hour checked every half hour, the index funds' last half hour at
 15:30. Up to 20 positions a day (about $4,900 each), long or short, all closed at the closing price.
 Each evening "🧪 Day trading" shows today's trades, profit or loss per pattern, the running total,
-and each pattern's 10-year test result next to it. Setup: a second paper account in Alpaca, its
+each pattern's 10-year test result next to it, and what the live trades have taught so far (how much
+worse the real prices were than expected, the average trade). Every trade is kept in a trade log
+(a spreadsheet file, `day-trade-log`, on each day's run page in the Actions tab). Setup: a second paper account in Alpaca, its
 keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
 separate and unaffected.
 
