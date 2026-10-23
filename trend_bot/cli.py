@@ -181,9 +181,10 @@ def make_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
     st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml",
-                                       "ideas", "candidates", "lookahead", "mllab", "audit"])
+                                       "ideas", "candidates", "lookahead", "mllab", "audit", "intraday"])
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
     st.add_argument("--months", help="lookahead: month-ends to check, e.g. 2012-06-30,2021-06-30, or 'yearly' (one per year)")
+    st.add_argument("--intraday-db", default="intraday.db", help="intraday: the half-hour bars database")
     st.add_argument("--json", help="lookahead: also save the results as JSON (to combine parallel runs)")
     st.add_argument("--trees", type=int, default=300, help="ml: boosting rounds (default 300)")
     st.add_argument("--first-year", type=int, default=2011,

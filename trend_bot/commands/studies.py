@@ -104,6 +104,27 @@ def _study_ml_lab(con, args: argparse.Namespace) -> None:
     print("\n" + ml_lab.__doc__.split("\n\n", 2)[2])
 
 
+def _study_intraday(con, args: argparse.Namespace) -> int:
+    from trend_bot import intraday
+
+    data = intraday.Data.from_env()
+    if data is None:
+        print("Day-trading research needs Alpaca's market data: add the ALPACA_API_KEY_ID and "
+              "ALPACA_API_SECRET_KEY secrets (the demo account's keys; GUIDE.md, 'Demo account').")
+        return 1
+    with closing(intraday.connect(args.intraday_db)) as ic:
+        symbols = intraday.universe(con)
+        print(f"Updating half-hour bars for {len(symbols)} symbols (the first time takes a while)...")
+        intraday.update(ic, data, symbols)
+        df = intraday.sessions(ic)
+        feed = (ic.execute("SELECT value FROM meta WHERE key = 'feed'").fetchone() or ["?"])[0]
+    if df.empty:
+        print("No bars came back from Alpaca.")
+        return 1
+    print(intraday.text(intraday.study(df), feed, df["date"].min(), df["date"].max()))
+    return 0
+
+
 def _study_lookahead(con, args: argparse.Namespace) -> None:
     import tempfile
 
@@ -596,6 +617,8 @@ def cmd_study(args: argparse.Namespace) -> int:
         if args.signal == "lookahead":
             _study_lookahead(con, args)
             return 0
+        if args.signal == "intraday":
+            return _study_intraday(con, args)
         if args.signal == "candidates":
             _study_candidates(con, args)
             return 0

@@ -184,6 +184,14 @@ data from FINRA. All free.
   filings. Problems the bot already handles (zero prices, one-day blips, unexplained jumps) are
   shown as handled; anything else appears in the ⚠️ Bot health message.
 
+## Day trading?
+
+The bot's research is about which stocks to hold for a month. Day-trading ideas are tested
+separately (Research run → study `intraday`): years of half-hour prices from Alpaca, the costs of
+every trade, both halves of history, and a luck check (the same trades in random directions).
+Most day-trading patterns don't survive their costs; one would only get a slice of the demo
+account after passing everything, and only with your OK.
+
 ## Optional setup
 
 - **Daily email**: free through a Gmail "app password". Add the `EMAIL_USER` and
