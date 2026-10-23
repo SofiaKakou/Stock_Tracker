@@ -20,12 +20,17 @@ New to the market? Start with **[GUIDE.md](GUIDE.md)**: what every message means
 - 🚩 **Warning signs**: restatements, auditor changes, defaults, late reports and more from SEC 8-K filings
 - 🔔 **Insider buying**, 🌎 **market screen**, 👀 **watchlist trends**, 📊 **pick scorecard**
 - ⚠️ **Bot health**: tells you when something breaks (old prices, SEC limits) and when it's fixed
+- 🔎 **"Why isn't this stock ranked?"**: a one-click lookup that explains any ticker
+- 📒 **Logbook**: every run logged; every result stamped with the code and data that made it
 
 **Honest testing** (the core of the project)
 - Walk-forward tests: every year is judged by rules made only from earlier years
 - Survivorship fix: companies that went bankrupt or were bought out are put back in
 - **Look-ahead check**: rebuilds past months from data cut off at that date to prove no test peeks at the future
 - **Luck check** (vs 1,000 random portfolios), **likely ranges** (bootstrap), **fluke chance** (false discovery rate across every idea tested)
+- **The bad times**: longest time to recover, worst months, growth without the best months
+- **"Does the money add up" tests**: the followed portfolio matches the tested one; numbers match slow reference versions
+- **Data audit**: misdated, impossible or missing data
 - **Robustness check** (settings nudged), **kinds of market**, large-companies-only and equal-weight S&P 500 (RSP) comparisons
 - New measures stay **on trial** until they pass in both halves of history; nothing changes without your OK
 - **ML lab**: six machine-learning variants (several from FreqAI) tested against the simple average; none has beaten it yet
@@ -41,7 +46,8 @@ Everything runs in the cloud on **GitHub Actions**; nothing needs to run on your
 | Workflow | When | What |
 |---|---|---|
 | `nightly.yml` | weekdays 22:30 UTC | update data, send messages, report and email; monthly honesty checks on the 1st-3rd |
-| `research.yml` | by hand (Actions tab) | any study (`ideas`, `ml`, `mllab`, `lookahead`, `candidates`, ...), data refreshes, `sec-check`, `price-check`, `email-test` |
+| `research.yml` | by hand (Actions tab) | any study (`ideas`, `ml`, `mllab`, `lookahead`, `audit`, `candidates`, ...), data refreshes, `sec-check`, `price-check`, `email-test` |
+| `why.yml` | by hand | "Why is a stock (not) ranked?": type tickers, answer in Discord |
 | `tests.yml` | every push / PR | the test suite |
 | `ai.yml` | by hand, optional | an AI report reader (needs a paid API key; off by default) |
 
