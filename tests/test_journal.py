@@ -107,3 +107,31 @@ def test_the_star_schema_script_is_complete():
     # Every procedure and view is replaced each night; tables only made when missing.
     creates = [b for b in batches if "CREATE TABLE" in b]
     assert creates and all("IF OBJECT_ID" in b.split("CREATE TABLE")[0] for b in creates)
+
+
+def test_a_sleeping_database_is_given_time_to_wake_up(monkeypatch):
+    import pymssql
+
+    calls = []
+
+    def fake_connect(**kw):
+        calls.append(kw["database"])
+        if len(calls) < 3:
+            raise pymssql.OperationalError(40613, b"Database 'TrendBotMarket' is not currently available.")
+        return "conn"
+
+    monkeypatch.setattr(pymssql, "connect", fake_connect)
+    for k in ("AZURE_SQL_SERVER", "AZURE_SQL_USER", "AZURE_SQL_PASSWORD"):
+        monkeypatch.setenv(k, "x")
+    assert journal.open_sql("TrendBotMarket", 600, wait=0, log=lambda *_: None) == "conn" and len(calls) == 3
+
+    def wrong_password(**kw):
+        calls.append("bad")
+        raise pymssql.OperationalError(18456, b"Login failed")
+
+    monkeypatch.setattr(pymssql, "connect", wrong_password)
+    try:
+        journal.open_sql("TrendBotMarket", 600, wait=0, log=lambda *_: None)
+    except pymssql.OperationalError:
+        pass
+    assert calls.count("bad") == 1                                   # other errors aren't retried
