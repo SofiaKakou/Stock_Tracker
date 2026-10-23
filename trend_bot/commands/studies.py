@@ -213,7 +213,14 @@ def _construction_section(df, spy, ideas, con, args) -> None:
     """How else the same ranking could be turned into a portfolio (shown, never switched automatically)."""
     from trend_bot import model
 
-    test = ideas.construction_test(df, spy, extra=ideas.extra(con), by_sector=ideas.method(con) == "industry_mix")
+    from trend_bot.db import load_prices
+
+    try:
+        rsp = load_prices(con, "RSP")["Close"]
+    except ValueError:   # not in the database: the yardstick is just left out
+        rsp = None
+    test = ideas.construction_test(df, spy, extra=ideas.extra(con), by_sector=ideas.method(con) == "industry_mix",
+                                   rsp=rsp)
     if test.empty:
         return
     fmt = {"cagr": "{:+.1%}".format, "volatility": "{:.0%}".format, "max_drawdown": "{:.0%}".format,
@@ -234,7 +241,33 @@ def _construction_section(df, spy, ideas, con, args) -> None:
               f"more return per risk than the top 20 in both: {yes(r['better_risk_than_top20_both'])}")
     print("Nothing here changes the portfolio by itself: a switch is your call after seeing these numbers.")
     _luck_section(df, ideas, con, split)
+    _large_section(df, test, ideas, con, split)
     _market_types_section(test, spy, ideas, split)
+
+
+def _large_section(df, test, ideas, con, split) -> None:
+    """Does the ranking still work among the biggest companies, and against a fairer yardstick?"""
+    from trend_bot import factors
+
+    d = df.dropna(subset=["ret"]).reset_index(drop=True)
+    large = ideas.largest(d)
+    if not large.any():
+        return
+    d = d.assign(_mix=ideas.scores(d, ideas.method(con) == "industry_mix", ideas.extra(con)).to_numpy())
+    print("\n\n##### Large companies only, and an equal-weight S&P 500 #####")
+    print("Large: the ranking may only pick from the 500 largest companies each month. RSP holds every\n"
+          "S&P 500 company in equal amounts, the way our portfolio does, so it's a fairer yardstick than\n"
+          "the usual S&P 500, where a few giants dominate.")
+    for label, mask in (("All years", d["month"] == d["month"]), (f"before {split:%Y}", d["month"] < split),
+                        (f"{split:%Y} on", d["month"] >= split)):
+        every, big = factors.evaluate(d[mask], "_mix"), factors.evaluate(d[mask & large], "_mix")
+        part = test[test.index < split] if label.startswith("before") else \
+            test[test.index >= split] if label.endswith(" on") else test
+        yearly = {c: (1 + part[c].dropna()).prod() ** (12 / len(part[c].dropna())) - 1
+                  for c in ("top20", "large500", "SPY", "RSP") if c in part and part[c].notna().sum() >= 12}
+        line = ", ".join(f"{ideas.CONSTRUCTION[c].split(' (')[0]} {v:+.1%}" for c, v in yearly.items())
+        print(f"  {label:<12} ranking quality (IC) all stocks {every['mean_ic']:+.3f}, largest 500 {big['mean_ic']:+.3f}"
+              f"\n               yearly: {line}")
 
 
 def _market_types_section(test, spy, ideas, split) -> None:
