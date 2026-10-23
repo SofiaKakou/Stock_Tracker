@@ -24,6 +24,7 @@ New to the market? Start with **[GUIDE.md](GUIDE.md)**: what every message means
 - 🔎 **"Why isn't this stock ranked?"**: a one-click lookup that explains any ticker
 - 📒 **Logbook**: every run logged; every result stamped with the code and data that made it
 - 🧪 **Demo account** (optional): follows the portfolio with fake money on Alpaca paper trading, vs the S&P 500
+- 🗄️ **Trading journal in SQL Server** (optional, Azure SQL free offer): every trade, account value, holding and safety event in tables you can open in SSMS
 - 🧪 **Day-trading demo account** (optional, a second paper account): the intraday patterns traded live every weekday, closed by the close, with an evening report
 
 **Honest testing** (the core of the project)

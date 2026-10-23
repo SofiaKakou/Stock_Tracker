@@ -119,6 +119,31 @@ jobs:
           ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
         run: python -m trend_bot accounts --weekly --discord || echo "the demo accounts' history failed" >> reports/problems.txt
 
+      # Optional: the trading journal in SQL Server (Azure SQL, open it in SSMS). Does nothing until the
+      # AZURE_SQL_* secrets exist (GUIDE.md, "The trading journal in SSMS").
+      - name: Restore day-trading study
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: intraday.db
+          key: intraday-db-${{ github.run_id }}
+          restore-keys: intraday-db-
+
+      - name: Trading journal
+        env:
+          AZURE_SQL_SERVER: ${{ secrets.AZURE_SQL_SERVER }}
+          AZURE_SQL_USER: ${{ secrets.AZURE_SQL_USER }}
+          AZURE_SQL_PASSWORD: ${{ secrets.AZURE_SQL_PASSWORD }}
+          AZURE_SQL_DATABASE: ${{ secrets.AZURE_SQL_DATABASE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+        run: |
+          if [ -z "$AZURE_SQL_SERVER" ]; then echo "The trading journal isn't set up; skipped."; exit 0; fi
+          scripts/azure_firewall.sh open
+          python -m trend_bot journal || echo "the trading journal failed" >> reports/problems.txt
+          scripts/azure_firewall.sh close
+
       - name: Report
         run: |
           python -m trend_bot report
