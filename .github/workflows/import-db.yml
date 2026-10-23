@@ -1,0 +1,55 @@
+# Import database: puts a database exported by a Research run (refresh "export-db") back where the
+# nightly run finds it. Only needed if GitHub's cache lost main's copy (it keeps 10 GB per repository
+# and drops the least recently used). Actions tab -> "Import database" -> the export run's number.
+
+name: Import database
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID of the Research run that exported the database (the number in its address)"
+        type: string
+        required: true
+
+concurrency:
+  group: nightly-market-run    # never while the nightly run uses the database
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: market-db-export
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Check it isn't empty
+        run: |
+          python - <<'PY'
+          import sqlite3
+          con = sqlite3.connect("market.db")
+          n = lambda t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+          counts = {t: n(t) for t in ("prices", "tickers", "facts", "ideas_holdings", "ideas_periods")}
+          last = con.execute("SELECT MAX(date) FROM prices").fetchone()[0]
+          print(counts, "prices up to", last)
+          assert counts["prices"] > 1_000_000 and counts["tickers"] > 1000 and counts["ideas_holdings"] > 0, \
+              "this doesn't look like the full database; nothing saved"
+          PY
+
+      - name: Save it for the nightly run
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
