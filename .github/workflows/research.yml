@@ -16,10 +16,10 @@ on:
         type: string
         default: ""
       refresh:
-        description: "Refresh data first? email-test = make the report and email it now (checks the EMAIL_* secrets); sec-check = one small SEC request to see if the SEC still refuses us (lifts the pause if not); fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = industry codes and what happened to every company that disappeared, from the SEC's bulk file (~15 min); reports = read up to 4,000 annual/quarterly reports for the text signals (~45 min; gentle on the SEC); full = whole nightly update"
+        description: "Refresh data first? email-test = make the report and email it now (checks the EMAIL_* secrets); export-db = offer the database as a download (for the import-db workflow); sec-check = one small SEC request to see if the SEC still refuses us (lifts the pause if not); fundamentals = company financials now (~15 min); short = FINRA short selling data; fates = industry codes and what happened to every company that disappeared, from the SEC's bulk file (~15 min); reports = read up to 4,000 annual/quarterly reports for the text signals (~45 min; gentle on the SEC); full = whole nightly update"
         type: choice
         default: none
-        options: [none, sec-check, email-test, fundamentals, short, fates, reports, full]
+        options: [none, sec-check, email-test, export-db, fundamentals, short, fates, reports, full]
 
 concurrency:
   group: nightly-market-run    # shares the database with the nightly run, so never at the same time
@@ -95,15 +95,27 @@ jobs:
           python -m trend_bot send-report --path reports/study-${{ inputs.study }}.txt \
             --message "🔬 Research run: study ${{ inputs.study }} ${{ inputs.args }} (results attached)" || true
 
-      # Always saved: studies also store decisions (ML verdict, mix choice, cap, probation board).
+      # Studies also store decisions (ML verdict, mix choice, cap, probation board), so runs on main save
+      # the database. Runs on other branches don't: their copies count against GitHub's 10 GB cache limit
+      # and pushed main's copy out once (they're for trying things, and main can't read them anyway).
       - name: Save database
-        if: always()
+        if: always() && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
           path: |
             market.db
             alert_state.json
           key: market-db-${{ github.run_id }}
+
+      - name: Export the database
+        if: inputs.refresh == 'export-db'
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-db-export
+          path: |
+            market.db
+            alert_state.json
+          retention-days: 3
 
       - name: Keep the results
         if: always()

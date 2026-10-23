@@ -52,6 +52,10 @@ jobs:
       - name: Update data
         run: |
           mkdir -p reports
+          if [ ! -f market.db ]; then
+            echo "::warning::the saved database wasn't found; starting from an empty one (see the import-db workflow)"
+            echo "the saved database wasn't found, so tonight started from an empty one (Actions -> Import database fixes it)" >> reports/problems.txt
+          fi
           python -m trend_bot db update --flag-incomplete reports/prices_incomplete || { echo "::warning::db update did not finish (see log); continuing"; echo "the data update didn't finish" >> reports/problems.txt; }
 
       # If Yahoo refused or stopped partway (usually a short rate limit), wait an hour and try the
