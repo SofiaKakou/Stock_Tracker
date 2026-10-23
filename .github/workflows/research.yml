@@ -83,6 +83,8 @@ jobs:
             python -m trend_bot send-email || echo "::warning::the email could not be sent (see above)"
           elif [ "${{ inputs.refresh }}" = "sec-check" ]; then
             python -m trend_bot sec-check || echo "::warning::the SEC still refuses our requests"
+          elif [ "${{ inputs.refresh }}" = "export-db" ]; then
+            echo "export-db: no refresh, no study; the database is offered as a download below"
           elif [ "${{ inputs.refresh }}" = "short" ]; then
             python -m trend_bot db update --short-only || echo "::warning::refresh did not finish"
           else
@@ -90,6 +92,7 @@ jobs:
           fi
 
       - name: Run the study
+        if: inputs.refresh != 'export-db'
         run: |
           mkdir -p reports
           python -m trend_bot study ${{ inputs.study }} ${{ inputs.args }} 2>&1 | tee reports/study-${{ inputs.study }}.txt
@@ -101,7 +104,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Post results to Discord
-        if: always()
+        if: always() && inputs.refresh != 'export-db'
         run: |
           python -m trend_bot send-report --path reports/study-${{ inputs.study }}.txt \
             --message "🔬 Research run: study ${{ inputs.study }} ${{ inputs.args }} (results attached)" || true
