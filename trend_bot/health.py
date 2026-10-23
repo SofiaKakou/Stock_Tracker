@@ -104,3 +104,23 @@ def read_problems_file(path: str | Path | None) -> list[str]:
     if not path or not Path(path).exists():
         return []
     return [line.strip() for line in Path(path).read_text().splitlines() if line.strip()]
+
+
+def catchup_embed(con: sqlite3.Connection) -> dict | None:
+    """'SEC data is back' once, after a full SEC update follows a gap (then forgotten)."""
+    from trend_bot.alerts import GREEN
+
+    raw = get_meta(con, "sec_catchup")
+    if not raw:
+        return None
+    c = json.loads(raw)
+    gap = f" after {c['gap_days']} days without it" if c.get("gap_days") else ""
+    lines = [f"• Insider trades: {c.get('filings', 0):,} recent filing(s) read",
+             f"• Company financials: {c.get('companies', 0):,} companies updated" if c.get("companies")
+             else "• Company financials: already up to date",
+             "• Industry codes and company fates: SEC bulk file read" if c.get("bulk")
+             else "• Industry codes and company fates: bulk file not due yet (weekly)",
+             f"• Company reports: {c.get('reports', 0):,} read for the text signals"]
+    return {"title": "✅ SEC data is back", "color": GREEN,
+            "description": f"Tonight's run downloaded from the SEC again{gap}:\n" + "\n".join(lines)}
+

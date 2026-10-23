@@ -108,19 +108,21 @@ def cmd_db(args: argparse.Namespace) -> int:
 
                 # Industry codes and fates for every company from one weekly bulk file; the one-by-one
                 # lookups below then only cover what it missed (spread over nights, well under the SEC's limits).
-                sec_submissions.update(con)
+                bulk = sec_submissions.update(con)
                 found = fates.update_fates(con, limit=args.sec_lookups)
                 if found:
                     print("[fates] " + ", ".join(f"{k} {v:,}" for k, v in sorted(found.items())))
                 from trend_bot import company_info
 
                 company_info.update_company_info(con, limit=args.sec_lookups)
+                companies = 0
                 if not args.no_fundamentals:
                     from trend_bot import fundamentals
 
-                    fundamentals.update_fundamentals(con, force=args.fundamentals_only)
-                if not args.no_reports:
-                    _update_reports(con, args.report_downloads)
+                    companies = fundamentals.update_fundamentals(con, force=args.fundamentals_only)
+                reports = _update_reports(con, args.report_downloads) if not args.no_reports else 0
+                _note_sec_ok(con, filings=filings, companies=companies, reports=reports,
+                             bulk=bool(bulk), added=added)
             except RuntimeError as e:
                 print(f"[insiders] stopped: {e}", file=sys.stderr)
                 from trend_bot import insiders
@@ -151,6 +153,27 @@ def _update_reports(con, limit: int) -> None:
     n = text_changes.update(con, limit=limit, ciks=universe)
     left = len(text_changes.to_fetch(con, universe))
     print(f"[reports] {n:,} reports read; {left:,} still to read" if n or left else "[reports] all read")
+    return n
+
+
+CATCHUP_GAP_DAYS = 4   # longer than a weekend: SEC data this stale means something stopped it
+
+
+def _note_sec_ok(con, **counts) -> None:
+    """Remember a full SEC update worked. After a gap (a block, a pause), keep what tonight caught up
+    on, so the health check can say in Discord that the SEC data is back."""
+    import json
+
+    from trend_bot import db
+
+    today = dt.date.today()
+    last = db.get_meta(con, "sec_last_ok")
+    gap = (today - dt.date.fromisoformat(last[:10])).days if last else None
+    if gap is None or gap > CATCHUP_GAP_DAYS:
+        db.set_meta(con, "sec_catchup", json.dumps({"date": today.isoformat(), "gap_days": gap, **counts}))
+    db.set_meta(con, "sec_last_ok", today.isoformat())
+    db.set_meta(con, "sec_last_refusal", "")
+    con.commit()
 
 
 def cmd_screen(args: argparse.Namespace) -> int:

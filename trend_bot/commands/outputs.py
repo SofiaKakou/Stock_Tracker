@@ -200,6 +200,15 @@ def cmd_health(args: argparse.Namespace) -> int:
             problems = health.check(con, failed_steps=health.read_problems_file(args.problems),
                                     job_status=args.job_status)
             kind = health.to_send(con, problems) if args.discord else None
+            catchup = health.catchup_embed(con)
+            if catchup and args.discord and alerts.load_webhook():
+                try:
+                    alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [catchup]})
+                    db.set_meta(con, "sec_catchup", "")
+                    con.commit()
+                    print("Sent 'SEC data is back' to Discord.")
+                except Exception as e:  # noqa: BLE001 - never fail the run over this; tried again tomorrow
+                    print(f"Could not send 'SEC data is back': {e}")
     print("Bot health: all fine." if not problems else "Bot health problems:\n" + "\n".join(f"  - {p}" for p in problems))
     if args.discord and kind:
         webhook = alerts.load_webhook()
@@ -253,3 +262,33 @@ def cmd_send_report(args: argparse.Namespace) -> int:
     alerts.send_file(webhook, path, args.message)
     print(f"Sent {path.name} to Discord.")
     return 0
+
+
+def cmd_send_email(args: argparse.Namespace) -> int:
+    """Email the daily report with a short summary (only when EMAIL_USER and EMAIL_APP_PASSWORD are set)."""
+    from trend_bot import db, email_report, health, ideas
+
+    cfg = email_report.settings()
+    if not cfg:
+        print("Email isn't set up (EMAIL_USER / EMAIL_APP_PASSWORD); skipped.")
+        return 0
+    summary = []
+    if Path(args.db).exists():
+        with closing(db.connect(args.db)) as con:
+            summary.append(ideas.live_line(con))
+            problems = health.check(con, failed_steps=health.read_problems_file(args.problems))
+            summary.append("Bot health: all fine." if not problems else
+                           "Bot health:\n" + "\n".join(f"  - {p}" for p in problems))
+    report = Path(args.path)
+    msg = email_report.build(cfg, summary, report if report.exists() else None)
+    if args.dry_run:
+        print(msg)
+        return 0
+    try:
+        email_report.send(cfg, msg)
+    except Exception as e:  # noqa: BLE001 - a failed email must not fail the nightly run
+        print(f"Could not send the email: {e}", file=sys.stderr)
+        return 1
+    print(f"Emailed the report to {cfg['EMAIL_TO']}.")
+    return 0
+

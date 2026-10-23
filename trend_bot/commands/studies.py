@@ -234,6 +234,23 @@ def _construction_section(df, spy, ideas, con, args) -> None:
               f"more return per risk than the top 20 in both: {yes(r['better_risk_than_top20_both'])}")
     print("Nothing here changes the portfolio by itself: a switch is your call after seeing these numbers.")
     _luck_section(df, ideas, con, split)
+    _market_types_section(test, spy, ideas, split)
+
+
+def _market_types_section(test, spy, ideas, split) -> None:
+    """Where the top 20's edge shows up: rising vs falling, calm vs volatile markets (a report only)."""
+    print("\n\n##### Kinds of market: the top 20 vs the S&P 500 (always invested, after costs) #####")
+    print("Each month labelled by what was known when it began: rising = S&P 500 above its 200-day average;\n"
+          "volatile = the last month's daily swings above their usual level. Nothing here moves the portfolio to cash.")
+    for label, part in (("All years", test), (f"before {split:%Y}", test[test.index < split]),
+                        (f"{split:%Y} on", test[test.index >= split])):
+        kinds = ideas.market_types(part, spy)
+        if kinds.empty:
+            continue
+        print(f"\n== {label} ==")
+        for name, r in kinds.iterrows():
+            print(f"  {name:<16} {int(r['months']):>4} months: top 20 {r['top']:+.1%}/yr vs S&P 500 {r['spy']:+.1%}/yr; "
+                  f"beat it in {r['beat_months']:.0%} of months")
 
 
 def _luck_section(df, ideas, con, split) -> None:

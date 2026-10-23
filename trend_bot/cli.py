@@ -29,6 +29,7 @@ from trend_bot.commands.data import cmd_db, cmd_screen, cmd_sec_check
 from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
+    cmd_send_email,
     cmd_track,
     cmd_report,
     cmd_model,
@@ -240,6 +241,13 @@ def make_parser() -> argparse.ArgumentParser:
     sc2 = sub.add_parser("sec-check", help="one small SEC request: is the SEC still refusing us? (lifts the pause if not)")
     sc2.add_argument("--db", default="market.db", help="database file (default: market.db)")
     sc2.set_defaults(func=cmd_sec_check)
+
+    em = sub.add_parser("send-email", help="email the daily report (needs EMAIL_USER and EMAIL_APP_PASSWORD)")
+    em.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    em.add_argument("--path", default="reports/latest.html", help="report to attach (default: reports/latest.html)")
+    em.add_argument("--problems", help="file listing steps that didn't finish (one per line)")
+    em.add_argument("--dry-run", action="store_true", help="print the email instead of sending it")
+    em.set_defaults(func=cmd_send_email)
 
     sg = sub.add_parser("send-guide", help="post GUIDE.md (how to read the bot's messages) to Discord")
     sg.add_argument("--path", default="GUIDE.md")

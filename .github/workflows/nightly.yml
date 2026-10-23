@@ -27,9 +27,9 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -39,7 +39,7 @@ jobs:
 
       # The database (and alert memory) carries over between runs via GitHub's cache.
       - name: Restore database
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             market.db
@@ -81,9 +81,19 @@ jobs:
           python -m trend_bot health --discord --problems reports/problems.txt --job-status "${{ job.status }}" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
 
+      # Optional: the report by email too. Does nothing until the EMAIL_USER and
+      # EMAIL_APP_PASSWORD secrets exist (see trend_bot/email_report.py for the 2-minute setup).
+      - name: Email the report
+        if: always()
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python -m trend_bot send-email --problems reports/problems.txt || true
+
       - name: Save database
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             market.db
@@ -92,7 +102,7 @@ jobs:
 
       - name: Keep the report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: report-${{ github.run_id }}
           path: reports/latest.html
@@ -116,7 +126,7 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - name: Get the report
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: report-${{ github.run_id }}
           path: site
@@ -124,10 +134,10 @@ jobs:
       - name: Make it the home page
         run: mv site/latest.html site/index.html
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
       - name: Publish
         id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
