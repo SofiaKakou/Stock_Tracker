@@ -68,16 +68,33 @@ KEYS = {"day_trades": "trade_date", "day_summary": "trade_date", "account_values
 ADDED_COLUMNS = {"day_trades": {"bid": "FLOAT", "ask": "FLOAT", "spread": "FLOAT"}}   # for tables made earlier
 
 
-def connect():
-    """A connection to the journal database, or None when it isn't set up."""
+WAKING = ("40613", "40197", "40501")   # Azure SQL: asleep (free offer auto-pause) or busy; fine a minute later
+
+
+def open_sql(database: str, timeout: int, attempts: int = 6, wait: float = 30, log=print):
+    """A connection to `database`, or None when the AZURE_SQL_* secrets aren't set. A sleeping
+    database wakes on the first try and answers "not currently available" until it's up, so retry."""
+    import time
+
     server, user, pw = (os.environ.get(k) for k in ("AZURE_SQL_SERVER", "AZURE_SQL_USER", "AZURE_SQL_PASSWORD"))
     if not (server and user and pw):
         return None
     import pymssql
 
-    return pymssql.connect(server=server, user=user, password=pw,
-                           database=os.environ.get("AZURE_SQL_DATABASE") or "TrendBotTrading",
-                           login_timeout=60, timeout=300, tds_version="7.4")
+    for attempt in range(1, attempts + 1):
+        try:
+            return pymssql.connect(server=server, user=user, password=pw, database=database,
+                                   login_timeout=60, timeout=timeout, tds_version="7.4")
+        except pymssql.OperationalError as e:
+            if attempt == attempts or not any(code in str(e) for code in WAKING):
+                raise
+            log(f"[sql] {database} is waking up; trying again in {wait:.0f}s ({attempt}/{attempts - 1})")
+            time.sleep(wait)
+
+
+def connect():
+    """A connection to the journal database, or None when it isn't set up."""
+    return open_sql(os.environ.get("AZURE_SQL_DATABASE") or "TrendBotTrading", timeout=300)
 
 
 def ensure_tables(conn) -> None:

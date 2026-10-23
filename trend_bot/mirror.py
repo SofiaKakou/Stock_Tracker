@@ -25,14 +25,9 @@ TOLERANCE = 1e-6
 
 
 def connect():
-    server, user, pw = (os.environ.get(k) for k in ("AZURE_SQL_SERVER", "AZURE_SQL_USER", "AZURE_SQL_PASSWORD"))
-    if not (server and user and pw):
-        return None
-    import pymssql
+    from trend_bot.journal import open_sql
 
-    return pymssql.connect(server=server, user=user, password=pw,
-                           database=os.environ.get("AZURE_SQL_MARKET_DATABASE") or "TrendBotMarket",
-                           login_timeout=60, timeout=600, tds_version="7.4")
+    return open_sql(os.environ.get("AZURE_SQL_MARKET_DATABASE") or "TrendBotMarket", timeout=600)
 
 
 def ensure_tables(conn) -> None:
