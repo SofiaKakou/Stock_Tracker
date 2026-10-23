@@ -123,6 +123,25 @@ def check(con: sqlite3.Connection, months=DEFAULT_MONTHS, workdir: str | Path = 
     return out
 
 
+def to_json(results: dict[str, tuple[pd.DataFrame, dict]]) -> str:
+    """Results as JSON, so months checked in parallel jobs can be combined (from_json)."""
+    import json
+
+    return json.dumps({m: {"table": t.reset_index().rename(columns={"index": "signal"}).to_dict("records"), "universe": u}
+                       for m, (t, u) in results.items()})
+
+
+def from_json(texts: list[str]) -> dict[str, tuple[pd.DataFrame, dict]]:
+    """Combine to_json outputs (one per job) into one result, months in order."""
+    import json
+
+    out = {}
+    for text in texts:
+        for m, r in json.loads(text).items():
+            out[m] = (pd.DataFrame(r["table"]).set_index("signal").rename_axis(None), r["universe"])
+    return dict(sorted(out.items()))
+
+
 def verdict(results: dict[str, tuple[pd.DataFrame, dict]]) -> tuple[bool, list[str]]:
     """(clean?, signals that differed somewhere)."""
     bad = sorted({c for table, _ in results.values() for c, r in table.iterrows() if r["differ"] > 0})

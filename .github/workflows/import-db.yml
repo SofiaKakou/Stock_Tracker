@@ -1,5 +1,5 @@
-# Import database: puts a database exported by a Research run (refresh "export-db") back where the
-# nightly run finds it. Only needed if GitHub's cache lost main's copy (it keeps 10 GB per repository
+# Import database: puts a database copy back where the nightly run finds it: the weekly backup of a
+# Monday nightly run, or one exported by a Research run (refresh "export-db"). Only needed if GitHub's cache lost main's copy (it keeps 10 GB per repository
 # and drops the least recently used). Actions tab -> "Import database" -> the export run's number.
 
 name: Import database
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Run ID of the Research run that exported the database (the number in its address)"
+        description: "Run ID of a Monday nightly run (weekly backup) or an export-db Research run (the number in its address)"
         type: string
         required: true
 

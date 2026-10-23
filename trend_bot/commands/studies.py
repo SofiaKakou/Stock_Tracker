@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import closing
+from pathlib import Path
 
 import pandas as pd
 
@@ -117,6 +118,9 @@ def _study_lookahead(con, args: argparse.Namespace) -> None:
           "Any difference means a signal used information from the future.")
     with tempfile.TemporaryDirectory(dir=".") as tmp:
         results = lookahead.check(con, months, workdir=tmp)
+    if args.json:   # for parallel runs: each job saves its months, a last job combines them
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(lookahead.to_json(results))
     print(lookahead.text(results))
 
 
