@@ -34,7 +34,9 @@ jobs:
       - name: Restore database
         uses: actions/cache/restore@v6
         with:
-          path: market.db
+          path: |            # must list the same files as the nightly run's save, or the cache isn't found
+            market.db
+            alert_state.json
           key: market-db-${{ github.run_id }}
           restore-keys: market-db-
 
