@@ -164,6 +164,15 @@ def _glance_section(con: sqlite3.Connection, esc) -> list[str]:
         parts.append(f'<p class="sub">The live record starts {esc(rec["start"])}; it is compared with the '
                      "S&P 500 from then on.</p>")
 
+    curve = ideas.growth_curve(con)
+    if curve is not None:
+        from trend_bot import charts
+
+        parts += [f"<h3>What $10,000 would have become in testing ({curve.index[0]:%Y}–{curve.index[-1]:%Y})</h3>",
+                  charts.growth_svg(curve),
+                  '<p class="note">A test on past data, after trading costs, always invested. The line is drawn on '
+                  "a scale where equal % moves look equal. The real record since the portfolio started is the "
+                  "numbers above.</p>"]
     held = pd.read_sql_query("SELECT * FROM ideas_holdings ORDER BY rank", con)
     if held.empty:
         parts.append('<p class="empty">The top-ideas portfolio starts at its first monthly update.</p>')

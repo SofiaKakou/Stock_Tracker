@@ -96,3 +96,23 @@ def test_email_carries_the_essentials(tmp_path):
     html = msg.get_body(("html",)).get_content()
     assert "AAA  2026-09-30  100.00  110.00  +10.0%" in text and "All fine." in text
     assert "<table" in html and "<td" in html and "+10.0%" in html and "BBB (" in html
+
+
+def test_growth_chart_in_report_and_email():
+    import pandas as pd
+
+    from trend_bot import charts
+
+    idx = pd.date_range("2010-01-31", periods=120, freq="ME")
+    curve = pd.DataFrame({"portfolio": [1.01 ** i for i in range(120)], "spy": [1.008 ** i for i in range(120)]},
+                         index=idx)
+    svg = charts.growth_svg(curve)
+    assert svg.count("<polyline") == 2 and "2010" in svg and "$33K" in svg      # 10,000 x 1.01^119
+    png = charts.growth_png(curve)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    cfg = {"EMAIL_USER": "me@gmail.com", "EMAIL_APP_PASSWORD": "x", "EMAIL_TO": "me@gmail.com"}
+    msg = email_report.build(cfg, [("In short", ["Nothing to do."]), ("Bot health", ["All fine."])], None, chart=png)
+    html = msg.get_body(("html",)).get_content()
+    assert 'src="cid:growth"' in html and html.index("In short") < html.index("cid:growth") < html.index("Bot health")
+    images = [p for p in msg.walk() if p.get_content_type() == "image/png"]
+    assert len(images) == 1 and images[0]["Content-ID"] == "<growth>"

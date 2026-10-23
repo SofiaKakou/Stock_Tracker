@@ -40,7 +40,8 @@ it was bought, and the full report attached (open it in your browser for charts)
 trading days (about a month), and whether the price trend is up or down.
 
 **📄 The daily report (a web page file).** Opens with a **👋 Start here** box, then the portfolio
-to follow and the top ideas. Extra research sits in a folded **🔍 For the curious** section at
+to follow (with a chart of what $10,000 would have become in testing, next to an S&P 500 index
+fund) and the top ideas. Extra research sits in a folded **🔍 For the curious** section at
 the bottom; you never need it.
 
 ### When something happens
@@ -125,6 +126,11 @@ The **🧠 AI report reader** only runs if started by hand (it costs money).
   the portfolio does. A fairer yardstick than the usual S&P 500, where a few giants weigh most.
 - **Luck check**: the portfolio compared with 1,000 portfolios of 20 stocks picked at random. Beating
   95% of them means it's very unlikely to be luck; about half means no better than random.
+- **Look-ahead check**: proof that the tests never used information from the future. For a few
+  past months, the bot rebuilds that month's scores from a copy of its data cut off at that date
+  and checks they match. Any difference would mean a test quietly peeked at the answers.
+- **Robustness check**: the portfolio tested again with its settings nudged (15, 20 or 25 stocks;
+  selling a bit sooner or later). If the results barely move, they don't hinge on lucky settings.
 - **Kinds of market**: the portfolio's record in rising vs falling and calm vs volatile markets.
   It shows where any edge came from; it never moves the portfolio to cash.
 

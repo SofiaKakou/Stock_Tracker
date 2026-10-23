@@ -77,6 +77,23 @@ def _gone_note(df: pd.DataFrame) -> str:
             "Price-based signals can't be measured for them.")
 
 
+def _study_lookahead(con, args: argparse.Namespace) -> None:
+    import tempfile
+
+    from trend_bot import lookahead
+
+    if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
+        print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
+        return
+    months = [m.strip() for m in args.months.split(",")] if args.months else lookahead.DEFAULT_MONTHS
+    print("Look-ahead check: for each month below, the signals are rebuilt from a copy of the database\n"
+          "cut off at that date, and compared with the normal table built from all the data.\n"
+          "Any difference means a signal used information from the future.")
+    with tempfile.TemporaryDirectory(dir=".") as tmp:
+        results = lookahead.check(con, months, workdir=tmp)
+    print(lookahead.text(results))
+
+
 def _study_candidates(con, args: argparse.Namespace) -> None:
     from trend_bot import candidates, fundamentals, ml
 
@@ -243,6 +260,28 @@ def _construction_section(df, spy, ideas, con, args) -> None:
     _luck_section(df, ideas, con, split)
     _large_section(df, test, ideas, con, split)
     _market_types_section(test, spy, ideas, split)
+    _robustness_section(df, test, ideas, con, split)
+
+
+def _robustness_section(df, test, ideas, con, split) -> None:
+    """Nudge the settings a little: do the results hold up, or do they hinge on the exact numbers?"""
+    d = df.dropna(subset=["ret"]).reset_index(drop=True)
+    base = ideas.scores(d, ideas.method(con) == "industry_mix", ideas.extra(con))
+    table = ideas.robustness(d, base, split)
+    if table.empty:
+        return
+    yearly = lambda x: (1 + x.dropna()).prod() ** (12 / len(x.dropna())) - 1 if x.notna().sum() >= 12 else float("nan")
+    spy = {"all": yearly(test["SPY"]), "before": yearly(test.loc[test.index < split, "SPY"]),
+           "after": yearly(test.loc[test.index >= split, "SPY"])}
+    print("\n\n##### Robustness: the same ranking with the settings nudged (after costs) #####")
+    print("Instead of tuning the settings to the best past result (which mostly finds luck), this checks\n"
+          "that small changes don't swing the results. Yearly growth:")
+    print(f"  {'setting':<32}{'all years':>10}{'before ' + format(split, '%Y'):>13}{format(split, '%Y') + ' on':>10}")
+    for name, r in table.iterrows():
+        mark = "  <- now" if r["current"] else ""
+        print(f"  {name:<32}{r['all']:>+10.1%}{r['before']:>+13.1%}{r['after']:>+10.1%}{mark}")
+    print(f"  {'S&P 500':<32}{spy['all']:>+10.1%}{spy['before']:>+13.1%}{spy['after']:>+10.1%}")
+    print(ideas.robustness_verdict(table))
 
 
 def _large_section(df, test, ideas, con, split) -> None:
@@ -448,6 +487,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "ml":
             _study_ml(con, args)
+            return 0
+        if args.signal == "lookahead":
+            _study_lookahead(con, args)
             return 0
         if args.signal == "candidates":
             _study_candidates(con, args)

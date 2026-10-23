@@ -110,13 +110,18 @@ def _text(sections) -> str:
     return "\n\n".join(parts)
 
 
-def _html(sections, footer: list[str]) -> str:
+def _html(sections, footer: list[str], chart_title: str | None = None) -> str:
     from html import escape
 
     cell = "padding:3px 10px 3px 0;text-align:left;border-bottom:1px solid #eee"
     out = ['<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;color:#222;'
            'max-width:640px">']
-    for title, lines in sections:
+    for k, (title, lines) in enumerate(sections):
+        if k == 1 and chart_title:
+            out.append(f'<h3 style="margin:18px 0 6px">{escape(chart_title)}</h3>'
+                       '<img src="cid:growth" alt="Growth chart" style="width:100%;max-width:640px;height:auto">'
+                       '<p style="color:#777;font-size:13px;margin:4px 0">A test on past data, after trading '
+                       "costs. The real record is the line below.</p>")
         out.append(f'<h3 style="margin:18px 0 6px">{escape(title)}</h3>')
         table = [x for x in lines if isinstance(x, list)]
         text = [x for x in lines if not isinstance(x, list)]
@@ -133,8 +138,9 @@ def _html(sections, footer: list[str]) -> str:
     return "".join(out) + "</div>"
 
 
-def build(cfg: dict, summary, report: Path | None, today: dt.date | None = None) -> EmailMessage:
-    """`summary`: digest() sections, or plain lines (shown as one section)."""
+def build(cfg: dict, summary, report: Path | None, today: dt.date | None = None,
+          chart: bytes | None = None, chart_title: str = "What $10,000 would have become in testing") -> EmailMessage:
+    """`summary`: digest() sections, or plain lines (shown as one section). `chart`: a PNG shown in the email."""
     today = today or dt.date.today()
     msg = EmailMessage()
     msg["Subject"] = f"Trend Bot daily report, {today:%a %d %b %Y}"
@@ -145,7 +151,9 @@ def build(cfg: dict, summary, report: Path | None, today: dt.date | None = None)
               else "No report file was made tonight.",
               "Past patterns, not certainties; not financial advice."]
     msg.set_content(_text(sections) + "\n\n" + "\n".join(footer))
-    msg.add_alternative(_html(sections, footer), subtype="html")
+    msg.add_alternative(_html(sections, footer, chart_title if chart else None), subtype="html")
+    if chart:
+        msg.get_payload()[1].add_related(chart, "image", "png", cid="<growth>")
     if report:
         msg.add_attachment(report.read_bytes(), maintype="text", subtype="html", filename=f"report-{today}.html")
     return msg
