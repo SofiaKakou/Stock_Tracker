@@ -30,3 +30,24 @@ def test_gap_words_tell_clear_from_unclear():
     assert r["gap_lo"] < 0 < r["gap_hi"] and "can't tell" in uncertainty.gap_words(r)
     assert "probably really worse" in uncertainty.gap_words(uncertainty.ranges(market - 0.01, market))
     assert uncertainty.ranges(market.head(10)) == {}
+
+
+def test_q_values_raise_the_bar_when_many_ideas_are_tested():
+    p = {"a": 0.001, "b": 0.02, "c": 0.04, "d": 0.5}
+    q = uncertainty.q_values(p)
+    assert q["a"] == 0.004 and abs(q["b"] - 0.04) < 1e-12 and abs(q["c"] - 0.04 * 4 / 3) < 1e-12 and q["d"] == 0.5
+    assert all(q[k] >= p[k] for k in p)                       # never easier than the raw chance
+    assert uncertainty.p_from_t(3.0) < 0.002 and abs(uncertainty.p_from_t(0.0) - 0.5) < 1e-12
+    assert uncertainty.q_values({}) == {}
+
+
+def test_beats_t_compares_two_rankings_month_by_month():
+    rng = np.random.default_rng(0)
+    rows = []
+    for m in months(48):
+        ret = rng.normal(0, 0.05, 200)
+        rows.append(pd.DataFrame({"month": m, "ret": ret, "good": ret + rng.normal(0, 0.05, 200),
+                                  "meh": ret + rng.normal(0, 0.5, 200)}))
+    df = pd.concat(rows, ignore_index=True)
+    assert uncertainty.beats_t(df, "good", "meh") > 5
+    assert uncertainty.beats_t(df, "meh", "good") < -5

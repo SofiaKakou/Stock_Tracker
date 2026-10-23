@@ -55,3 +55,44 @@ def gap_words(r: dict, name: str = "the S&P 500") -> str:
     if r["gap_hi"] < 0:
         return f"{span}: behind, and the range stays below zero, so probably really worse."
     return f"{span}: the range includes zero, so the test can't tell which was really better."
+
+
+# --- Testing many ideas at once ------------------------------------------------------------------
+
+def p_from_t(t: float) -> float:
+    """One-sided chance of a t this high by luck alone (normal approximation; fine for 30+ months)."""
+    import math
+
+    return 0.5 * math.erfc(t / math.sqrt(2)) if t == t else 1.0
+
+
+def q_values(p: dict[str, float]) -> dict[str, float]:
+    """Benjamini-Hochberg: each idea's chance of being a fluke once you account for how many ideas
+    were tested together (the false discovery rate). Pass ideas with q at or below 0.05."""
+    if not p:
+        return {}
+    names = sorted(p, key=p.get)
+    m = len(names)
+    q, running = {}, 1.0
+    for rank in range(m, 0, -1):
+        name = names[rank - 1]
+        running = min(running, p[name] * m / rank)
+        q[name] = running
+    return q
+
+
+def monthly_ic(df: pd.DataFrame, col: str, min_stocks: int = 50) -> pd.Series:
+    """Rank correlation of `col` with next month's return, month by month."""
+    out = {}
+    for month, g in df[["month", col, "ret"]].dropna().groupby("month"):
+        if len(g) >= min_stocks and g[col].nunique() > 1:
+            out[month] = g[col].rank().corr(g["ret"].rank())
+    return pd.Series(out, dtype=float)
+
+
+def beats_t(df: pd.DataFrame, col: str, baseline: str) -> float:
+    """t of 'col ranks better than baseline' from their month-by-month IC difference."""
+    d = (monthly_ic(df, col) - monthly_ic(df, baseline)).dropna()
+    if len(d) < 6 or d.std() == 0:
+        return float("nan")
+    return float(d.mean() / (d.std() / np.sqrt(len(d))))

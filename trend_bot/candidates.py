@@ -16,6 +16,10 @@ about 1 in 40 pure-noise signals looks like it works the expected way). With 14+
 at once that's expected to happen. Harvey, Liu and Zhu ("...and the Cross-Section of Expected
 Returns", 2016) argue new signals should clear about 3. Signals that pass everything except
 that bar (t between 2 and 3) are shown as "promising": worth watching, not yet trusted.
+
+On top of that, a fairer bar for testing many ideas at once (the false discovery rate,
+Benjamini-Hochberg): every measure ever tested, the ones already in use too, is counted as one
+family, and a candidate only passes if its adjusted chance of being a fluke (q) is 5% or less.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from trend_bot.db import get_meta, set_meta
 MIN_MONTHS = 24          # per half: less than two years each way is too little to judge
 MIN_T = 3.0             # the bar for many signals tested at once (Harvey-Liu-Zhu)
 PROMISING_T = 2.0       # the classic bar: good enough to watch, not to trust
+MAX_Q = 0.05            # and at most a 5% chance of a fluke once every tested measure is counted
 
 
 def _mix_ic(df: pd.DataFrame, signals: list[str]) -> float:
@@ -57,8 +62,21 @@ def scoreboard(df: pd.DataFrame) -> pd.DataFrame:
             row[f"ic_{name}"] = factors.evaluate(h, c, sign)["mean_ic"]
             row[f"mix_gain_{name}"] = _mix_ic(h, ml.SIGNALS + [c]) - _mix_ic(h, ml.SIGNALS)
             row[f"months_{name}"] = h["month"].nunique()
-        row["verdict"] = verdict(row)
         rows[c] = row
+    # The fairer luck bar: every measure ever tested (the ones already in use too) is one family, and
+    # each candidate's chance of being a fluke is adjusted for how many were tried (false discovery rate).
+    from trend_bot import uncertainty
+
+    pvals = {c: uncertainty.p_from_t(r["ic_t"]) for c, r in rows.items() if "ic_t" in r}
+    for s in ml.SIGNALS:
+        if s in df and df[s].notna().any():
+            pvals.setdefault(s, uncertainty.p_from_t(factors.evaluate(df, s, fundamentals.EXPECTED.get(s, 1))["ic_t"]))
+    q = uncertainty.q_values(pvals)
+    for c, row in rows.items():
+        if "ic_t" in row:
+            row["q"] = q.get(c, 1.0)
+            row["family"] = len(pvals)
+            row["verdict"] = verdict(row)
     return pd.DataFrame(rows).T
 
 
@@ -68,7 +86,8 @@ def verdict(row: dict) -> str:
     both = (row["ic_first"] > 0 and row["ic_second"] > 0
             and row["mix_gain_first"] > 0 and row["mix_gain_second"] > 0)
     t = row["ic_t"] if row["ic_t"] == row["ic_t"] else 0.0   # NaN -> 0
-    if both and t >= MIN_T:
+    q = row.get("q", 0.0)
+    if both and t >= MIN_T and q <= MAX_Q:
         return "PASSES"
     if both and t >= PROMISING_T:
         return "promising"
@@ -98,5 +117,6 @@ def text(board: pd.DataFrame) -> str:
         lines.append(f"  {name:<16} {r['verdict']:<24} IC {fmt(r['ic'], '{:+.3f}')} (t {fmt(r['ic_t'], '{:+.1f}')}), "
                      f"halves {fmt(r['ic_first'], '{:+.3f}')} / {fmt(r['ic_second'], '{:+.3f}')}, "
                      f"adds to mix {fmt(r['mix_gain_first'], '{:+.4f}')} / {fmt(r['mix_gain_second'], '{:+.4f}')}, "
+                     f"fluke chance (q) {fmt(r.get('q'), '{:.3f}')} of {fmt(r.get('family'), '{:.0f}')} tested, "
                      f"since {r['from']}")
     return "\n".join(lines)

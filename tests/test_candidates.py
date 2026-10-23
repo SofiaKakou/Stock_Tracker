@@ -25,6 +25,7 @@ def test_scoreboard_passes_only_signals_that_work_in_both_halves(monkeypatch):
     board = candidates.scoreboard(table())
     assert board.loc["net_issuance", "verdict"] == "PASSES"
     assert board.loc["net_issuance", "mix_gain_first"] > 0 and board.loc["net_issuance", "ic_t"] > 3
+    assert board.loc["net_issuance", "q"] <= 0.05 and board.loc["net_issuance", "family"] >= 4
     assert board.loc["litigious", "verdict"] == "not proven"
     assert board.loc["red_flags", "verdict"] == "not enough history yet"     # 15 months a half
     assert board.loc["risk_change", "verdict"] == "no data yet"
@@ -66,6 +67,7 @@ def test_a_t_stat_between_2_and_3_is_only_promising():
            "mix_gain_first": 0.001, "mix_gain_second": 0.002, "ic_t": 2.5}
     assert candidates.verdict(row) == "promising"
     assert candidates.verdict({**row, "ic_t": 3.2}) == "PASSES"
+    assert candidates.verdict({**row, "ic_t": 3.2, "q": 0.2}) == "promising"     # strong alone, but likely a fluke among many
     assert candidates.verdict({**row, "ic_t": 1.5}) == "not proven"
     assert candidates.verdict({**row, "ic_t": 3.2, "mix_gain_second": -0.001}) == "not proven"
     assert candidates.verdict({**row, "ic_t": float("nan")}) == "not proven"

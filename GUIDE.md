@@ -144,6 +144,12 @@ The **🧠 AI report reader** only runs if started by hand (it costs money).
   none, 0.02 to 0.05 is useful, higher is rare.
 - **t-stat (sure it's not luck)**: how confident we can be that a result isn't chance. The bot asks
   for 3 or more, a high bar, because when many ideas are tested some look good by luck.
+- **Fluke chance (q)**: when many ideas are tested, a few look good by luck. The bot counts every idea
+  it has tried and adjusts each one's chance of being a fluke (the "false discovery rate"); a new
+  measure or model only passes if that chance is 5% or less.
+- **Likely range**: the history re-drawn 2,000 times in one-year chunks to see how much a result
+  could have differed. "+12% a year (likely +8% to +16%)". If the gap to the S&P 500's range
+  includes zero, the test can't tell which was really better.
 - **Walk-forward / "years it never saw"**: each year is tested using only earlier years, so the
   test can't peek at the answers.
 - **Survivorship bias**: only companies that still exist have prices, which makes the past look
