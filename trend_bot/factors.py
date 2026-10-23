@@ -141,6 +141,12 @@ def monthly_factors(con: sqlite3.Connection, since: str = "2009-06-30", universe
     sv = pd.read_sql_query("SELECT * FROM short_volume", con)
     nxt = panel["close"].shift(-1) / panel["close"] - 1
     last1 = panel["close"] / panel["close"].shift(1) - 1
+    jump = panel.get("jump")
+    if jump is not None and len(jump):   # a month with a jump no split explains: its return isn't trusted
+        jump = jump.reindex(index=nxt.index, columns=nxt.columns).fillna(False).astype(bool)
+        nxt = nxt.mask(jump.shift(-1).fillna(False).astype(bool))
+        last1 = last1.mask(jump)
+        log(f"[factors] {int(jump.to_numpy().sum()):,} stock-months with an unexplained price jump left out")
     month_ends = panel["close"].index
     months = [m for m in month_ends[: None if include_latest else -1] if m >= pd.Timestamp(since)]
     gone = gone_companies(con, set(tickers))
@@ -281,7 +287,7 @@ def group_rank(df: pd.DataFrame, col: str, by_sector: bool = False) -> pd.Series
 # --- Build the table once, reuse it --------------------------------------------------------------
 
 TABLE_START = "2009-06-30"  # XBRL filings start in 2009
-TABLE_VERSION = 7           # bump when monthly_factors changes what it computes
+TABLE_VERSION = 8           # bump when monthly_factors changes what it computes
 
 
 def _table_key(con: sqlite3.Connection, universe: int, min_price: float) -> str:
