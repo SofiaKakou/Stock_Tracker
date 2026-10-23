@@ -14,6 +14,13 @@ Tables (dbo.):
 - safety_events    emergency exits and warnings for the portfolio's stocks
 - study_results    the latest 10-year test of each day-trading pattern
 - runs             the bot's logbook: every command run, when, how it ended, and what made it
+- stocks           every listed stock: name, exchange, sector, fund or not, latest price, in the portfolio
+
+These dbo tables are the staging area for the star schema (schema dw, sql/dw.sql): after writing
+them, the nightly run calls dw.usp_Load, which fills the dimensions (DimStock, DimDate, DimPattern,
+DimAccount, DimMeasure, DimSeries, DimNews) and facts (FactForecast, FactForecastMeasure, FactDayTrade,
+FactDayPattern, FactAccountValue, FactHolding, FactSafetyEvent, FactNews, FactMacro). To search:
+dw.vStockSearch, dw.vForecast, dw.vDayTrades.
 """
 
 from __future__ import annotations
@@ -21,7 +28,11 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import sqlite3
+from pathlib import Path
+
+DW_SQL = Path(__file__).parent / "sql" / "dw.sql"
 
 TABLES = {
     "day_trades": """trade_date DATE NOT NULL, symbol VARCHAR(12) NOT NULL, pattern VARCHAR(20), side SMALLINT,
@@ -47,6 +58,8 @@ TABLES = {
         pct FLOAT, PRIMARY KEY (snapshot_date, ticker, measure)""",
     "runs": """started VARCHAR(30) NOT NULL, command NVARCHAR(200) NOT NULL, finished VARCHAR(30), exit_code INT,
         error NVARCHAR(400), seconds FLOAT, code VARCHAR(64), data VARCHAR(64), PRIMARY KEY (started, command)""",
+    "stocks": """ticker VARCHAR(12) NOT NULL PRIMARY KEY, name NVARCHAR(300), exchange VARCHAR(40), sector NVARCHAR(100),
+        cik INT, is_fund BIT, first_date DATE, last_date DATE, last_close FLOAT, dollar_vol FLOAT, in_portfolio BIT""",
 }
 KEYS = {"day_trades": "trade_date", "day_summary": "trade_date", "account_values": "value_date",
         "monthly_holdings": "portfolio_date", "safety_events": "event_date", "runs": "started",
@@ -102,6 +115,18 @@ def replace(conn, table: str, rows: list[dict]) -> int:
     values = [tuple(r[c] for c in cols) for r in rows]
     for i in range(0, len(values), 1000):
         cur.executemany(sql, values[i:i + 1000])
+    conn.commit()
+    return len(rows)
+
+
+def replace_all(conn, table: str, rows: list[dict]) -> int:
+    """Empty `table` and write `rows`, many per statement (the stock list is ~10,000 rows a night)."""
+    from trend_bot.mirror import insert
+
+    cur = conn.cursor()
+    cur.execute(f"DELETE FROM dbo.{table}")
+    if rows:
+        insert(cur, table, ", ".join(rows[0]), [tuple(r.values()) for r in rows])
     conn.commit()
     return len(rows)
 
@@ -191,6 +216,54 @@ def snapshot_rows(con: sqlite3.Connection, skip: set[str]) -> tuple[list[dict], 
     return rank, measure
 
 
+def stock_rows(con: sqlite3.Connection) -> list[dict]:
+    """Every listed stock, with its industry group and whether it's a fund or in the portfolio."""
+    from trend_bot.company_info import is_fund
+    from trend_bot.sectors import sector
+
+    held = {t for (t,) in con.execute("SELECT ticker FROM ideas_holdings")}
+    rows = con.execute("SELECT ticker, name, exchange, sic, cik, is_etf, security_name, first_date, last_date, "
+                       "last_close, dollar_vol FROM tickers ORDER BY ticker").fetchall()
+    out = []
+    for t, name, exch, sic, cik, etf, sec_name, first, last, close, vol in rows:
+        fund = is_fund(name, sic, exch, etf, sec_name)
+        out.append({"ticker": t[:12], "name": (name or "")[:300] or None, "exchange": (exch or "")[:40] or None,
+                    "sector": "Fund / ETF" if fund else sector(sic), "cik": cik, "is_fund": int(fund),
+                    "first_date": first, "last_date": last, "last_close": close, "dollar_vol": vol,
+                    "in_portfolio": int(t in held)})
+    return out
+
+
+def dw_script(path: Path = DW_SQL) -> list[str]:
+    """The star schema's SQL as separate batches, with the lists that live in the bot's code filled in."""
+    from trend_bot import accounts, collect, daytrade, intraday
+
+    def values(rows):
+        return ", ".join("(" + ", ".join("NULL" if v is None else str(v) if isinstance(v, int) else
+                                         "N'" + str(v).replace("'", "''") + "'" for v in r) + ")" for r in rows)
+
+    patterns = [(p, daytrade.PATTERN_TEST[p], daytrade.PATTERN_NAME[p], 1) for p in daytrade.PATTERN_TEST]
+    patterns += [(n, n, intraday.NAMES[n], 0) for n in intraday.STRATEGIES if n not in daytrade.PATTERN_TEST.values()]
+    sql = (path.read_text(encoding="utf-8")
+           .replace("/*PATTERNS*/", values(patterns))
+           .replace("/*ACCOUNTS*/", values(accounts.NAMES.items()))
+           .replace("/*SERIES*/", values(collect.SERIES.items())))
+    return [b.strip() for b in re.split(r"^\s*GO\s*;?\s*$", sql, flags=re.M) if b.strip()]
+
+
+def load_dw(conn, log=print) -> dict[str, int]:
+    """Make the star schema if needed (and bring its procedure and views up to date), then load it."""
+    cur = conn.cursor()
+    for batch in dw_script():
+        cur.execute(batch)
+    conn.commit()
+    cur.execute("EXEC dw.usp_Load")
+    counts = {t: n for t, n in cur.fetchall()}
+    conn.commit()
+    log("[star schema] " + ", ".join(f"{t} {n:,}" for t, n in counts.items()))
+    return counts
+
+
 def sync(conn, market: sqlite3.Connection, day_state: dict, intraday_results: dict | None,
          today: dt.date | None = None, log=print) -> dict[str, int]:
     """Write everything into the journal. Returns rows written per table."""
@@ -217,5 +290,6 @@ def sync(conn, market: sqlite3.Connection, day_state: dict, intraday_results: di
     rank, measure = snapshot_rows(market, stored(conn, "ranking_snapshots", "snapshot_date"))
     written["ranking_snapshots"] = replace(conn, "ranking_snapshots", rank)
     written["measure_snapshots"] = replace(conn, "measure_snapshots", measure)
+    written["stocks"] = replace_all(conn, "stocks", stock_rows(market))
     log("[journal] " + ", ".join(f"{t} {n:,}" for t, n in written.items()))
     return written

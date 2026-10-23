@@ -446,6 +446,7 @@ def cmd_journal(args: argparse.Namespace) -> int:
     try:
         with closing(db.connect(args.db)) as con:
             journal.sync(conn, con, day_state, results)
+        journal.load_dw(conn)
     finally:
         conn.close()
     return 0
