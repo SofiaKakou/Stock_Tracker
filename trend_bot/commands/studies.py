@@ -77,6 +77,32 @@ def _gone_note(df: pd.DataFrame) -> str:
             "Price-based signals can't be measured for them.")
 
 
+def _study_ml_lab(con, args: argparse.Namespace) -> None:
+    from trend_bot import ml, ml_lab
+
+    if not con.execute("SELECT 1 FROM facts LIMIT 1").fetchone():
+        print("No company financials yet. Run:  python -m trend_bot db update --fundamentals-only")
+        return
+    since = args.since if args.since != "2006-01-01" else "2009-06-30"
+    print("Building the monthly table of every signal (takes a while)...")
+    df = ml.dataset(con, since=since, universe=args.universe)
+    if df.empty:
+        print("Not enough data.")
+        return
+    first = max(args.first_year, df["month"].dt.year.min() + 2)
+    preds = ml_lab.walk_forward(df, first_year=first, trees=args.trees)
+    if preds.empty:
+        print("Not enough history before the first test year.")
+        return
+    card = ml_lab.scorecard(preds, split_year=args.split_year)
+    print(f"\nML lab, {preds['month'].min():%Y-%m} to {preds['month'].max():%Y-%m}: each year predicted by models "
+          f"trained only on earlier years ({len(preds):,} predictions per variant).")
+    print("IC = how well the ranking lined up with next month's returns (higher is better); t above 2 = unlikely "
+          "to be luck; top 10%/yr = holding the best-ranked 10% each month, after trading costs.\n")
+    print(ml_lab.text(card, args.split_year))
+    print("\n" + ml_lab.__doc__.split("\n\n", 2)[2])
+
+
 def _study_lookahead(con, args: argparse.Namespace) -> None:
     import tempfile
 
@@ -487,6 +513,9 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "ml":
             _study_ml(con, args)
+            return 0
+        if args.signal == "mllab":
+            _study_ml_lab(con, args)
             return 0
         if args.signal == "lookahead":
             _study_lookahead(con, args)
