@@ -9,9 +9,17 @@ from trend_bot import db, paper
 class FakeBroker:
     """Stands in for Alpaca's paper account: records orders, fills nothing."""
 
-    def __init__(self, equity=100_000.0, positions=None, open_orders=None, refuse=()):
+    def __init__(self, equity=100_000.0, positions=None, open_orders=None, refuse=(), market_open=False):
         self.equity, self.held = equity, dict(positions or {})
         self.waiting, self.refuse, self.sent = list(open_orders or []), set(refuse), []
+        self.market_open, self.closed_orders = market_open, []
+
+    def clock(self):
+        return {"is_open": self.market_open}
+
+    def _call(self, method, path, params=None):
+        assert (method, path, params["status"]) == ("GET", "/orders", "closed")
+        return self.closed_orders
 
     def account(self):
         return {"equity": str(self.equity), "cash": "1000", "account_number": "PA123"}
@@ -88,9 +96,51 @@ def test_waits_while_earlier_orders_are_open_and_notes_refused_stocks(tmp_path):
     con = setup(tmp_path)
     res = paper.sync(con, FakeBroker(open_orders=[{"id": "x"}]), log=lambda *_: None)
     assert "haven't filled" in res["skipped"] and db.get_meta(con, "paper_synced") is None
+    # Refused at night (market closed): not marked done, so the morning check tries again.
     res = paper.sync(con, FakeBroker(refuse={"BRK.B"}), log=lambda *_: None)
-    assert [f[0] for f in res["failed"]] == ["BRK.B"] and len(res["traded"]) == 2
+    assert [f[0] for f in res["failed"]] == ["BRK.B"] and len(res["traded"]) == 2 and res["retry"]
+    assert db.get_meta(con, "paper_synced") is None
     assert "Refused by the broker" in paper.embed(res, "2026-11-02")["description"]
+    # Refused again with the market open: final for this month (the broker doesn't offer it).
+    held = {"AAA": 48, "CCC": 98}
+    res = paper.sync(con, FakeBroker(positions=held, refuse={"BRK.B"}, market_open=True), log=lambda *_: None)
+    assert [f[0] for f in res["failed"]] == ["BRK.B"] and db.get_meta(con, "paper_synced") == "2026-11-02"
+
+
+def test_a_stock_pricier_than_its_amount_gets_one_share_or_is_named():
+    left = []
+    orders = paper.plan(["AAA", "BIG", "HUGE"], {"AAA": 100.0, "BIG": 5_000.0, "HUGE": 50_000.0}, {},
+                        equity=10_000, left_out=left)                       # 3,267 each
+    assert ("BIG", "buy", 1) in orders and not any(s == "HUGE" for s, _, _ in orders)
+    assert left == [("HUGE", 50_000.0)]
+
+
+def test_morning_fill_report_and_the_cost_of_buying_next_morning(tmp_path):
+    con = setup(tmp_path)
+    broker = FakeBroker(positions={"OLD": 10})
+    con.execute("INSERT INTO prices(ticker, date, close, adj_close) VALUES ('OLD', '2026-10-30', 20, 20)")
+    paper.sync(con, broker, today=dt.date(2026, 10, 30), log=lambda *_: None)
+    assert paper.fills(con, broker) is None                                 # nothing filled yet
+    qty = {s: q for s, side, q in broker.sent}
+    broker.closed_orders = [
+        {"symbol": "AAA", "side": "buy", "status": "filled", "filled_avg_price": "101", "filled_qty": str(qty["AAA"]),
+         "client_order_id": "tb-x"},
+        {"symbol": "OLD", "side": "sell", "status": "filled", "filled_avg_price": "19", "filled_qty": "10",
+         "client_order_id": "abc"},
+        {"symbol": "SPY", "side": "buy", "status": "filled", "filled_avg_price": "500", "client_order_id": "tb-test-1"}]
+    f = paper.fills(con, broker)
+    assert f["waiting"] == 2 and {x[0] for x in f["filled"]} == {"AAA", "OLD"}
+    # Paid $1 more per AAA share, got $1 less per OLD share: the cost over the money traded.
+    expected = (qty["AAA"] * 1 + 10 * 1) / (qty["AAA"] * 100 + 10 * 20)
+    assert f["cost"] == pytest.approx(expected)
+    e = paper.fills_embed(f)
+    assert "bought" in e["description"] and "sold 10 OLD" in e["description"] and "not filled yet" in e["description"]
+    for s in ("BRK.B", "CCC"):
+        broker.closed_orders.append({"symbol": s, "side": "buy", "status": "filled", "filled_avg_price": "1",
+                                     "filled_qty": "1", "client_order_id": "tb-y"})
+    assert paper.fills(con, broker)["waiting"] == 0
+    assert paper.fills(con, broker) is None                                 # reported once
+
 
 
 def test_dry_run_sends_and_saves_nothing(tmp_path):
@@ -151,3 +201,23 @@ def test_test_trade_waits_for_the_market_and_cancels_what_doesnt_fill():
     broker = TradingBroker(never_fill=True)
     assert not paper.test_trade(broker, wait=4, sleep=lambda s: None, log=out.append)
     assert broker.cancelled == ["o0"] and "didn't fill" in out[-1]
+
+
+def test_the_demo_line_compares_with_the_bots_own_record(tmp_path):
+    con = setup(tmp_path)
+    con.executemany("INSERT INTO ideas_periods VALUES (?, ?, ?)", [("2026-10-30", t, 1) for t in ("AAA", "CCC")])
+    con.executemany("INSERT INTO prices(ticker, date, close, adj_close) VALUES (?, ?, ?, ?)",
+                    [("AAA", "2026-11-02", 100.0, 100.0), ("CCC", "2026-11-02", 50.0, 50.0),
+                     ("AAA", "2026-11-20", 110.0, 110.0), ("CCC", "2026-11-20", 50.0, 50.0)])
+    db.set_meta(con, "paper_status", json.dumps({"start_date": "2026-11-02", "start_equity": 100_000,
+                                                 "date": "2026-11-20", "equity": 104_000}))
+    r = paper.record(con)
+    assert r["bot"] == pytest.approx((1 + 0.05) * (1 - 0.001) - 1)        # AAA +10%, CCC 0%: +5% less costs
+    line = paper.line(con)
+    assert "+4.0%" in line and "bot's own record over the same days" in line and "+4.9%" in line
+
+
+def test_left_out_stocks_are_named_in_the_message():
+    e = paper.embed({"traded": [], "failed": [], "left_out": [("NVR", 7000.0)], "status": {"equity": 1e5, "cash": 1e5}},
+                    "2026-11-02")
+    assert "NVR ($7,000 a share)" in e["description"]

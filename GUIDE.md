@@ -198,8 +198,11 @@ data from FINRA. All free.
   2. In the paper account's dashboard, generate an API key.
   3. Add two secrets: `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY`.
 
-  From the next monthly update on, the nightly run sends the buys and sells (whole shares, filled at
-  the next morning's open) and posts "🧪 Demo account: orders sent". The report and email show the
-  account's value since its first trades vs the S&P 500. Expect it to trail the tests a little:
-  the tests buy at the close, the account the next morning (`study ideas` measures that gap over
-  20 years). To see the orders without sending them: Actions → **Demo account check** → Run workflow.
+  The nightly run sends the buys and sells (whole shares, filled at the next morning's open) and
+  posts "🧪 Demo account: orders sent". After the open, a morning check posts "🧪 Demo account:
+  orders filled" with each price paid and the **cost of buying the next morning** (vs the closing
+  prices the tests use), and sends again anything the broker refused overnight. A stock whose one
+  share costs more than twice its share of the account is left out and named.
+  The report and email show the account since its first trades vs **the bot's own record over the
+  same days** and the S&P 500. The gap to the bot's record is the cost of real trading; expect the
+  account to trail a little (`study ideas` measures the next-morning part of that over 20 years). To see the orders without sending them: Actions → **Demo account check** → Run workflow.

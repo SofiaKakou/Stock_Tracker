@@ -697,12 +697,14 @@ def use_cap(con: sqlite3.Connection) -> bool:
     return bool(json.loads(raw).get("cap")) if raw else False
 
 
-def live_record(con: sqlite3.Connection, benchmark: str = "SPY", cost_bps: float = 10) -> dict | None:
+def live_record(con: sqlite3.Connection, benchmark: str = "SPY", cost_bps: float = 10,
+                since: str | None = None) -> dict | None:
     """How the portfolio to follow has really done since its first monthly update, vs the S&P 500.
 
     Equal amounts in each holding, re-balanced at each monthly update, 0.1% per trade each way
     (sells and buys), always invested. Prices come from the database, so splits and dividends are
     handled the same way as everywhere else. None until there's a first update.
+    since: only from this date on, as if bought then (to compare with the demo account's same days).
     """
     from trend_bot.db import load_many
 
@@ -710,6 +712,15 @@ def live_record(con: sqlite3.Connection, benchmark: str = "SPY", cost_bps: float
     if periods.empty:
         return None
     starts = sorted(periods["start"].unique())
+    if since:
+        current = [s for s in starts if s <= since]
+        keep = ([current[-1]] if current else []) + [s for s in starts if s > since]
+        periods = periods[periods["start"].isin(keep)].copy()
+        if current:   # the holdings of the month under way, bought on `since`
+            periods.loc[periods["start"] == current[-1], ["start", "bought"]] = [since, 1]
+        starts = sorted(periods["start"].unique())
+        if not starts:
+            return None
     tickers = sorted(set(periods["ticker"]) | {benchmark})
     closes = {t: df["Close"] for t, df in load_many(con, tickers, start=starts[0]).items()}
     if benchmark not in closes:

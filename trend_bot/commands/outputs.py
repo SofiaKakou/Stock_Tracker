@@ -322,8 +322,15 @@ def cmd_paper(args: argparse.Namespace) -> int:
         except paper.PaperError as e:
             print(f"[demo] the broker refused: {e}", file=sys.stderr)
             return 1
+    embeds = []
     with closing(db.connect(args.db)) as con:
         try:
+            if args.morning:   # last night's orders as filled, then anything refused overnight again
+                f = paper.fills(con, client)
+                if f:
+                    embeds.append(paper.fills_embed(f))
+                    print(f"[demo] {len(f['filled'])} order(s) filled, {f['waiting']} waiting"
+                          + (f"; cost of buying the next morning {f['cost']:+.2%}" if f["cost"] is not None else ""))
             res = paper.sync(con, client, dry_run=args.dry_run)
         except paper.PaperError as e:
             print(f"[demo] the broker refused: {e}", file=sys.stderr)
@@ -332,16 +339,22 @@ def cmd_paper(args: argparse.Namespace) -> int:
               + (f"; nothing to do: {res['skipped']}" if res["skipped"] else ""))
         for s, side, qty in res.get("planned", []):
             print(f"  would {side} {qty:,} {s}")
+        for s, price in res.get("left_out", []):
+            print(f"  left out {s}: one share (${price:,.0f}) costs more than twice its share of the account")
         line = paper.line(con)
         if line:
             print(line.replace("**", ""))
         port = ideas.load_portfolio(con)
         e = paper.embed(res, port["date"]) if port and not args.dry_run else None
-    if e and args.discord:
+        if e:
+            embeds.append(e)
+    if args.changed_flag and (embeds or res["traded"]):
+        Path(args.changed_flag).write_text("1\n")   # the workflow saves the database only then
+    if embeds and args.discord:
         from trend_bot import alerts
 
         if alerts.load_webhook():
-            alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [e]})
+            alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": embeds})
     return 0
 
 
