@@ -21,7 +21,7 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
@@ -32,7 +32,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore database
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: market.db
           key: market-db-${{ github.run_id }}

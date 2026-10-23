@@ -35,7 +35,7 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
@@ -46,7 +46,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore database
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             market.db
@@ -69,7 +69,7 @@ jobs:
 
       - name: Save database
         if: always() && inputs.action != 'summary'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             market.db
@@ -78,7 +78,7 @@ jobs:
 
       - name: Keep the results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ai-reader-${{ github.run_id }}
           path: reports/ai-reader.txt
