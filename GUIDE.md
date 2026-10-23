@@ -98,6 +98,9 @@ public, like this repository).
   the test can't peek at the answers.
 - **Survivorship bias**: only companies that still exist have prices, which makes the past look
   better than it was. The bot adds back companies that went bankrupt or were bought out.
+- **Luck check**: the top 20 compared with 1,000 portfolios of 20 stocks picked at random each month
+  from the same stocks. Beating 95% or more of them means the ranking is very unlikely to be luck;
+  around half means it's no better than picking at random.
 - **Worst drop**: the biggest fall from a peak before recovering.
 - **Report change ("Lazy Prices")**: how much a company rewrote its latest 10-K / 10-Q compared
   with the same report a year earlier. Research found big rewrites tend to come before weaker

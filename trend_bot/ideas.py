@@ -365,6 +365,52 @@ def construction_test(df: pd.DataFrame, spy: pd.Series, extra: bool = False, by_
     return res[[c for c in CONSTRUCTION if c in res and res[c].notna().any()]]
 
 
+def luck_test(df: pd.DataFrame, score: pd.Series, hold: int = 20, n: int = 1000, seed: int = 0,
+              split: pd.Timestamp | None = None) -> pd.DataFrame:
+    """The top `hold` by `score` against `n` random portfolios of `hold` stocks drawn each month from
+    the same stocks, all equally weighted, before trading costs (random picks change every month, so
+    comparing after costs would be unfair to them). One row per period (all years, before / from
+    `split`): our yearly return, the random ones' median and 5-95% range, and the share we beat."""
+    d = df.assign(score=score.to_numpy()).dropna(subset=["score", "ret"])
+    ours = _hold_returns(d.drop(columns="score"), d["score"], hold, 2 * hold, 0.0)
+    rng = np.random.default_rng(seed)
+    months, sims = [], []
+    for month, g in d.groupby("month"):
+        if len(g) < hold * 3:
+            continue
+        r = g["ret"].to_numpy(dtype=float)
+        pick = rng.random((n, len(r))).argpartition(hold, axis=1)[:, :hold]
+        months.append(month + pd.offsets.MonthEnd(1))
+        sims.append(r[pick].mean(axis=1))
+    if not sims:
+        return pd.DataFrame()
+    rand = pd.DataFrame(np.column_stack(sims).T, index=months)
+    ours = ours.reindex(rand.index).fillna(0.0)
+    cagr = lambda x: (1 + x).prod() ** (12 / len(x)) - 1
+    parts = {"All years": rand.index == rand.index}
+    if split is not None:
+        parts |= {f"before {split:%Y}": rand.index < split, f"{split:%Y} on": rand.index >= split}
+    rows = {}
+    for label, mask in parts.items():
+        if mask.sum() < 12:
+            continue
+        ours_c, rand_c = cagr(ours[mask]), cagr(rand[mask])
+        rows[label] = {"months": int(mask.sum()), "top": ours_c, "random_median": rand_c.median(),
+                       "random_p5": rand_c.quantile(0.05), "random_p95": rand_c.quantile(0.95),
+                       "beats_share": float((rand_c < ours_c).mean())}
+    return pd.DataFrame(rows).T
+
+
+def luck_verdict(row) -> str:
+    """Plain words for one luck_test row."""
+    share = row["beats_share"]
+    if share >= 0.95:
+        return f"better than {share:.0%} of random portfolios: very unlikely to be luck"
+    if share >= 0.80:
+        return f"better than {share:.0%} of random portfolios: probably some skill, but luck can't be ruled out"
+    return f"better than only {share:.0%} of random portfolios: no better than picking at random"
+
+
 def construction_verdicts(monthly: pd.DataFrame) -> pd.DataFrame:
     """Per variant and half: does it beat the S&P 500 on return, and the current top 20 on return per risk?"""
     from trend_bot import model
