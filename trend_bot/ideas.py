@@ -401,6 +401,37 @@ def luck_test(df: pd.DataFrame, score: pd.Series, hold: int = 20, n: int = 1000,
     return pd.DataFrame(rows).T
 
 
+def market_types(monthly: pd.DataFrame, spy: pd.Series, col: str = "top20") -> pd.DataFrame:
+    """How `col` did against the S&P 500 in different kinds of markets, each month labelled by what
+    was known when it started: rising (S&P 500 above its 200-day average) or falling, and calm or
+    volatile (the last month's daily swings below or above their usual level so far). A report only:
+    the portfolio stays invested in every kind of market."""
+    spy = spy.dropna()
+    if len(spy) < 250 or monthly.empty:
+        return pd.DataFrame()
+    rising = spy > spy.rolling(200).mean()
+    vol = spy.pct_change().rolling(21).std()
+    volatile = vol > vol.expanding(252).median()
+    start = monthly.index - pd.offsets.MonthEnd(1)       # each month is labelled as it began
+    at = lambda s: s.reindex(spy.index).ffill().reindex(start, method="ffill").to_numpy()
+    lab = pd.DataFrame({"rising": at(rising), "volatile": at(volatile), "ok": at(vol.notna() & spy.rolling(200).mean().notna())},
+                       index=monthly.index)
+    lab = lab[lab["ok"].astype(bool)]
+    m = monthly.loc[lab.index, [col, "SPY"]].dropna()
+    lab = lab.loc[m.index]
+    yearly = lambda x: (1 + x).prod() ** (12 / len(x)) - 1
+    kinds = {"Rising market": lab["rising"].astype(bool), "Falling market": ~lab["rising"].astype(bool),
+             "Calm market": ~lab["volatile"].astype(bool), "Volatile market": lab["volatile"].astype(bool)}
+    rows = {}
+    for name, mask in kinds.items():
+        part = m[mask.to_numpy()]
+        if len(part) < 6:
+            continue
+        rows[name] = {"months": len(part), "top": yearly(part[col]), "spy": yearly(part["SPY"]),
+                      "beat_months": float((part[col] > part["SPY"]).mean())}
+    return pd.DataFrame(rows).T
+
+
 def luck_verdict(row) -> str:
     """Plain words for one luck_test row."""
     share = row["beats_share"]

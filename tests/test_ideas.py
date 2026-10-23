@@ -126,7 +126,7 @@ def test_study_ideas_end_to_end(model_db, tmp_path, monkeypatch, capsys):
                  "--split-year", "2026"]) == 0
     out = capsys.readouterr().out
     assert "Top ideas + weather filter" in out and "S&P 500 (buy & hold)" in out and "Year by year" in out
-    assert "Luck check" in out and "random portfolios" in out
+    assert "Luck check" in out and "random portfolios" in out and "Kinds of market" in out
     assert json.loads(db.get_meta(model_db, "ideas_backtest"))["hold"] == 5
 
 
@@ -301,3 +301,22 @@ def test_luck_test_tells_skill_from_chance():
     chance = ideas.luck_test(df, noise, n=300).loc["All years"]
     assert chance["random_p5"] < chance["top"] < chance["random_p95"]  # inside the random range
     assert ideas.luck_test(df.head(10), df["ret"].head(10)).empty
+
+
+def test_market_types_label_each_month_by_what_was_known():
+    days = pd.bdate_range("2015-01-01", "2020-12-31")
+    rng = np.random.default_rng(1)
+    up = np.where(days < "2018-01-01", 0.001, -0.001)                   # rising, then falling
+    noise = np.where((days.year == 2019), 0.03, 0.003) * rng.standard_normal(len(days))   # 2019 is volatile
+    spy = pd.Series(100 * np.cumprod(1 + up + noise), index=days)
+    months = pd.date_range("2016-01-31", "2020-12-31", freq="ME")
+    spy_m = spy.resample("ME").last()
+    monthly = pd.DataFrame({"SPY": (spy_m.shift(-1) / spy_m - 1).reindex(months - pd.offsets.MonthEnd(1)).to_numpy()},
+                           index=months)
+    monthly["top20"] = monthly["SPY"] + 0.01                           # always 1% a month better
+    k = ideas.market_types(monthly, spy)
+    assert {"Rising market", "Falling market", "Calm market", "Volatile market"} <= set(k.index)
+    assert (k["beat_months"] == 1.0).all() and (k["top"] > k["spy"]).all()
+    assert k.loc["Rising market", "months"] + k.loc["Falling market", "months"] == len(monthly.dropna())
+    assert k.loc["Volatile market", "months"] >= 6
+    assert ideas.market_types(monthly, spy.head(100)).empty
