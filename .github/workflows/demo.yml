@@ -1,0 +1,39 @@
+# Demo account check: Actions tab -> "Demo account check" -> Run workflow.
+# Connects to the Alpaca paper-trading account (fake money) with the ALPACA_* secrets and shows the
+# account's value and the orders the bot would send to follow the portfolio. Sends nothing and
+# changes nothing (the nightly run does the real syncing; see GUIDE.md, "Demo account").
+
+name: Demo account check
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v6
+        with:
+          path: market.db
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+
+      - name: Check the demo account (sends nothing)
+        run: python -m trend_bot paper --dry-run
