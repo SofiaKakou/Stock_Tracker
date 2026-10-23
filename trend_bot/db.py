@@ -187,6 +187,20 @@ CREATE TABLE IF NOT EXISTS short_volume (
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+
+-- The logbook: one row per command run (see runs.py).
+CREATE TABLE IF NOT EXISTS run_log (
+    started   TEXT NOT NULL,
+    finished  TEXT,
+    command   TEXT NOT NULL,
+    code      TEXT,                -- code version (git commit, else a hash of the source files)
+    data      TEXT,                -- fingerprint of the data the command used
+    settings  TEXT,                -- the command's settings (JSON)
+    notes     TEXT,                -- what it reported, e.g. {"stocks": 912} (JSON)
+    exit_code INTEGER,
+    error     TEXT,
+    seconds   REAL
+);
 """
 
 

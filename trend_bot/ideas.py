@@ -85,6 +85,7 @@ def rank_month(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -
     ranks = oriented_ranks(now, by_sector, extra)
     now["score"] = ml.simple_mix(now, by_sector, extra)
     now["signals"] = ranks.notna().sum(axis=1)
+    too_few = now.loc[now["signals"] < MIN_SIGNALS].set_index("ticker")["signals"].astype(int).to_dict()
     now = now[now["signals"] >= MIN_SIGNALS].dropna(subset=["score"])
     now["pct"] = now["score"].rank(pct=True)
     now = now.sort_values("score", ascending=False)
@@ -92,7 +93,9 @@ def rank_month(df: pd.DataFrame, by_sector: bool = False, extra: bool = False) -
     now["why"] = [reasons(ranks.loc[i], best=j < k) for j, i in enumerate(now.index)]
     if "sector" not in now:
         now["sector"] = None
-    return now.set_index("ticker")[["score", "pct", "close", "signals", "sector", "why"]]
+    out = now.set_index("ticker")[["score", "pct", "close", "signals", "sector", "why"]]
+    out.attrs["too_few"] = too_few        # in the universe, but with fewer than MIN_SIGNALS measures known
+    return out
 
 
 def latest(con: sqlite3.Connection, universe: int = 1000, log=print) -> tuple[pd.DataFrame, str]:
@@ -302,7 +305,8 @@ STOP_LOSS = 0.30   # stop30: sell a holding once it's this far below its buy pri
 
 
 def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, cost: float,
-                  by_size: bool = False, exclude: pd.Series | None = None, stop: float | None = None) -> pd.Series:
+                  by_size: bool = False, exclude: pd.Series | None = None, stop: float | None = None,
+                  record: list | None = None) -> pd.Series:
     """Monthly returns of holding the top `hold` by `score` (kept while in the top `buffer`), always
     invested, after trading costs. by_size: weighted by market value instead of equally.
     exclude: rows (aligned with df) that may not be held that month (sold if held, never bought).
@@ -332,6 +336,8 @@ def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, co
         ok = r.notna()
         gross = float((r[ok] * w[ok]).sum() / w[ok].sum()) if ok.any() else 0.0
         out[month + pd.offsets.MonthEnd(1)] = gross - cost * len(buys) / hold
+        if record is not None:   # what was held and bought each month (for the bookkeeping tests)
+            record.append({"month": month, "held": list(new), "buys": list(buys)})
         growth = {t: (1.0 if t in buys else growth.get(t, 1.0)) * (1 + (r[t] if pd.notna(r[t]) else 0.0))
                   for t in new}
         held = new
@@ -540,9 +546,10 @@ def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> 
     s = model.summarize(monthly, [col, "SPY"])
     if col not in s.index or "SPY" not in s.index:
         return
-    from trend_bot import uncertainty
+    from trend_bot import risk, uncertainty
 
     both = monthly[[col, "SPY"]].dropna()
+    bad = {"portfolio": risk.summary(both[col]), "spy": risk.summary(both["SPY"])}
     likely = uncertainty.ranges(both[col], both["SPY"])
     grown = (1 + both).cumprod()
     curve = [[f"{m:%Y-%m}", round(float(a), 4), round(float(b), 4)] for m, (a, b) in grown.iterrows()]
@@ -550,8 +557,31 @@ def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> 
         "hold": hold, "from": f"{monthly.index.min():%Y}", "to": f"{monthly.index.max():%Y}", "cap": bool(cap),
         "cagr": float(s.loc[col, "cagr"]), "max_drawdown": float(s.loc[col, "max_drawdown"]),
         "spy_cagr": float(s.loc["SPY", "cagr"]), "spy_max_drawdown": float(s.loc["SPY", "max_drawdown"]),
-        "curve": curve, **{f"likely_{k}": v for k, v in likely.items()}}))
+        "curve": curve, **{f"likely_{k}": v for k, v in likely.items()}, "stamp": _stamp(), "bad_times": bad}))
     con.commit()
+
+
+def _stamp() -> str:
+    from trend_bot import runs
+
+    return runs.current_stamp()
+
+
+def bad_times(con: sqlite3.Connection) -> list[str]:
+    """Plain sentences on the tested portfolio's bad stretches, next to the index fund's."""
+    from trend_bot import risk
+
+    raw = get_meta(con, "ideas_backtest")
+    bad = json.loads(raw).get("bad_times") if raw else None
+    if not bad:
+        return []
+    lines = risk.words(bad["portfolio"], "The portfolio")
+    spy = bad["spy"]
+    if lines and spy:
+        lines.append(f"For comparison, the S&P 500 index fund: longest time below a previous high "
+                     f"{risk.span(spy['recover_months'])}, worst months averaged {spy['worst_months']:+.1%}, and "
+                     f"{spy['without_best']:+.1%} a year without its 5 best months.")
+    return lines
 
 
 def growth_curve(con: sqlite3.Connection) -> pd.DataFrame | None:

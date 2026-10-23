@@ -63,6 +63,9 @@ def cmd_db(args: argparse.Namespace) -> int:
             counts = market_data.update_prices(con, period=args.period, batch_size=args.batch, pause=args.pause,
                                                retry_failed=args.retry_failed, limit=args.limit,
                                                backup=market_data.stooq_download)
+            from trend_bot import runs
+
+            runs.note("prices", counts)
             print(f"[prices] new {counts['new']:,}, updated {counts['updated']:,}, "
                   f"reloaded {counts['reloaded']:,}, no data {counts['failed']:,}"
                   + (f", filled from the backup source {counts['backup']:,}" if counts.get("backup") else ""))
@@ -248,7 +251,8 @@ def cmd_price_check(args: argparse.Namespace) -> int:
         print(f"[prices] Stooq did not answer: {e}")
         return 1
     if df.empty:
-        print(f"[prices] Stooq answered but had no data for {args.ticker}")
+        print(f"[prices] Stooq answered but had no data for {args.ticker}. It said: "
+              f"{market_data.LAST_STOOQ_ANSWER or '(nothing)'}")
         return 1
     print(f"[prices] Stooq: {len(df)} days of {args.ticker}, last {df.index[-1]:%Y-%m-%d} close {df['Close'].iloc[-1]:,.2f}")
     if Path(args.db).exists():

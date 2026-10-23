@@ -227,7 +227,9 @@ def summarize(monthly: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         vol = r.std() * np.sqrt(12)
         cagr = eq.iloc[-1] ** (1 / years) - 1
         rows.append({"portfolio": col, "cagr": cagr, "volatility": vol,
-                     "max_drawdown": (eq / eq.cummax() - 1).min(),
+                     # The money put in at the start counts as the first high: a strategy that loses from
+                     # day one has fallen from there (the bookkeeping test caught this being skipped).
+                     "max_drawdown": (eq / eq.cummax().clip(lower=1.0) - 1).min(),
                      "return_per_risk": cagr / vol if vol else np.nan, "total": eq.iloc[-1] - 1})
     return pd.DataFrame(rows).set_index("portfolio")
 

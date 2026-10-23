@@ -78,7 +78,7 @@ def digest(con, problems: list[str], flag_days: int = 30, change_days: int = 35)
                     or ["None."]))
     note = ideas.backtest_note(con)
     if note:
-        out.append(("What 20 years of testing says", [note]))
+        out.append(("What 20 years of testing says", [note, *ideas.bad_times(con)]))
     out.append(("Bot health", problems or ["All fine."]))
     return [("In short", in_short(out, problems))] + out
 
@@ -153,6 +153,10 @@ def build(cfg: dict, summary, report: Path | None, today: dt.date | None = None,
     footer = ["The full report with charts is attached: open it in your browser." if report
               else "No report file was made tonight.",
               "Past patterns, not certainties; not financial advice."]
+    from trend_bot import runs
+
+    if runs.current_stamp():
+        footer.append(f"Made by: {runs.current_stamp()}")
     msg.set_content(_text(sections) + "\n\n" + "\n".join(footer))
     msg.add_alternative(_html(sections, footer, chart_title if chart else None), subtype="html")
     if chart:

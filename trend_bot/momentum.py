@@ -92,7 +92,7 @@ def stats(monthly: pd.DataFrame, columns: list[str], base: str = "all") -> pd.Da
         rows.append({
             "portfolio": col, "cagr": equity.iloc[-1] ** (1 / years) - 1 if years else np.nan,
             "volatility": r.std() * np.sqrt(MONTHS),
-            "max_drawdown": (equity / equity.cummax() - 1).min(),
+            "max_drawdown": (equity / equity.cummax().clip(lower=1.0) - 1).min(),   # the start counts as a high
             "beat_all_months": (r > monthly.loc[r.index, base]).mean() if col != base else np.nan,
             "total": equity.iloc[-1] - 1,
         })

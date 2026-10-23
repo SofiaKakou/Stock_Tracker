@@ -171,6 +171,8 @@ def _glance_section(con: sqlite3.Connection, esc) -> list[str]:
         parts += [f"<h3>What $10,000 would have become in testing ({curve.index[0]:%Y}–{curve.index[-1]:%Y})</h3>",
                   charts.growth_svg(curve),
                   f'<p class="explain">{esc(ideas.backtest_note(con))}</p>',
+                  *([f'<p class="explain"><b>The bad times:</b> {esc(" ".join(ideas.bad_times(con)))}</p>']
+                    if ideas.bad_times(con) else []),
                   '<p class="note">A test on past data, after trading costs, always invested. The line is drawn on '
                   "a scale where equal % moves look equal. The real record since the portfolio started is the "
                   "numbers above.</p>"]
@@ -272,6 +274,31 @@ def _outlook(con: sqlite3.Connection, esc) -> list[str]:
             "A starting point for your own research, not a buy list.</p>",
             _table(heads, rows(preds.head(10)), left={0, 4}),
             f'<p class="note"><b>How reliable is this?</b> {esc(note)} Learned from {esc(trained_on)}.</p>']
+
+
+def _history_section(con: sqlite3.Connection, esc) -> list[str]:
+    """The logbook: the last runs, what they did, and the code and data they used."""
+    from trend_bot import runs
+
+    rows = runs.history(con, limit=15)
+    if not rows:
+        return []
+    def did(r):
+        n = r["notes"]
+        if "stocks_ranked" in n:
+            return f"{n['stocks_ranked']:,} stocks ranked"
+        if "prices" in n and isinstance(n["prices"], dict):
+            p = n["prices"]
+            return f"prices: {p.get('updated', 0):,} updated, {p.get('failed', 0):,} missing"
+        return ""
+    body = [[esc(r["started"].replace("T", " ")[:16]), esc(r["command"]),
+             "✅" if r["ok"] else f'❌ {esc((r["error"] or "failed")[:60])}', esc(did(r)),
+             f"{r['seconds'] / 60:.0f} min" if r["seconds"] and r["seconds"] >= 60 else f"{r['seconds'] or 0:.0f} s",
+             esc(r["code"] or ""), esc(r["data"].get("id") or "")] for r in rows]
+    return ["<h2>📒 Logbook: the last runs</h2>",
+            '<p class="explain">Every run leaves a line. The code and data columns are fingerprints: two results '
+            "with the same ones came from the same code and the same data.</p>",
+            _table(["Started (UTC)", "What", "Result", "Did", "Took", "Code", "Data"], body, left={0, 1, 2, 3})]
 
 
 def _start_here(con: sqlite3.Connection, esc) -> list[str]:
@@ -416,7 +443,11 @@ def build_report(con: sqlite3.Connection, strategy: Strategy, benchmark: str = "
         parts.append(f'<p class="note">Since {perf["date"].min()}. For new downtrends and model sells, a negative return '
                      "means the sell signal was right. Picks need months before these numbers mean much.</p>")
 
+    parts += _history_section(con, esc)
     parts.append("</details>")
+    from trend_bot import runs
+
+    parts.append(f'<p class="note">Made by: {esc(runs.current_stamp() or "trend_bot")}</p>')
     parts.append(f'<p class="note">Generated {dt.datetime.now():%Y-%m-%d %H:%M} by trend_bot. Past patterns, not '
                  "certainties. Not financial advice.</p>")
     return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"

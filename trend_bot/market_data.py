@@ -190,6 +190,7 @@ def yahoo_download(tickers: list[str], start: str | None = None, period: str | N
 STOOQ_URL = "https://stooq.com/q/d/l/?s={symbol}&d1={start}&i=d"
 BACKUP_LIMIT = 300        # stocks per run: Stooq is a small free service, so be gentle
 BACKUP_MATCH = 0.02       # Stooq's close on our last stored day must be within 2% of ours
+LAST_STOOQ_ANSWER = ""    # what Stooq said when it sent no prices (shown by price-check)
 
 
 def stooq_symbol(ticker: str) -> str:
@@ -207,7 +208,9 @@ def stooq_download(ticker: str, start: str) -> pd.DataFrame:
     resp.raise_for_status()
     text = resp.text.strip()
     if not text.lower().startswith("date"):
-        return pd.DataFrame()   # "No data" or an error page
+        global LAST_STOOQ_ANSWER
+        LAST_STOOQ_ANSWER = " ".join(text.split())[:200]
+        return pd.DataFrame()   # "No data", a limit or an error page
     df = pd.read_csv(io.StringIO(text), parse_dates=["Date"]).set_index("Date")
     return df[[c for c in ("Open", "High", "Low", "Close", "Volume") if c in df]].dropna(subset=["Close"])
 
