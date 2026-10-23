@@ -103,6 +103,22 @@ jobs:
           ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
         run: python -m trend_bot paper --discord || echo "the demo account step failed" >> reports/problems.txt
 
+      # Both demo accounts' history (the report's chart) and, on Fridays, the week in one message.
+      - name: Restore day-trading results
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: daytrade.json
+          key: daytrade-state-${{ github.run_id }}
+          restore-keys: daytrade-state-
+
+      - name: Demo accounts over time
+        env:
+          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+          ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+          ALPACA_DAY_KEY_ID: ${{ secrets.ALPACA_DAY_KEY_ID }}
+          ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
+        run: python -m trend_bot accounts --weekly --discord || echo "the demo accounts' history failed" >> reports/problems.txt
+
       - name: Report
         run: |
           python -m trend_bot report

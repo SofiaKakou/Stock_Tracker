@@ -105,3 +105,26 @@ def test_text_names_what_passed():
          "opening_range": {"days": 0}, "gap_fade": {"days": 0}}
     out = intraday.text(r, "iex", "2016-01-04", "2026-10-22")
     assert "PASSES" in out and "Passed: Market's last half hour" in out and "IEX only" in out
+
+
+def test_new_patterns_and_filters_on_made_up_days():
+    rng = np.random.default_rng(3)
+    days = [str(d.date()) for d in pd.bdate_range("2019-01-01", "2021-12-31")]
+    df = bars_frame(days, ["SPY", "AAA", "BBB"], rng, momentum=0.002, noise=0.01)
+    drive, rev = intraday.opening_drive(df), intraday.eod_reversal(df, move=0.01)
+    assert len(drive) > 100 and set(drive["symbol"]) <= {"AAA", "BBB"} and len(rev) > 10
+    earnings = {("AAA", days[300]), ("BBB", days[301])}
+    f = intraday.filters(df, earnings, draws=20)
+    assert set(f) >= {"intraday_momentum", "opening_drive"}
+    assert "earnings days" in f["opening_drive"] and "earnings days" not in f["intraday_momentum"]
+    assert "nervous market" in f["intraday_momentum"]
+    assert "Filters" in intraday.filters_text(f)
+
+
+def test_earnings_dates_after_the_close_count_for_the_next_day(tmp_path):
+    con = intraday.connect(tmp_path / "i.db")
+    stamps = {"AAA": [pd.Timestamp("2024-01-25 16:05", tz="America/New_York")],      # after the close: Friday
+              "BBB": [pd.Timestamp("2024-01-25 07:00", tz="America/New_York")]}      # before the open: same day
+    got = intraday.earnings_days(con, ["SPY", "AAA", "BBB"], fetch=lambda s: stamps[s], log=lambda *_: None)
+    assert got == {("AAA", "2024-01-26"), ("BBB", "2024-01-25")}
+    assert intraday.earnings_days(con, ["AAA"], fetch=lambda s: 1 / 0) == got   # kept, not fetched again

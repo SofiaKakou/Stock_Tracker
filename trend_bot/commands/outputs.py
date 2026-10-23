@@ -281,9 +281,9 @@ def cmd_send_email(args: argparse.Namespace) -> int:
     if not cfg:
         print("Email isn't set up (EMAIL_USER / EMAIL_APP_PASSWORD); skipped.")
         return 0
-    summary, chart, title = [], None, None
+    summary, chart, title, demo = [], None, None, None
     if Path(args.db).exists():
-        from trend_bot import charts, ideas
+        from trend_bot import accounts, charts, ideas
 
         with closing(db.connect(args.db)) as con:
             problems = health.check(con, failed_steps=health.read_problems_file(args.problems))
@@ -292,8 +292,9 @@ def cmd_send_email(args: argparse.Namespace) -> int:
             if curve is not None:
                 chart = charts.growth_png(curve)
                 title = f"What $10,000 would have become in testing ({curve.index[0]:%Y}–{curve.index[-1]:%Y})"
+            demo = accounts.chart_png(accounts.load(con))
     report = Path(args.path)
-    msg = email_report.build(cfg, summary, report if report.exists() else None, chart=chart,
+    msg = email_report.build(cfg, summary, report if report.exists() else None, chart=chart, demo_chart=demo,
                              **({"chart_title": title} if title else {}))
     if args.dry_run:
         print(msg)
@@ -377,6 +378,32 @@ def cmd_lookahead_combine(args: argparse.Namespace) -> int:
     print(f"Look-ahead check of {len(results)} months, checked in parallel:")
     print(lookahead.text(results))
     return 0 if lookahead.verdict(results)[0] else 1
+
+
+def cmd_accounts(args: argparse.Namespace) -> int:
+    """Both demo accounts' history (for the report's chart); with --weekly on Fridays, the week's summary."""
+    import datetime as dt
+    import json
+
+    from trend_bot import accounts, alerts, daytrade, db, ideas, paper
+
+    monthly, day = paper.Paper.from_env(), daytrade.DayBroker.from_env()
+    if monthly is None and day is None:
+        print("No demo account is set up; skipped.")
+        return 0
+    with closing(db.connect(args.db)) as con:
+        hist = accounts.collect(con, monthly, day)
+        live = ideas.live_line(con)
+    for name, h in hist.items():
+        print(f"[accounts] {name}: {len(h['values'])} days, last {h['values'][-1]:,.2f}")
+    today = dt.date.today()
+    if args.weekly and (today.weekday() == 4 or args.force):
+        state = json.loads(Path(args.day_state).read_text()) if Path(args.day_state).exists() else {}
+        e = accounts.weekly(hist, state, today, live)
+        print(e["description"].replace("**", ""))
+        if args.discord and alerts.load_webhook():
+            alerts.send_with_image(alerts.load_webhook(), e, accounts.chart_png(hist))
+    return 0
 
 
 def cmd_notify(args: argparse.Namespace) -> int:

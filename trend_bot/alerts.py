@@ -216,6 +216,17 @@ def send(webhook: str, payload: dict, timeout: float = 15) -> None:
         raise RuntimeError(f"Discord returned {resp.status_code}: {resp.text[:200]}")
 
 
+def send_with_image(webhook: str, embed: dict, png: bytes | None, name: str = "accounts.png", timeout: float = 60) -> None:
+    """An embed with a PNG attached and shown inside it (the embed refers to attachment://<name>)."""
+    if png is None:
+        embed = {k: v for k, v in embed.items() if k != "image"}
+        return send(webhook, {"username": "Trend Bot", "embeds": [embed]}, timeout)
+    resp = requests.post(webhook, data={"payload_json": json.dumps({"username": "Trend Bot", "embeds": [embed]})},
+                         files={"files[0]": (name, png, "image/png")}, timeout=timeout)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Discord returned {resp.status_code}: {resp.text[:200]}")
+
+
 def send_file(webhook: str, path: str | Path, message: str = "", timeout: float = 60) -> None:
     """Post a file (e.g. the HTML report) to the channel as an attachment."""
     path = Path(path)

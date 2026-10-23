@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS bars (
     PRIMARY KEY (symbol, t)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS earnings (symbol TEXT NOT NULL, date TEXT NOT NULL,   -- the trading day it moved the stock
+    PRIMARY KEY (symbol, date)) WITHOUT ROWID;
 """
 
 
@@ -217,10 +219,97 @@ def gap_fade(df: pd.DataFrame, gap: float = GAP) -> pd.DataFrame:
                          "cost": COST["stock"]})
 
 
-STRATEGIES = {"intraday_momentum": intraday_momentum, "opening_range": opening_range, "gap_fade": gap_fade}
+def opening_drive(df: pd.DataFrame) -> pd.DataFrame:
+    """The first half hour's direction carries on for the next hour: in at 10:00, out at 11:00 (stocks)."""
+    stocks = df[~df["symbol"].isin(ETFS)]
+    opn, close = _grid(stocks, "open"), _grid(stocks, "close")
+    idx = opn.index.intersection(close.index)
+    opn, close = opn.loc[idx], close.loc[idx]
+    first = close[0] / opn[0] - 1
+    ret = np.sign(first) * (close[2] / opn[1] - 1)
+    keep = first.abs() > 0.005                                 # only a clear first half hour (over 0.5%)
+    return pd.DataFrame({"date": idx.get_level_values("date")[keep], "symbol": idx.get_level_values("symbol")[keep],
+                         "ret": ret[keep].to_numpy(), "cost": COST["stock"]})
+
+
+def eod_reversal(df: pd.DataFrame, move: float = GAP) -> pd.DataFrame:
+    """A stock that moved more than `move` from the open to 15:30 gives some back in the last half hour."""
+    stocks = df[~df["symbol"].isin(ETFS)]
+    opn, close = _grid(stocks, "open"), _grid(stocks, "close")
+    idx = opn.index.intersection(close.index)
+    opn, close = opn.loc[idx], close.loc[idx]
+    day = opn[12] / opn[0] - 1
+    keep = day.abs() > move
+    ret = -np.sign(day) * (close[12] / opn[12] - 1)
+    return pd.DataFrame({"date": idx.get_level_values("date")[keep], "symbol": idx.get_level_values("symbol")[keep],
+                         "ret": ret[keep].to_numpy(), "cost": COST["stock"]})
+
+
+STRATEGIES = {"intraday_momentum": intraday_momentum, "opening_range": opening_range, "gap_fade": gap_fade,
+              "opening_drive": opening_drive, "eod_reversal": eod_reversal}
 NAMES = {"intraday_momentum": "Market's last half hour follows its first",
          "opening_range": "Breakout from the first half hour's range",
-         "gap_fade": "Fade big opening gaps"}
+         "gap_fade": "Fade big opening gaps",
+         "opening_drive": "First half hour's direction carries on (new, tested only)",
+         "eod_reversal": "Big daily movers give some back at the end (new, tested only)"}
+LIVE = {"intraday_momentum", "opening_range", "gap_fade"}    # the ones the day-trading account trades
+
+
+# --- Filters: does a pattern work better on some days? -----------------------------------------
+
+def earnings_days(con: sqlite3.Connection, symbols: list[str], fetch=None, log=print) -> set[tuple[str, str]]:
+    """(symbol, trading day the report hit the price) for each earnings report, from Yahoo (kept in the
+    database; fetched once). Reports after the close count for the next trading day."""
+    have = {s for (s,) in con.execute("SELECT DISTINCT symbol FROM earnings")}
+    todo = [s for s in symbols if s not in ETFS and s not in have]
+    if todo:
+        fetch = fetch or _yahoo_earnings
+        rows = []
+        for s in todo:
+            try:
+                for ts in fetch(s):
+                    t = pd.Timestamp(ts)
+                    t = t.tz_convert(NY) if t.tzinfo else t
+                    day = t.normalize() + (pd.offsets.BDay(1) if t.hour >= 16 else pd.Timedelta(0))
+                    rows.append((s, f"{day:%Y-%m-%d}"))
+            except Exception as e:  # noqa: BLE001 - one symbol missing just leaves it out of the filter
+                log(f"[intraday] no earnings dates for {s} ({str(e)[:60]})")
+        con.executemany("INSERT OR IGNORE INTO earnings VALUES (?, ?)", rows)
+        con.commit()
+    return {(s, d) for s, d in con.execute("SELECT symbol, date FROM earnings")}
+
+
+def _yahoo_earnings(symbol: str) -> list:
+    import yfinance as yf
+
+    df = yf.Ticker(symbol).get_earnings_dates(limit=60)
+    return list(df.index) if df is not None else []
+
+
+
+def nervous_days(df: pd.DataFrame) -> set[str]:
+    """Days the market's first half hour moved more than usual (bigger than the median of the previous
+    year's days; known by 10:00, so a filter could really use it)."""
+    d = _days(df[df["symbol"] == "SPY"]).dropna(subset=["prev_close"]).set_index("date").sort_index()
+    move = (d["close0"] / d["prev_close"] - 1).abs()
+    usual = move.rolling(250, min_periods=60).median().shift(1)
+    return set(move.index[move > usual])
+
+
+def filters(df: pd.DataFrame, earnings: set[tuple[str, str]] | None, draws: int = 200) -> dict[str, dict]:
+    """Each pattern on subsets of its own trades: earnings days vs other days, nervous vs calm markets."""
+    nervous = nervous_days(df)
+    out = {}
+    for name, f in STRATEGIES.items():
+        t = f(df)
+        if t.empty:
+            continue
+        parts = {"nervous market": t[t["date"].isin(nervous)], "calm market": t[~t["date"].isin(nervous)]}
+        if earnings and name != "intraday_momentum":          # the index funds have no earnings days
+            on = pd.Series([(s, d) in earnings for s, d in zip(t["symbol"], t["date"])], index=t.index)
+            parts.update({"earnings days": t[on], "other days": t[~on]})
+        out[name] = {k: evaluate(v, draws=draws) for k, v in parts.items()}
+    return out
 
 
 def evaluate(trades: pd.DataFrame, draws: int = 500, seed: int = 0) -> dict:
@@ -260,6 +349,23 @@ def verdict(r: dict) -> str:
 
 def study(df: pd.DataFrame) -> dict[str, dict]:
     return {name: evaluate(f(df)) for name, f in STRATEGIES.items()}
+
+
+def filters_text(f: dict[str, dict]) -> str:
+    if not f:
+        return ""
+    lines = ["", "Filters (each pattern on part of its own trades; a filter is worth using only if one side "
+                 "passes and the other doesn't):"]
+    for name, parts in f.items():
+        lines.append(f"  {NAMES[name]}:")
+        for k, r in parts.items():
+            if not r.get("days"):
+                lines.append(f"    {k:<15} no trades")
+                continue
+            lines.append(f"    {k:<15} {r['trades']:>6,} trades, {r['per_trade']:+.3%} a trade, both halves "
+                         f"{'+' if r['early'] > 0 and r['late'] > 0 else '–'}, luck {r['luck']:.0%} → "
+                         f"{'passes' if verdict(r).startswith('PASSES') else 'no'}")
+    return "\n".join(lines)
 
 
 def text(results: dict[str, dict], feed: str, first: str, last: str) -> str:
