@@ -344,6 +344,31 @@ def _hold_returns(df: pd.DataFrame, score: pd.Series, hold: int, buffer: int, co
     return pd.Series(out, dtype=float)
 
 
+def next_morning(record: list[dict], prices: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Buying at the month-end close (what the tests assume) vs the next morning's open (what you can
+    really do after the evening message), for the same holdings each month.
+
+    record: [{"month", "held"}] from _hold_returns; prices: {ticker: adjusted [Open, Close]}.
+    Returns per month: [close, morning] (average return of the holdings each way)."""
+    rows = {}
+    for r, nxt in zip(record, record[1:]):
+        a, b = r["month"], nxt["month"]
+        close, morning = [], []
+        for t in r["held"]:
+            p = prices.get(t)
+            if p is None or p.empty:
+                continue
+            idx = p.index
+            i, j = idx.searchsorted(a, side="right") - 1, idx.searchsorted(b, side="right") - 1
+            if i < 0 or j <= i or j + 1 >= len(idx) or i + 1 >= len(idx):
+                continue
+            close.append(p["Close"].iloc[j] / p["Close"].iloc[i] - 1)
+            morning.append(p["Open"].iloc[j + 1] / p["Open"].iloc[i + 1] - 1)
+        if close:
+            rows[b] = {"close": float(np.mean(close)), "morning": float(np.mean(morning))}
+    return pd.DataFrame(rows).T
+
+
 def largest(df: pd.DataFrame, n: int = LARGE) -> pd.Series:
     """True for rows among the `n` largest companies (market value) of their month."""
     if "market_cap" not in df or df["market_cap"].isna().all():
