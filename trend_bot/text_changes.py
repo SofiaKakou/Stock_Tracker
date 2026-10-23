@@ -189,12 +189,18 @@ def to_fetch(con: sqlite3.Connection, ciks: set[int] | None = None, since_year: 
     return df[df["cik"].isin(ciks)].reset_index(drop=True) if ciks is not None else df
 
 
-def update(con: sqlite3.Connection, limit: int = 2500, ciks: set[int] | None = None,
-           fetch: Callable[[str], bytes] | None = None, log: Callable[[str], None] = print) -> int:
-    """Read up to `limit` new reports from the SEC and store their fingerprints. Returns how many."""
+REPORT_GAP = 0.4      # seconds between report downloads: gentler than other SEC requests (reports are big, and many)
+MAX_MINUTES = 45      # stop reading after this long, so a long run saves its progress before anything can go wrong
+
+
+def update(con: sqlite3.Connection, limit: int = 1500, ciks: set[int] | None = None,
+           fetch: Callable[[str], bytes] | None = None, log: Callable[[str], None] = print,
+           max_minutes: float = MAX_MINUTES) -> int:
+    """Read up to `limit` new reports from the SEC (for at most `max_minutes`) and store their
+    fingerprints. Returns how many."""
     import requests
 
-    fetch = fetch or insiders._get
+    fetch = fetch or (lambda url: insiders._get(url, gap=REPORT_GAP))
     todo = to_fetch(con, ciks).head(limit)
     if todo.empty:
         return 0
@@ -223,6 +229,9 @@ def update(con: sqlite3.Connection, limit: int = 2500, ciks: set[int] | None = N
             con.commit()
         if done % 500 == 0:
             log(f"[reports] {done:,}/{len(todo):,} ({time.time() - started:.0f}s)")
+        if time.time() - started > max_minutes * 60:
+            log(f"[reports] stopping after {max_minutes:g} min ({done:,} read); the next run continues")
+            break
     con.commit()
     return done
 

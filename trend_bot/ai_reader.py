@@ -137,6 +137,9 @@ def sample(con: sqlite3.Connection, n: int, seed: int = 7, since: str = SAMPLE_F
     # Same number from every quarter, so no single period dominates.
     per = max(1, -(-n // df["quarter"].nunique()))
     picked = df.groupby("quarter", group_keys=False).apply(lambda g: g.sample(min(len(g), per), random_state=seed))
+    if len(picked) < n:  # some quarters had fewer than their share: top up from the rest
+        rest = df.drop(picked.index)
+        picked = pd.concat([picked, rest.sample(min(n - len(picked), len(rest)), random_state=seed)])
     return picked.sample(min(n, len(picked)), random_state=seed).sort_values("filed").reset_index(drop=True)
 
 

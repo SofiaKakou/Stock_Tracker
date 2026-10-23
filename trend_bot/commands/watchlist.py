@@ -11,6 +11,7 @@ from contextlib import closing
 from pathlib import Path
 
 import pandas as pd
+import requests
 
 from trend_bot.backtest import run_backtest
 from trend_bot.strategy import Strategy
@@ -300,18 +301,24 @@ def cmd_alert(args: argparse.Namespace) -> int:
     if clusters:
         print("Insider buying clusters: " + ", ".join(clusters))
 
+    failed = 0
     if embeds:
         for payload in alerts.payloads(embeds):
             if args.dry_run:
                 print(json.dumps(payload, indent=2, default=str))
-            else:
+                continue
+            try:
                 alerts.send(webhook, payload)
+            except (RuntimeError, requests.RequestException) as e:  # one bad message shouldn't stop the rest
+                failed += 1
+                titles = ", ".join(str(e.get("title", "?")) for e in payload["embeds"])
+                print(f"Could not send ({titles}): {e}", file=sys.stderr)
         if not args.dry_run:
-            print(f"Sent {len(embeds)} message(s) to Discord.")
+            print(f"Sent {len(embeds)} message(s) to Discord" + (f"; {failed} batch(es) failed." if failed else "."))
 
     if not args.dry_run:
         alerts.save_state(args.state, new_state)
-    return 0
+    return 1 if failed else 0
 
 
 def cmd_news(args: argparse.Namespace) -> int:

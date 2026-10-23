@@ -45,7 +45,9 @@ def check(con: sqlite3.Connection, today: dt.date | None = None, failed_steps: l
 
     paused = get_meta(con, "sec_paused_until")
     if paused and paused > dt.datetime.now().isoformat():
-        problems.append(f"The SEC asked us to slow down: SEC downloads paused until {paused[:16].replace('T', ' ')} UTC.")
+        said = get_meta(con, "sec_last_refusal")
+        problems.append(f"The SEC asked us to slow down: SEC downloads paused until {paused[:16].replace('T', ' ')} UTC."
+                        + (f" ({said})" if said else ""))
 
     for key, label, limit in (("facts_updated", "Company financials", 10),
                               ("submissions_updated", "Industry codes and company fates (SEC bulk file)", 10),

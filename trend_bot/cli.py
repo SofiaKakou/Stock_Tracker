@@ -25,7 +25,7 @@ from trend_bot.commands.watchlist import (
     cmd_news,
     cmd_insiders,
 )
-from trend_bot.commands.data import cmd_db, cmd_screen
+from trend_bot.commands.data import cmd_db, cmd_screen, cmd_sec_check
 from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
@@ -135,11 +135,11 @@ def make_parser() -> argparse.ArgumentParser:
                      help="max company lookups per run for the one-time catch-ups (default 1500)")
     dbp.add_argument("--no-fundamentals", action="store_true", help="skip the weekly company-financials refresh")
     dbp.add_argument("--no-reports", action="store_true", help="skip reading annual/quarterly reports")
-    dbp.add_argument("--report-downloads", type=int, default=2500,
-                     help="max annual/quarterly reports to read per run (default 2500)")
+    dbp.add_argument("--report-downloads", type=int, default=1500,
+                     help="max annual/quarterly reports to read per run (default 1500; stops after 45 min either way)")
     dbp.add_argument("--no-short", action="store_true", help="skip the FINRA short selling data")
     dbp.add_argument("--ignore-sec-pause", action="store_true",
-                     help="try the SEC even if it asked us to slow down in the last 24 hours")
+                     help="try the SEC even if it asked us to slow down in the last 20 hours")
     dbp.add_argument("--insiders-all-companies", action="store_true",
                      help="read recent filings for every company, not just ones the screen can show")
     only = dbp.add_mutually_exclusive_group()
@@ -236,6 +236,10 @@ def make_parser() -> argparse.ArgumentParser:
     hp.add_argument("--job-status", help="the cloud run's status so far (success/failure)")
     hp.add_argument("--run-url", help="link to the cloud run, shown in the warning")
     hp.set_defaults(func=cmd_health)
+
+    sc2 = sub.add_parser("sec-check", help="one small SEC request: is the SEC still refusing us? (lifts the pause if not)")
+    sc2.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    sc2.set_defaults(func=cmd_sec_check)
 
     sg = sub.add_parser("send-guide", help="post GUIDE.md (how to read the bot's messages) to Discord")
     sg.add_argument("--path", default="GUIDE.md")

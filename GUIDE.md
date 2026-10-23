@@ -78,8 +78,9 @@ some look good by chance); 🔶 promising: the same but t between 2 and 3, watch
 ⏳ not enough history yet; ❌ not proven. A ✅ signal is only added if you say so.
 
 **⚠️ Bot health**: something is wrong with the bot itself, such as stale prices, a failed step,
-or the SEC asking it to slow down. It fixes itself on later runs in most cases; **silence means
-healthy**. "✅ all fine again" means it cleared.
+or the SEC asking it to slow down (the message quotes what the SEC said; SEC downloads then pause
+for 20 hours). It fixes itself on later runs in most cases; **silence means healthy**. "✅ all fine
+again" means it cleared.
 
 **📄 Daily report (HTML file)**: open it in your browser for everything above with charts.
 It opens with **📋 At a glance**: the portfolio to follow, how it's really doing vs the S&P 500,

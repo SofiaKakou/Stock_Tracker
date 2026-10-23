@@ -186,6 +186,7 @@ def test_sec_rate_limit_waits_then_continues(monkeypatch):
     class Resp:
         def __init__(self, code):
             self.status_code, self.content = code, b"ok"
+            self.text, self.headers = "<h1>Request Rate Threshold Exceeded</h1>", {"Retry-After": "600"}
 
         def raise_for_status(self):
             pass
@@ -196,8 +197,10 @@ def test_sec_rate_limit_waits_then_continues(monkeypatch):
     assert insiders._get("u2") == b"ok"  # two refusals, then success
     assert sleeps == [60, 180]
 
-    # Refused on the very first request: a User-Agent problem, reported right away.
+    # Refused on the very first request: a block (or a bad User-Agent), so no waiting.
     monkeypatch.setattr(insiders, "_ok_requests", 0)
-    monkeypatch.setattr(insiders.requests, "get", lambda *a, **k: Resp(403))
-    with pytest.raises(RuntimeError, match="SEC_USER_AGENT"):
+    monkeypatch.setattr(insiders.requests, "get", lambda *a, **k: Resp(429))
+    sleeps.clear()
+    with pytest.raises(insiders.SECLimited, match=r"very first one \(429, retry after 600s: Request Rate Threshold"):
         insiders._get("u3")
+    assert sleeps == []

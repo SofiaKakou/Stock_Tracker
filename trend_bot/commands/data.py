@@ -123,14 +123,22 @@ def cmd_db(args: argparse.Namespace) -> int:
                     _update_reports(con, args.report_downloads)
             except RuntimeError as e:
                 print(f"[insiders] stopped: {e}", file=sys.stderr)
-                if "limiting" in str(e):
-                    until = (dt.datetime.now() + dt.timedelta(hours=24)).isoformat(timespec="minutes")
+                from trend_bot import insiders
+
+                if isinstance(e, insiders.SECLimited) or "limiting" in str(e):
+                    # 20 h, not 24: the nightly start time drifts, and a 24 h pause ending just after the
+                    # next run starts would skip two nights. A blocked attempt now costs seconds, not minutes.
+                    until = (dt.datetime.now() + dt.timedelta(hours=SEC_PAUSE_HOURS)).isoformat(timespec="minutes")
                     db.set_meta(con, "sec_paused_until", until)
+                    db.set_meta(con, "sec_last_refusal", str(e)[:300])
                     con.commit()
                     print(f"[sec] pausing all SEC downloads until {until.replace('T', ' ')} "
                           "(use --ignore-sec-pause to try sooner)", file=sys.stderr)
                 return 1
     return 0
+
+
+SEC_PAUSE_HOURS = 20
 
 
 def _update_reports(con, limit: int) -> None:
@@ -181,4 +189,24 @@ def cmd_screen(args: argparse.Namespace) -> int:
     print(show(flips) if not flips.empty else "None.")
     print(f"\n== Insider buying clusters (2+ insiders within {args.cluster_days} days): {len(clusters)} ==")
     print(show(clusters.drop(columns=["name"])) if not clusters.empty else "None.")
+    return 0
+
+
+def cmd_sec_check(args: argparse.Namespace) -> int:
+    """One small request to the SEC, ignoring any pause: is it still refusing us, and how?
+    If it answers, the pause is lifted so the next nightly run tries again."""
+    from trend_bot import db, insiders
+
+    try:
+        data = insiders._get(insiders.TICKERS_URL)
+    except insiders.SECLimited as e:
+        print(f"[sec] still refused: {e}")
+        return 1
+    print(f"[sec] the SEC answered normally ({len(data):,} bytes)")
+    if Path(args.db).exists():
+        with closing(db.connect(args.db)) as con:
+            if db.get_meta(con, "sec_paused_until"):
+                db.set_meta(con, "sec_paused_until", "")
+                con.commit()
+                print("[sec] pause lifted: the next run downloads from the SEC again")
     return 0
