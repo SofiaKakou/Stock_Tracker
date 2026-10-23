@@ -47,12 +47,14 @@ def digest(con, problems: list[str], flag_days: int = 30, change_days: int = 35)
     """The essentials for the email, as (heading, lines) sections; a line is text or a table row (list)."""
     import pandas as pd
 
-    from trend_bot import events, ideas
+    from trend_bot import events, ideas, paper
 
     out = []
     live = ideas.live_line(con)
     if live:
-        out.append(("How the portfolio is really doing", [plain(live).removeprefix("📈 ")]))
+        demo = paper.line(con)
+        out.append(("How the portfolio is really doing", [plain(live).removeprefix("📈 ")]
+                    + ([plain(demo).removeprefix("🧪 ")] if demo else [])))
     port = ideas.load_portfolio(con)
     if port and (dt.date.today() - dt.date.fromisoformat(port["date"][:10])).days <= change_days:
         lines = [f"Buy {b['ticker']} ({b.get('why') or 'top ranked'})" for b in port["buys"]]

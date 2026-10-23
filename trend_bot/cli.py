@@ -29,6 +29,7 @@ from trend_bot.commands.data import cmd_db, cmd_monthly_due, cmd_screen, cmd_sec
 from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
+    cmd_paper,
     cmd_send_email,
     cmd_why,
     cmd_track,
@@ -266,6 +267,12 @@ def make_parser() -> argparse.ArgumentParser:
     em.add_argument("--problems", help="file listing steps that didn't finish (one per line)")
     em.add_argument("--dry-run", action="store_true", help="print the email instead of sending it")
     em.set_defaults(func=cmd_send_email)
+
+    pp = sub.add_parser("paper", help="demo account: follow the portfolio on Alpaca paper trading (fake money)")
+    pp.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    pp.add_argument("--dry-run", action="store_true", help="show the orders it would send, send nothing")
+    pp.add_argument("--discord", action="store_true", help="post a message when it trades")
+    pp.set_defaults(func=cmd_paper)
 
     sg = sub.add_parser("send-guide", help="post GUIDE.md (how to read the bot's messages) to Discord")
     sg.add_argument("--path", default="GUIDE.md")

@@ -191,3 +191,15 @@ data from FINRA. All free.
   it, start a Research run with "email-test".
 - **Report as a web page**: see the end of `.github/workflows/nightly.yml`. The page is public,
   like this repository.
+- **Demo account** (fake money, real prices): the bot follows its monthly portfolio on Alpaca's
+  free paper-trading account, so you can see how its findings do with real orders. It can't touch
+  real money: it only talks to Alpaca's paper-trading server, where real-money keys don't work.
+  1. Sign up at alpaca.markets (free) and open the **Paper Trading** account (it starts with $100,000 of fake money).
+  2. In the paper account's dashboard, generate an API key.
+  3. Add two secrets: `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY`.
+
+  From the next monthly update on, the nightly run sends the buys and sells (whole shares, filled at
+  the next morning's open) and posts "🧪 Demo account: orders sent". The report and email show the
+  account's value since its first trades vs the S&P 500. Expect it to trail the tests a little:
+  the tests buy at the close, the account the next morning (`study ideas` measures that gap over
+  20 years). To see the orders without sending them: `python -m trend_bot paper --dry-run`.
