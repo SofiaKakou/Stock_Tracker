@@ -24,6 +24,10 @@ concurrency:
   group: nightly-market-run    # shares the database with the nightly run, so never at the same time
   cancel-in-progress: false
 
+# Least privilege: the workflow's token can only read the code (jobs that need more say so).
+permissions:
+  contents: read
+
 jobs:
   read:
     runs-on: ubuntu-latest
@@ -35,9 +39,8 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -46,7 +49,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore database
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             market.db
@@ -69,7 +72,7 @@ jobs:
 
       - name: Save database
         if: always() && inputs.action != 'summary'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             market.db
@@ -78,7 +81,7 @@ jobs:
 
       - name: Keep the results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ai-reader-${{ github.run_id }}
           path: reports/ai-reader.txt

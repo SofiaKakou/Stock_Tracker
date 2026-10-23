@@ -187,6 +187,20 @@ def sync(con: sqlite3.Connection, client: Paper, today: dt.date | None = None, d
     equity = float(acct["equity"])
     out = {"traded": [], "failed": [], "left_out": [], "skipped": ""}
     port = ideas.load_portfolio(con)
+    from trend_bot import safety
+
+    keep_out = {symbol(t) for t in safety.excluded(con, today)}
+    held_now = {p["symbol"] for p in client.positions()} if keep_out else set()
+    for s in sorted(keep_out & held_now):   # emergency exit: sold now, not at the monthly update
+        if dry_run:
+            out.setdefault("planned", []).append((s, "close", 0))
+            continue
+        try:
+            client.close(s)
+            out["traded"].append((s, "close", 0))
+            log(f"[demo] emergency exit: {s} sold")
+        except PaperError as e:
+            out["failed"].append((s, "close", 0, str(e)))
     if not port:
         out["skipped"] = "no portfolio to follow yet"
     elif get_meta(con, "paper_synced") == port["date"]:
@@ -194,12 +208,12 @@ def sync(con: sqlite3.Connection, client: Paper, today: dt.date | None = None, d
     elif client.open_orders():
         out["skipped"] = "earlier orders haven't filled yet (they fill at the next open)"
     else:
-        targets = [p["ticker"] for p in port["buys"] + port["holds"]]
-        holdings = {p["symbol"]: float(p["qty"]) for p in client.positions()}
+        targets = [p["ticker"] for p in port["buys"] + port["holds"] if symbol(p["ticker"]) not in keep_out]
+        holdings = {p["symbol"]: float(p["qty"]) for p in client.positions() if p["symbol"] not in keep_out}
         prices = _prices(con, targets)
         orders = plan(targets, prices, holdings, equity, left_out=out["left_out"])
         if dry_run:
-            return {**out, "planned": orders, "status": {"equity": equity}}
+            return {**out, "planned": out.get("planned", []) + orders, "status": {"equity": equity}}
         ref = {symbol(t): p for t, p in prices.items()}
         now = dt.datetime.now(dt.timezone.utc)
         stamp = now.strftime("%Y%m%d%H%M%S")
@@ -227,7 +241,7 @@ def sync(con: sqlite3.Connection, client: Paper, today: dt.date | None = None, d
             + (" (will try again when the market is open)" if out.get("retry") else ""))
 
     if dry_run:
-        return {**out, "planned": [], "status": {"equity": equity}}
+        return {**out, "planned": out.get("planned", []), "status": {"equity": equity}}
     status = json.loads(get_meta(con, "paper_status") or "{}")
     if out["traded"] and "start_date" not in status:
         status.update(start_date=today.isoformat(), start_equity=equity)

@@ -1,0 +1,50 @@
+# Day trading safety net (independent of the trading jobs): closes day-trading positions that should
+# already be closed, and tells you. Runs just before the close (in case the trading job died before its
+# closing orders), after the close and before the next open (anything left overnight). Each time has a
+# summer and a winter schedule; outside its window the command does nothing.
+
+name: Day trading safety net
+
+on:
+  schedule:
+    - cron: "52 19 * * 1-5"   # 15:52 New York summer time / 14:52 winter (outside the window: no-op)
+    - cron: "52 20 * * 1-5"   # 15:52 winter time
+    - cron: "6 20 * * 1-5"    # 16:06 summer
+    - cron: "6 21 * * 1-5"    # 16:06 winter
+    - cron: "20 13 * * 1-5"   # 9:20 summer: anything left overnight
+    - cron: "20 14 * * 1-5"   # 9:20 winter
+  workflow_dispatch: {}
+
+concurrency:
+  group: day-trading-safety     # not the trading jobs' group: it must run even if one of them is stuck
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ALPACA_DAY_KEY_ID: ${{ secrets.ALPACA_DAY_KEY_ID }}
+      ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Close anything left open
+        run: python -m trend_bot daytrade --phase safety --discord
+
+      - name: Tell me if this failed
+        if: failure()
+        run: |
+          python -m trend_bot notify --title "⚠️ Day trading safety net failed" \
+            --text "The day trading safety net job stopped with an error (fake money). The safety net closes any day-trading positions left open. Log: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true

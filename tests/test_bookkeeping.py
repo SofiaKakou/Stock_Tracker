@@ -67,7 +67,8 @@ def test_headline_numbers_match_the_slow_reference_versions():
 
 # --- The portfolio you'd follow is the portfolio that was tested --------------------------------
 
-def test_paper_portfolio_matches_the_historical_test_month_by_month(tmp_path):
+def test_paper_portfolio_matches_the_historical_test_month_by_month(tmp_path, monkeypatch):
+    monkeypatch.setattr(ideas, "ALWAYS_CAP", False)   # the tested (uncapped) rule; the cap is tested in test_ideas
     df = panel_with_edge(months=14, n=150)
     record = []
     ideas._hold_returns(df.dropna(subset=["ret"]).reset_index(drop=True), ideas.scores(df.dropna(subset=["ret"])

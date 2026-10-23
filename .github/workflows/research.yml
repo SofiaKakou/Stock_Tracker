@@ -25,6 +25,10 @@ concurrency:
   group: nightly-market-run    # shares the database with the nightly run, so never at the same time
   cancel-in-progress: false
 
+# Least privilege: the workflow's token can only read the code (jobs that need more say so).
+permissions:
+  contents: read
+
 jobs:
   study:
     runs-on: ubuntu-latest
@@ -40,9 +44,8 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
@@ -51,7 +54,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Restore database
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             market.db
@@ -62,7 +65,7 @@ jobs:
       # Day-trading research keeps its half-hour bars in their own small database (~100 MB).
       - name: Restore intraday bars
         if: inputs.study == 'intraday'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: intraday.db
           key: intraday-db-${{ github.run_id }}
@@ -70,7 +73,7 @@ jobs:
 
       - name: Restore day-trading results (measured costs)
         if: inputs.study == 'intraday'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: daytrade.json
           key: daytrade-state-${{ github.run_id }}
@@ -122,7 +125,7 @@ jobs:
       # and pushed main's copy out once (they're for trying things, and main can't read them anyway).
       - name: Save database
         if: always() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             market.db
@@ -131,14 +134,14 @@ jobs:
 
       - name: Save intraday bars
         if: always() && inputs.study == 'intraday' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: intraday.db
           key: intraday-db-${{ github.run_id }}
 
       - name: Export the database
         if: inputs.refresh == 'export-db'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: market-db-export
           path: |
@@ -148,7 +151,7 @@ jobs:
 
       - name: Keep the results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: study-${{ inputs.study }}-${{ github.run_id }}
           path: reports/study-${{ inputs.study }}.txt

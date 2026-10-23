@@ -200,7 +200,8 @@ def scores(df: pd.DataFrame, by_sector: bool = False, extra: bool = False, mom_w
     return ml.simple_mix(df, by_sector, extra, mom_weight=mom_weight).where(known >= MIN_SIGNALS)
 
 
-MAX_PER_INDUSTRY = 5  # at most this many of the top 20 from one industry (when the cap is used)
+MAX_PER_INDUSTRY = 5  # at most this many of the top 20 from one industry
+ALWAYS_CAP = True     # a safety rule for the portfolio to follow: always capped, whatever the test preferred
 
 
 def rebalance_capped(ranked: pd.Series, sectors: pd.Series, held: list[str], hold: int = 20, buffer: int = 40,
@@ -652,7 +653,7 @@ def update_portfolio(con: sqlite3.Connection, ranked: pd.DataFrame, date: str, w
     held = [t for (t,) in con.execute("SELECT ticker FROM ideas_holdings ORDER BY rank")]
     old = {t: (since, price) for t, since, price in
            con.execute("SELECT ticker, since, entry_price FROM ideas_holdings")}
-    if use_cap(con):
+    if use_cap(con) or ALWAYS_CAP:
         new, buys, sells = rebalance_capped(ranked["score"], ranked["sector"], held, hold, buffer)
     else:
         new, buys, sells = model.rebalance(ranked["score"], held, hold, buffer)

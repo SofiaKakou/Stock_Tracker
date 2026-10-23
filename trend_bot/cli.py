@@ -31,7 +31,9 @@ from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
     cmd_daytrade,
     cmd_lookahead_combine,
+    cmd_notify,
     cmd_paper,
+    cmd_safety,
     cmd_send_email,
     cmd_why,
     cmd_track,
@@ -273,7 +275,7 @@ def make_parser() -> argparse.ArgumentParser:
     em.set_defaults(func=cmd_send_email)
 
     dtp = sub.add_parser("daytrade", help="day-trading demo account (fake money, its own Alpaca paper account)")
-    dtp.add_argument("--phase", choices=["auto", "morning", "afternoon", "report"], default="auto",
+    dtp.add_argument("--phase", choices=["auto", "morning", "afternoon", "report", "safety"], default="auto",
                      help="auto: whichever part of the day it is now (for the schedule)")
     dtp.add_argument("--intraday-db", default="intraday.db", help="stocks to watch and the 10-year test results")
     dtp.add_argument("--state", default="daytrade.json", help="running totals since the first day")
@@ -284,6 +286,16 @@ def make_parser() -> argparse.ArgumentParser:
     lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")
     lc.add_argument("files", nargs="+", help="JSON files from study lookahead --json")
     lc.set_defaults(func=cmd_lookahead_combine)
+
+    nt = sub.add_parser("notify", help="post a short warning to Discord")
+    nt.add_argument("--title", required=True)
+    nt.add_argument("--text", required=True)
+    nt.set_defaults(func=cmd_notify)
+
+    sf = sub.add_parser("safety", help="nightly safety check of the portfolio's stocks (emergency exits, warnings)")
+    sf.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    sf.add_argument("--discord", action="store_true", help="post what it finds")
+    sf.set_defaults(func=cmd_safety)
 
     pp = sub.add_parser("paper", help="demo account: follow the portfolio on Alpaca paper trading (fake money)")
     pp.add_argument("--db", default="market.db", help="database file (default: market.db)")

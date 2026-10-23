@@ -39,6 +39,10 @@ MORNING_CHECKS = [dt.time(10, 30), dt.time(11, 0), dt.time(11, 30), dt.time(12, 
 AFTERNOON_CHECKS = [dt.time(12, 30), dt.time(13, 0), dt.time(13, 30), dt.time(14, 0), dt.time(14, 30),
                     dt.time(15, 0), dt.time(15, 30)]
 MOC_AT, FLAT_AT = dt.time(15, 45), dt.time(15, 58)
+STOP_LOSS = 0.05        # every position has a stop at the broker: out if it moves 5% against us
+DAILY_LOSS_LIMIT = 0.03  # the account down 3% on the day: close everything, no more trades today
+GUARD_EVERY = 300        # seconds between loss-limit checks while waiting
+STALE_MINUTES = 15       # no trade in a stock for this long (halted?): don't enter it
 FALLBACK_STOCKS = ["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AVGO", "AMD", "NFLX", "JPM", "COST",
                    "LLY", "UNH", "XOM", "BAC", "WMT", "ORCL", "CRM", "ADBE", "INTC", "QCOM", "MU", "PLTR", "COIN",
                    "UBER", "BA", "DIS", "PYPL", "SHOP", "SMCI", "MSTR", "GS", "CAT", "HD", "PEP", "KO", "MRK",
@@ -51,10 +55,19 @@ class DayBroker(Paper):
         key, secret = os.environ.get(KEY_ENV), os.environ.get(SECRET_ENV)
         return cls(key, secret) if key and secret else None
 
-    def order(self, symbol: str, qty: int, side: str, tag: str, tif: str = "day") -> dict:
-        return self._call("POST", "/orders", json={"symbol": symbol, "qty": str(qty), "side": side,
-                                                    "type": "market", "time_in_force": tif,
-                                                    "client_order_id": tag})
+    def order(self, symbol: str, qty: int, side: str, tag: str, tif: str = "day",
+              stop: float | None = None) -> dict:
+        body = {"symbol": symbol, "qty": str(qty), "side": side, "type": "market", "time_in_force": tif,
+                "client_order_id": tag}
+        if stop:   # a protective stop at the broker, placed with the entry (works even if our job stops)
+            body.update(order_class="oto", stop_loss={"stop_price": f"{stop:.2f}"})
+        return self._call("POST", "/orders", json=body)
+
+    def asset(self, symbol: str) -> dict:
+        return self._call("GET", f"/assets/{symbol}")
+
+    def cancel_all(self) -> None:
+        self._call("DELETE", "/orders")
 
     def orders_since(self, after: str, status: str = "all") -> list[dict]:
         return self._call("GET", "/orders", params={"status": status, "after": after, "limit": 500,
@@ -134,6 +147,9 @@ class Session:
         self.stocks = [s for s in symbols if s not in intraday.ETFS]
         self.utc0 = dt.datetime.combine(today, dt.time(9, 0), NY).astimezone(dt.timezone.utc)
         self.entries: list[dict] = []   # for the trade log: what was expected when each order went out
+        self.halted = False             # the daily loss limit was hit: no more trades today
+        self._assets: dict[str, dict] = {}
+        self._last_guard = None
 
     def at(self, t: dt.time) -> dt.datetime:
         return dt.datetime.combine(self.today, t, NY)
@@ -141,13 +157,60 @@ class Session:
     def wait_until(self, t: dt.time) -> None:
         while (left := (self.at(t) - self.now()).total_seconds()) > 0:
             self.sleep(min(left, 60))
+            if self._last_guard is None or (self.now() - self._last_guard).total_seconds() >= GUARD_EVERY:
+                self.guard()
+
+    def day_change(self) -> float:
+        a = self.b.account()
+        last = float(a.get("last_equity") or a["equity"])
+        return float(a["equity"]) / last - 1 if last else 0.0
+
+    def guard(self) -> bool:
+        """The daily loss limit: if the account is down DAILY_LOSS_LIMIT on the day, close everything and stop."""
+        self._last_guard = self.now()
+        if self.halted:
+            return True
+        change = self.day_change()
+        if change <= -DAILY_LOSS_LIMIT:
+            self.halted = True
+            self.b.cancel_all()
+            if self.b.positions():
+                self.b.close_all()
+            self.log(f"[day] daily loss limit: account {change:+.2%} today; everything closed, no more trades today")
+        return self.halted
+
+    def can_trade(self, sym: str, side: int, last_trade: dt.datetime | None = None) -> str:
+        """'' if the stock may be traded now, else why not (checked with the broker before each entry)."""
+        if sym not in self._assets:
+            try:
+                self._assets[sym] = self.b.asset(sym)
+            except PaperError:
+                self._assets[sym] = {}
+        a = self._assets[sym]
+        if not a.get("tradable") or a.get("status", "active") != "active":
+            return "not tradable"
+        if side < 0 and not a.get("shortable"):
+            return "can't be shorted"
+        if side < 0 and not (a.get("easy_to_borrow") or a.get("borrow_status") == "easy_to_borrow"):
+            return "hard to borrow"
+        if last_trade is not None and (self.now() - last_trade).total_seconds() > STALE_MINUTES * 60:
+            return "no recent trades (halted?)"
+        return ""
+
+    def last_trades(self, symbols: list[str]) -> dict[str, dt.datetime]:
+        """When each stock last traded (the end of its latest 1-minute bar)."""
+        bars = self._bars(symbols, "1Min", self.now() - dt.timedelta(minutes=STALE_MINUTES + 5))
+        return {s: dt.datetime.fromisoformat(b[-1]["t"].replace("Z", "+00:00")) + dt.timedelta(minutes=1)
+                for s, b in bars.items() if b}
 
     def today_orders(self) -> list[dict]:
-        return [o for o in self.b.orders_since(self.utc0.isoformat()) if
-                str(o.get("client_order_id", "")).startswith(f"td-{self.today:%Y%m%d}")]
+        """Everything this account did today (the account is only used by this bot). Entries carry a
+        td-<date> tag; a protective stop that fired is a separate order with the broker's own tag."""
+        return self.b.orders_since(self.utc0.isoformat())
 
     def traded(self) -> set[str]:
-        return {o["symbol"] for o in self.today_orders()}
+        tag = f"td-{self.today:%Y%m%d}"
+        return {o["symbol"] for o in self.today_orders() if str(o.get("client_order_id", "")).startswith(tag)}
 
     def budget(self) -> float:
         return float(self.b.account()["equity"]) * INVESTED / (STOCK_SLOTS + ETF_SLOTS)
@@ -157,20 +220,30 @@ class Session:
         if pattern in self.paused:
             self.log(f"[day] {pattern}: paused (worse live than its history); no trades")
             return 0
+        if self.guard():
+            return 0
         done = self.traded()
         used = len(done & set(self.stocks if pattern != "momentum" else self.etfs))
         each, sent = self.budget() * size_factor(self.share, pattern), 0
         room = float(self.b.account()["equity"]) * INVESTED - sum(
             abs(float(p.get("market_value") or 0)) for p in self.b.positions())
+        fresh = self.last_trades([s for s, _ in signals if s not in done])
+        stale_cutoff = self.now() - dt.timedelta(days=1)
         for sym, side in signals:
             if sym in done or used + sent >= slots or not prices.get(sym):
                 continue
             qty = shares(prices[sym], min(each, room))
             if not qty:
                 continue
+            why = self.can_trade(sym, side, fresh.get(sym, stale_cutoff))
+            if why:
+                self.log(f"[day] {pattern}: {sym} skipped ({why})")
+                continue
             room -= qty * prices[sym]
+            stop = prices[sym] * (1 - STOP_LOSS) if side > 0 else prices[sym] * (1 + STOP_LOSS)
             try:
-                self.b.order(sym, qty, "buy" if side > 0 else "sell", f"td-{self.today:%Y%m%d}-{pattern}-{sym}")
+                self.b.order(sym, qty, "buy" if side > 0 else "sell", f"td-{self.today:%Y%m%d}-{pattern}-{sym}",
+                             stop=stop)
                 sent += 1
                 self.entries.append({"date": self.today.isoformat(), "time": self.now().strftime("%H:%M"),
                                      "pattern": pattern, "symbol": sym, "side": side, "qty": qty,
@@ -241,8 +314,10 @@ class Session:
         self.flatten()
 
     def flatten(self) -> None:
-        """Out at the closing price: market-on-close orders at 15:45, then anything left at 15:58."""
+        """Out at the closing price: market-on-close orders at 15:45, then anything left at 15:58.
+        The protective stops are cancelled first (they hold the shares the closing orders need)."""
         self.wait_until(MOC_AT)
+        self.b.cancel_all()
         for p in self.b.positions():
             qty = abs(int(float(p["qty"])))
             side = "sell" if float(p["qty"]) > 0 else "buy"
@@ -363,11 +438,11 @@ def trade_log(orders: list[dict], entries: list[dict], today: dt.date) -> list[d
     by_sym: dict[str, dict] = {}
     for o in orders:
         tag = str(o.get("client_order_id", ""))
-        if o.get("status") != "filled" or not o.get("filled_avg_price") or not tag.startswith("td-"):
+        if o.get("status") != "filled" or not o.get("filled_avg_price"):
             continue
         r = by_sym.setdefault(o["symbol"], {})
-        key = "exit" if tag.endswith("-exit") or tag.split("-")[2] == "x" else "entry"
-        r[key] = o
+        entry = tag.startswith("td-") and not tag.endswith("-exit") and tag.split("-")[2] != "x"
+        r["entry" if entry else "exit"] = o   # a fired protective stop has the broker's own tag: an exit
     expected = {e["symbol"]: e for e in entries if e["date"] == today.isoformat()}
     rows = []
     for sym, r in sorted(by_sym.items()):
@@ -409,6 +484,37 @@ def write_csv(log: list[dict], path: str) -> None:
         w = csv.DictWriter(f, fieldnames=LOG_FIELDS)
         w.writeheader()
         w.writerows({k: r.get(k) for k in LOG_FIELDS} for r in log)
+
+
+def safety_net(broker: DayBroker, now: dt.datetime, log=print) -> dict | None:
+    """Independent of the trading jobs: close anything that shouldn't still be open. Returns an alert or None.
+
+    - before the close (from 15:50 New York): positions without a pending closing order (the main
+      job didn't place them) are closed now
+    - after the close or before the open: any position at all was left overnight; it's closed (at the
+      next open if the market is shut) and you're told."""
+    from trend_bot.alerts import RED
+
+    positions = broker.positions()
+    if not positions:
+        return None
+    t = now.time()
+    in_session = dt.time(9, 30) <= t < dt.time(16, 0)
+    closing = {o["symbol"] for o in broker.open_orders() if o.get("time_in_force") == "cls"}
+    loose = [p for p in positions if not (in_session and p["symbol"] in closing)]
+    if not loose:
+        return None
+    broker.cancel_all()
+    broker.close_all()
+    names = ", ".join(p["symbol"] for p in loose)
+    when = ("before the close the main job hadn't closed" if in_session else
+            "these were still open outside market hours (left overnight)")
+    log(f"[day] safety net: {when}: {names}; closing everything")
+    return {"title": "🛟 Day trading: safety net closed positions", "color": RED,
+            "description": f"**What this means:** a safety check found day-trading positions that should already "
+                           f"be closed ({when}): {names}. All were closed"
+                           + (" (at the next open, the market is shut)." if not in_session else ".")
+                           + " Fake money; the trading job's log on the Actions tab shows what went wrong."}
 
 
 def report(orders: list[dict], equity: float, state: dict, today: dt.date, tested: dict | None = None) -> tuple[dict, dict]:
