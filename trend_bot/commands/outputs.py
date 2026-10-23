@@ -307,6 +307,16 @@ def cmd_send_email(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lookahead_combine(args: argparse.Namespace) -> int:
+    """Combine look-ahead results from parallel jobs into one text (and say if anything leaked)."""
+    from trend_bot import lookahead
+
+    results = lookahead.from_json([Path(f).read_text() for f in args.files])
+    print(f"Look-ahead check of {len(results)} months, checked in parallel:")
+    print(lookahead.text(results))
+    return 0 if lookahead.verdict(results)[0] else 1
+
+
 def cmd_paper(args: argparse.Namespace) -> int:
     """Demo account: follow the portfolio on Alpaca's paper-trading account (fake money)."""
     from trend_bot import db, ideas, paper

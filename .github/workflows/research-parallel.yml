@@ -1,0 +1,104 @@
+# Parallel research: splits a long study into many jobs that run at the same time (free on a public
+# repository, up to 20 at once), then combines the results and posts them to Discord.
+# Actions tab -> "Parallel research" -> pick a study. Read-only: it never saves the database.
+#
+# lookahead: the look-ahead check for June of every year since 2009, one job per year
+# (about 15-25 minutes instead of 2 hours).
+
+name: Parallel research
+
+on:
+  workflow_dispatch:
+    inputs:
+      study:
+        description: "Which study to run in parallel"
+        type: choice
+        default: lookahead
+        options: [lookahead]
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      months: ${{ steps.months.outputs.months }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - id: months
+        run: echo "months=$(python -c 'import json; from trend_bot import lookahead; print(json.dumps(lookahead.yearly_months()))')" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        month: ${{ fromJson(needs.plan.outputs.months) }}
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore database
+        uses: actions/cache/restore@v6
+        with:
+          path: |            # must list the same files as the nightly run's save, or the cache isn't found
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+          fail-on-cache-miss: true
+      - name: Check ${{ matrix.month }}
+        run: python -m trend_bot study lookahead --months ${{ matrix.month }} --json parts/${{ matrix.month }}.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lookahead-part-${{ matrix.month }}
+          path: parts/${{ matrix.month }}.json
+          retention-days: 7
+
+  combine:
+    needs: check
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: lookahead-part-*
+          path: parts
+          merge-multiple: true
+      - name: Combine
+        run: |
+          mkdir -p reports
+          python -m trend_bot lookahead-combine parts/*.json > reports/study-lookahead.txt || true
+          cat reports/study-lookahead.txt
+          { echo '```'; cat reports/study-lookahead.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Post results to Discord
+        run: |
+          python -m trend_bot send-report --path reports/study-lookahead.txt \
+            --message "🔬 Parallel research: look-ahead check, every year (results attached)" || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: study-lookahead-${{ github.run_id }}
+          path: reports/study-lookahead.txt
+          retention-days: 90

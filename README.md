@@ -35,6 +35,7 @@ New to the market? Start with **[GUIDE.md](GUIDE.md)**: what every message means
 - **Robustness check** (settings nudged), **kinds of market**, large-companies-only and equal-weight S&P 500 (RSP) comparisons
 - New measures stay **on trial** until they pass in both halves of history; nothing changes without your OK
 - **ML lab**: six machine-learning variants (several from FreqAI) tested against the simple average; none has beaten it yet
+- **Day-trading research** (`study intraday`): well-known intraday patterns tested on years of Alpaca half-hour bars, after costs, both halves, luck check
 
 **Data (all free)**: prices from Yahoo Finance; financials, filings, insider
 trades and red flags from the SEC; short selling from FINRA. Gentle on every source (pacing, pauses,
@@ -47,7 +48,8 @@ Everything runs in the cloud on **GitHub Actions**; nothing needs to run on your
 | Workflow | When | What |
 |---|---|---|
 | `nightly.yml` | weekdays 22:30 UTC | update data, send messages, report and email; monthly honesty checks on the 1st-3rd |
-| `research.yml` | by hand (Actions tab) | any study (`ideas`, `ml`, `mllab`, `lookahead`, `audit`, `candidates`, ...), data refreshes, `sec-check`, `email-test` |
+| `research.yml` | by hand (Actions tab) | any study (`ideas`, `ml`, `mllab`, `lookahead`, `audit`, `candidates`, `intraday`, ...), data refreshes, `sec-check`, `email-test` |
+| `research-parallel.yml` | by hand | long studies split into many jobs at once (the yearly look-ahead check in ~20 min) |
 | `why.yml` | by hand | "Why is a stock (not) ranked?": type tickers, answer in Discord |
 | `demo.yml` | by hand | demo account check: its value and the orders it would send (sends nothing) |
 | `demo-morning.yml` | weekdays 14:52 UTC | demo account: how last night's orders filled; retries refusals |

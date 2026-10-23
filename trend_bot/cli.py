@@ -29,6 +29,7 @@ from trend_bot.commands.data import cmd_db, cmd_monthly_due, cmd_screen, cmd_sec
 from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
+    cmd_lookahead_combine,
     cmd_paper,
     cmd_send_email,
     cmd_why,
@@ -180,9 +181,11 @@ def make_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
     st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml",
-                                       "ideas", "candidates", "lookahead", "mllab", "audit"])
+                                       "ideas", "candidates", "lookahead", "mllab", "audit", "intraday"])
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
     st.add_argument("--months", help="lookahead: month-ends to check, e.g. 2012-06-30,2021-06-30, or 'yearly' (one per year)")
+    st.add_argument("--intraday-db", default="intraday.db", help="intraday: the half-hour bars database")
+    st.add_argument("--json", help="lookahead: also save the results as JSON (to combine parallel runs)")
     st.add_argument("--trees", type=int, default=300, help="ml: boosting rounds (default 300)")
     st.add_argument("--first-year", type=int, default=2011,
                     help="forecast: first year to predict (each year uses only earlier years)")
@@ -267,6 +270,10 @@ def make_parser() -> argparse.ArgumentParser:
     em.add_argument("--problems", help="file listing steps that didn't finish (one per line)")
     em.add_argument("--dry-run", action="store_true", help="print the email instead of sending it")
     em.set_defaults(func=cmd_send_email)
+
+    lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")
+    lc.add_argument("files", nargs="+", help="JSON files from study lookahead --json")
+    lc.set_defaults(func=cmd_lookahead_combine)
 
     pp = sub.add_parser("paper", help="demo account: follow the portfolio on Alpaca paper trading (fake money)")
     pp.add_argument("--db", default="market.db", help="database file (default: market.db)")

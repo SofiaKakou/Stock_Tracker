@@ -10,7 +10,7 @@ on:
         description: "Which study to run"
         type: choice
         default: factors
-        options: [factors, ml, mllab, ideas, candidates, lookahead, audit, forecast, model, insiders, momentum, trend]
+        options: [factors, ml, mllab, ideas, candidates, lookahead, audit, intraday, forecast, model, insiders, momentum, trend]
       args:
         description: "Extra options, e.g. --benchmark IWM --since 2016-01-01, or for lookahead --months yearly (~1.5 h) (optional)"
         type: string
@@ -32,6 +32,8 @@ jobs:
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}         # intraday: Alpaca's market data
+      ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
       EMAIL_USER: ${{ secrets.EMAIL_USER }}
       EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
       EMAIL_TO: ${{ secrets.EMAIL_TO }}
@@ -56,6 +58,15 @@ jobs:
             alert_state.json
           key: market-db-${{ github.run_id }}
           restore-keys: market-db-
+
+      # Day-trading research keeps its half-hour bars in their own small database (~100 MB).
+      - name: Restore intraday bars
+        if: inputs.study == 'intraday'
+        uses: actions/cache/restore@v6
+        with:
+          path: intraday.db
+          key: intraday-db-${{ github.run_id }}
+          restore-keys: intraday-db-
 
       - name: Refresh data
         if: inputs.refresh != 'none'
@@ -106,6 +117,13 @@ jobs:
             market.db
             alert_state.json
           key: market-db-${{ github.run_id }}
+
+      - name: Save intraday bars
+        if: always() && inputs.study == 'intraday' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: intraday.db
+          key: intraday-db-${{ github.run_id }}
 
       - name: Export the database
         if: inputs.refresh == 'export-db'

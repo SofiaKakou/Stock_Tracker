@@ -126,6 +126,23 @@ jobs:
             alert_state.json
           key: market-db-${{ github.run_id }}
 
+      # A weekly copy outside the cache: if GitHub's cache ever loses the database, Actions ->
+      # "Import database" with this run's number puts it back (kept 8 days, so one always exists).
+      - name: Weekly database backup
+        id: weekday
+        if: always()
+        run: echo "day=$(date -u +%u)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the weekly backup
+        if: always() && steps.weekday.outputs.day == '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: market-db-export
+          path: |
+            market.db
+            alert_state.json
+          retention-days: 8
+
       - name: Keep the report
         if: always()
         uses: actions/upload-artifact@v7

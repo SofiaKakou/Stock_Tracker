@@ -56,3 +56,19 @@ def test_many_months_get_a_summary_of_where_each_signal_differed():
     out = lookahead.text(res)
     assert "sue                    2 of 4 months: 2011-06 (2), 2013-06 (2)" in out
     assert "roe" not in out.split("Where each")[1].split("Look-ahead")[0]
+
+
+def test_parallel_results_combine_into_one(tmp_path, capsys):
+    from trend_bot.cli import main
+
+    ok = pd.DataFrame({"stocks": [10], "differ": [0], "max_gap": [0.0], "examples": [""]}, index=["sue"])
+    bad = pd.DataFrame({"stocks": [10], "differ": [3], "max_gap": [0.5], "examples": ["X 1/2"]}, index=["sue"])
+    uni = {"both": 10, "only_full": 0, "only_cut": 0}
+    (tmp_path / "b.json").write_text(lookahead.to_json({"2012-06": (bad, uni)}))
+    (tmp_path / "a.json").write_text(lookahead.to_json({"2010-06": (ok, uni), "2011-06": (ok, uni)}))
+    both = lookahead.from_json([(tmp_path / f).read_text() for f in ("b.json", "a.json")])
+    assert list(both) == ["2010-06", "2011-06", "2012-06"] and lookahead.verdict(both) == (False, ["sue"])
+    assert both["2012-06"][0].loc["sue", "differ"] == 3
+    assert main(["lookahead-combine", str(tmp_path / "a.json"), str(tmp_path / "b.json")]) == 1
+    assert "3 months, checked in parallel" in capsys.readouterr().out
+    assert main(["lookahead-combine", str(tmp_path / "a.json")]) == 0
