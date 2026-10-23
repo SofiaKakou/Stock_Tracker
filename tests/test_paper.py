@@ -109,3 +109,45 @@ def test_command_does_nothing_without_keys(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv(paper.SECRET_ENV, raising=False)
     assert main(["paper", "--db", str(tmp_path / "m.db")]) == 0
     assert "isn't set up" in capsys.readouterr().out
+
+
+class TradingBroker(FakeBroker):
+    """Fills orders on the second look (like a real market order a moment later)."""
+
+    def __init__(self, open_=True, never_fill=False):
+        super().__init__()
+        self.open_, self.never_fill, self.orders, self.cancelled = open_, never_fill, {}, []
+
+    def clock(self):
+        return {"is_open": self.open_, "next_open": "2026-10-26T09:30:00-04:00"}
+
+    def order(self, symbol, qty, side, tag):
+        oid = f"o{len(self.orders)}"
+        self.orders[oid] = {"id": oid, "status": "new", "looks": 0, "side": side}
+        return {"id": oid, "status": "new"}
+
+    def get_order(self, oid):
+        o = self.orders[oid]
+        o["looks"] += 1
+        if o["looks"] >= 2 and not self.never_fill:
+            o.update(status="filled", filled_avg_price="500.25" if o["side"] == "buy" else "500.30")
+        return dict(o)
+
+    def cancel(self, oid):
+        self.cancelled.append(oid)
+
+
+def test_test_trade_buys_and_sells_one_share():
+    out = []
+    assert paper.test_trade(TradingBroker(), sleep=lambda s: None, log=out.append)
+    assert "bought 1 SPY at $500.25" in out[0] and "sold 1 SPY at $500.30" in out[1]
+
+
+def test_test_trade_waits_for_the_market_and_cancels_what_doesnt_fill():
+    out = []
+    broker = TradingBroker(open_=False)
+    assert not paper.test_trade(broker, sleep=lambda s: None, log=out.append)
+    assert "market is closed" in out[0] and not broker.orders            # nothing sent while closed
+    broker = TradingBroker(never_fill=True)
+    assert not paper.test_trade(broker, wait=4, sleep=lambda s: None, log=out.append)
+    assert broker.cancelled == ["o0"] and "didn't fill" in out[-1]

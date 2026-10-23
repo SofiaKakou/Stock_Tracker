@@ -202,4 +202,4 @@ data from FINRA. All free.
   the next morning's open) and posts "🧪 Demo account: orders sent". The report and email show the
   account's value since its first trades vs the S&P 500. Expect it to trail the tests a little:
   the tests buy at the close, the account the next morning (`study ideas` measures that gap over
-  20 years). To see the orders without sending them: `python -m trend_bot paper --dry-run`.
+  20 years). To see the orders without sending them: Actions → **Demo account check** → Run workflow.
