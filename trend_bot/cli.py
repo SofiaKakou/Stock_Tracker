@@ -29,6 +29,7 @@ from trend_bot.commands.data import cmd_db, cmd_monthly_due, cmd_screen, cmd_sec
 from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
+    cmd_daytrade,
     cmd_lookahead_combine,
     cmd_paper,
     cmd_send_email,
@@ -270,6 +271,14 @@ def make_parser() -> argparse.ArgumentParser:
     em.add_argument("--problems", help="file listing steps that didn't finish (one per line)")
     em.add_argument("--dry-run", action="store_true", help="print the email instead of sending it")
     em.set_defaults(func=cmd_send_email)
+
+    dtp = sub.add_parser("daytrade", help="day-trading demo account (fake money, its own Alpaca paper account)")
+    dtp.add_argument("--phase", choices=["auto", "morning", "afternoon", "report"], default="auto",
+                     help="auto: whichever part of the day it is now (for the schedule)")
+    dtp.add_argument("--intraday-db", default="intraday.db", help="stocks to watch and the 10-year test results")
+    dtp.add_argument("--state", default="daytrade.json", help="running totals since the first day")
+    dtp.add_argument("--discord", action="store_true", help="post the evening report")
+    dtp.set_defaults(func=cmd_daytrade)
 
     lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")
     lc.add_argument("files", nargs="+", help="JSON files from study lookahead --json")

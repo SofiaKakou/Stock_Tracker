@@ -23,6 +23,7 @@ New to the market? Start with **[GUIDE.md](GUIDE.md)**: what every message means
 - 🔎 **"Why isn't this stock ranked?"**: a one-click lookup that explains any ticker
 - 📒 **Logbook**: every run logged; every result stamped with the code and data that made it
 - 🧪 **Demo account** (optional): follows the portfolio with fake money on Alpaca paper trading, vs the S&P 500
+- 🧪 **Day-trading demo account** (optional, a second paper account): the intraday patterns traded live every weekday, closed by the close, with an evening report
 
 **Honest testing** (the core of the project)
 - Walk-forward tests: every year is judged by rules made only from earlier years
@@ -52,6 +53,7 @@ Everything runs in the cloud on **GitHub Actions**; nothing needs to run on your
 | `research-parallel.yml` | by hand | long studies split into many jobs at once (the yearly look-ahead check in ~20 min) |
 | `why.yml` | by hand | "Why is a stock (not) ranked?": type tickers, answer in Discord |
 | `demo.yml` | by hand | demo account check: its value and the orders it would send (sends nothing) |
+| `daytrade.yml` | weekdays, market hours | day-trading demo account (fake money): trades, closes by the close, evening report |
 | `demo-morning.yml` | weekdays 14:52 UTC | demo account: how last night's orders filled; retries refusals |
 | `tests.yml` | every push / PR | the test suite |
 | `ai.yml` | by hand, optional | an AI report reader (needs a paid API key; off by default) |
@@ -65,6 +67,7 @@ The database lives in the Actions cache between runs.
    - `SEC_USER_AGENT`: your name and email, e.g. `Jane Doe jane@example.com` (the SEC requires it)
    - optional email: `EMAIL_USER`, `EMAIL_APP_PASSWORD` (a Gmail app password), `EMAIL_TO`
    - optional demo account: `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY` (Alpaca **paper** keys; see GUIDE.md)
+   - optional day-trading demo account: `ALPACA_DAY_KEY_ID`, `ALPACA_DAY_SECRET_KEY` (a second paper account)
 2. **First data load**: Actions → *Research run* → refresh `full`. Then the nightly run keeps it up to date.
 3. Optional: put your tickers in `watchlist.txt`.
 

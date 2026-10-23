@@ -189,8 +189,16 @@ data from FINRA. All free.
 The bot's research is about which stocks to hold for a month. Day-trading ideas are tested
 separately (Research run → study `intraday`): years of half-hour prices from Alpaca, the costs of
 every trade, both halves of history, and a luck check (the same trades in random directions).
-Most day-trading patterns don't survive their costs; one would only get a slice of the demo
-account after passing everything, and only with your OK.
+Most day-trading patterns don't survive their costs.
+
+**Day-trading demo account** (optional, fake money, a second Alpaca paper account): trades these
+patterns live every weekday so you can watch them: big opening gaps faded at 9:31 New York time,
+breakouts from the first half hour checked every half hour, the index funds' last half hour at
+15:30. Up to 20 positions a day (about $4,900 each), long or short, all closed at the closing price.
+Each evening "🧪 Day trading" shows today's trades, profit or loss per pattern, the running total,
+and each pattern's 10-year test result next to it. Setup: a second paper account in Alpaca, its
+keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
+separate and unaffected.
 
 ## Optional setup
 

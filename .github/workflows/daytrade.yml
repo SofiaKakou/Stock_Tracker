@@ -1,0 +1,70 @@
+# Day-trading demo account (fake money, its own Alpaca paper account; see trend_bot/daytrade.py).
+# Two parts a day, because a GitHub job may run at most 6 hours. Each part has two schedules, one for
+# New York summer time and one for winter time; the one that isn't the right time exits at once.
+# Does nothing until the ALPACA_DAY_KEY_ID and ALPACA_DAY_SECRET_KEY secrets exist.
+
+name: Day trading (demo)
+
+on:
+  schedule:
+    - cron: "17 13 * * 1-5"   # morning part: 9:17 New York summer time ...
+    - cron: "17 14 * * 1-5"   # ... or winter time
+    - cron: "17 16 * * 1-5"   # afternoon part: 12:17 New York summer time ...
+    - cron: "17 17 * * 1-5"   # ... or winter time
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "Which part (auto = whichever it is now; report = only the evening report)"
+        type: choice
+        default: auto
+        options: [auto, morning, afternoon, report]
+
+concurrency:
+  group: day-trading
+  cancel-in-progress: false
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      ALPACA_DAY_KEY_ID: ${{ secrets.ALPACA_DAY_KEY_ID }}
+      ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      # Which stocks to watch and the 10-year test results, from the last `study intraday` (read only).
+      - name: Restore intraday study
+        uses: actions/cache/restore@v6
+        with:
+          path: intraday.db
+          key: intraday-db-${{ github.run_id }}
+          restore-keys: intraday-db-
+
+      - name: Restore running totals
+        uses: actions/cache/restore@v6
+        with:
+          path: daytrade.json
+          key: daytrade-state-${{ github.run_id }}
+          restore-keys: daytrade-state-
+
+      - name: Trade
+        run: python -m trend_bot daytrade --phase "${{ inputs.phase || 'auto' }}" --discord
+
+      - name: Save running totals
+        if: always() && hashFiles('daytrade.json') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: daytrade.json
+          key: daytrade-state-${{ github.run_id }}

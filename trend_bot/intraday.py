@@ -66,17 +66,18 @@ class Data:
         self.feed = "sip"   # the whole market; the free plan may only allow IEX (one exchange)
 
     @classmethod
-    def from_env(cls) -> "Data | None":
+    def from_env(cls, key_env: str | None = None, secret_env: str | None = None) -> "Data | None":
         from trend_bot.paper import KEY_ENV, SECRET_ENV
 
-        key, secret = os.environ.get(KEY_ENV), os.environ.get(SECRET_ENV)
+        key, secret = os.environ.get(key_env or KEY_ENV), os.environ.get(secret_env or SECRET_ENV)
         return cls(key, secret) if key and secret else None
 
-    def bars(self, symbols: list[str], start: str, end: str, pause: float = 0.35) -> pd.DataFrame:
+    def bars(self, symbols: list[str], start: str, end: str, pause: float = 0.35,
+             timeframe: str = TIMEFRAME) -> pd.DataFrame:
         """[symbol, t, open, high, low, close, volume], following every page."""
         rows, token = [], None
         while True:
-            params = {"symbols": ",".join(symbols), "timeframe": TIMEFRAME, "start": start, "end": end,
+            params = {"symbols": ",".join(symbols), "timeframe": timeframe, "start": start, "end": end,
                       "adjustment": "all", "feed": self.feed, "limit": 10_000}
             if token:
                 params["page_token"] = token

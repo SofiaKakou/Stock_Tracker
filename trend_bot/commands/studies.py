@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from contextlib import closing
 from pathlib import Path
 
@@ -118,10 +119,15 @@ def _study_intraday(con, args: argparse.Namespace) -> int:
         intraday.update(ic, data, symbols)
         df = intraday.sessions(ic)
         feed = (ic.execute("SELECT value FROM meta WHERE key = 'feed'").fetchone() or ["?"])[0]
-    if df.empty:
-        print("No bars came back from Alpaca.")
-        return 1
-    print(intraday.text(intraday.study(df), feed, df["date"].min(), df["date"].max()))
+        if df.empty:
+            print("No bars came back from Alpaca.")
+            return 1
+        results = intraday.study(df)
+        # Kept for the day-trading demo account: which stocks to watch, and each pattern's test result.
+        ic.executemany("INSERT OR REPLACE INTO meta VALUES (?, ?)",
+                       [("universe", json.dumps(symbols)), ("results", json.dumps(results))])
+        ic.commit()
+    print(intraday.text(results, feed, df["date"].min(), df["date"].max()))
     return 0
 
 

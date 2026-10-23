@@ -307,6 +307,51 @@ def cmd_send_email(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_daytrade(args: argparse.Namespace) -> int:
+    """Day-trading demo account (fake money, its own paper account): one part of today's session."""
+    import datetime as dt
+    import json
+
+    from trend_bot import alerts, daytrade, intraday
+
+    broker = daytrade.DayBroker.from_env()
+    if broker is None:
+        print(f"The day-trading account isn't set up ({daytrade.KEY_ENV} / {daytrade.SECRET_ENV}); skipped.")
+        return 0
+    now = dt.datetime.now(daytrade.NY)
+    phase = args.phase
+    if phase == "auto":   # two schedules per part (summer and winter time): only the right one runs
+        phase = ("morning" if dt.time(9, 0) <= now.time() < dt.time(9, 50) else
+                 "afternoon" if dt.time(12, 0) <= now.time() < dt.time(12, 50) else "")
+        if not phase:
+            print(f"[day] {now:%H:%M} New York time is not a start time; nothing to do (the other schedule runs).")
+            return 0
+    if phase in ("morning", "afternoon"):
+        clock = broker.clock()
+        if not (clock.get("is_open") or str(clock.get("next_open", ""))[:10] == f"{now:%Y-%m-%d}"):
+            print("[day] the market is closed today (weekend or holiday).")
+            return 0
+    meta = {}
+    if Path(args.intraday_db).exists():
+        with closing(intraday.connect(args.intraday_db)) as ic:
+            meta = {k: json.loads(v) for k, v in ic.execute("SELECT key, value FROM meta WHERE key IN ('universe', 'results')")}
+    symbols = meta.get("universe") or intraday.ETFS + daytrade.FALLBACK_STOCKS
+    data = intraday.Data.from_env(daytrade.KEY_ENV, daytrade.SECRET_ENV)
+    session = daytrade.Session(broker, data, symbols, now.date())
+    if phase == "morning":
+        session.morning()
+    elif phase == "afternoon":
+        session.afternoon()
+    if phase in ("afternoon", "report"):
+        state, embed = daytrade.report(session.today_orders(), float(broker.account()["equity"]),
+                                       daytrade.load_state(args.state), now.date(), meta.get("results"))
+        Path(args.state).write_text(json.dumps(state, indent=1))
+        print(embed["description"].replace("**", ""))
+        if args.discord and alerts.load_webhook():
+            alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [embed]})
+    return 0
+
+
 def cmd_lookahead_combine(args: argparse.Namespace) -> int:
     """Combine look-ahead results from parallel jobs into one text (and say if anything leaked)."""
     from trend_bot import lookahead
