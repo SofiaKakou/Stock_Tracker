@@ -75,7 +75,7 @@ class FakeBroker:
         self.cancelled += 1
 
     def open_orders(self):
-        return [o for o in self.orders if o.get("tif") == "cls"]
+        return [o for o in self.orders if o.get("tif") == "cls" or o.get("type") == "stop"]
 
     def order(self, symbol, qty, side, tag, tif="day", stop=None):
         if symbol == "NOSHORT" and side == "sell":
@@ -91,7 +91,11 @@ class FakeBroker:
         return self.orders
 
     def positions(self):
-        return [{"symbol": s, "qty": str(q)} for s, q in self.held.items() if q]
+        return [{"symbol": s, "qty": str(q), "avg_entry_price": "100"} for s, q in self.held.items() if q]
+
+    def stop_order(self, symbol, qty, side, stop, tag):
+        self.orders.append({"symbol": symbol, "qty": qty, "side": side, "client_order_id": tag, "tif": "day",
+                            "type": "stop", "stop": stop, "time_in_force": "day"})
 
     def close_all(self):
         self.closed_all = True
@@ -342,3 +346,15 @@ def test_stopped_out_trades_are_counted_with_the_brokers_exit_order():
     row, = daytrade.trade_log(orders, [], DAY)
     assert row["exit"] == 95 and row["ret"] == pytest.approx(-0.05)
     assert daytrade.pnl(orders)["breakout"]["pnl"] == pytest.approx(-50)
+
+
+def test_positions_without_a_stop_get_one_once():
+    clock = Clock(dt.datetime(2026, 10, 26, 12, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    broker.held = {"AAA": 10, "BBB": -5}
+    s = daytrade.Session(broker, FakeData(clock), ["SPY"], DAY, log=lambda *_: None, sleep=clock.sleep, now=clock.now)
+    assert s.protect() == 2
+    stops = {o["symbol"]: o for o in broker.orders if o.get("type") == "stop"}
+    assert stops["AAA"]["side"] == "sell" and stops["AAA"]["stop"] == pytest.approx(95)
+    assert stops["BBB"]["side"] == "buy" and stops["BBB"]["stop"] == pytest.approx(105)
+    assert s.protect() == 0                                     # already protected
