@@ -91,3 +91,28 @@ def test_real_guide_covers_every_message():
     for title in ("Market weather", "Top ideas", "Top-ideas portfolio", "Pick scorecard", "Weekly outlook",
                   "Insider buying", "Market screen", "All-signal model", "Bot health", "Research run"):
         assert title in text
+
+
+def test_sec_data_is_back_said_once_after_a_gap(tmp_path, monkeypatch):
+    from trend_bot import alerts
+    from trend_bot.cli import main
+    from trend_bot.commands import data
+
+    con = healthy(tmp_path)
+    db.set_meta(con, "sec_last_ok", (dt.date.today() - dt.timedelta(days=17)).isoformat())
+    db.set_meta(con, "sec_last_refusal", "429: Request Rate Threshold Exceeded")
+    data._note_sec_ok(con, filings=812, companies=3_950, reports=1_500, bulk=True, added=0)
+    assert db.get_meta(con, "sec_last_refusal") == "" and db.get_meta(con, "sec_last_ok") == dt.date.today().isoformat()
+    e = health.catchup_embed(con)
+    assert e["title"] == "✅ SEC data is back" and "after 17 days" in e["description"]
+    assert "812 recent filing" in e["description"] and "3,950 companies" in e["description"]
+    data._note_sec_ok(con, filings=5, companies=0, reports=10, bulk=False, added=0)   # next night: no gap
+    assert json.loads(db.get_meta(con, "sec_catchup"))["filings"] == 812           # the catch-up stays until sent
+    con.close()
+
+    sent = []
+    monkeypatch.setattr(alerts, "send", lambda url, payload, timeout=15: sent.append(payload))
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://example.invalid/hook")
+    args = ["health", "--db", str(tmp_path / "m.db"), "--discord"]
+    assert main(args) == 0 and main(args) == 0
+    assert [p["embeds"][0]["title"] for p in sent].count("✅ SEC data is back") == 1

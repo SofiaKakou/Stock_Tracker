@@ -81,6 +81,16 @@ jobs:
           python -m trend_bot health --discord --problems reports/problems.txt --job-status "${{ job.status }}" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
 
+      # Optional: the report by email too. Does nothing until the EMAIL_USER and
+      # EMAIL_APP_PASSWORD secrets exist (see trend_bot/email_report.py for the 2-minute setup).
+      - name: Email the report
+        if: always()
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python -m trend_bot send-email --problems reports/problems.txt || true
+
       - name: Save database
         if: always()
         uses: actions/cache/save@v5

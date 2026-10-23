@@ -80,13 +80,18 @@ some look good by chance); 🔶 promising: the same but t between 2 and 3, watch
 **⚠️ Bot health**: something is wrong with the bot itself, such as stale prices, a failed step,
 or the SEC asking it to slow down (the message quotes what the SEC said; SEC downloads then pause
 for 20 hours). It fixes itself on later runs in most cases; **silence means healthy**. "✅ all fine
-again" means it cleared.
+again" means it cleared. **✅ SEC data is back** comes once after the SEC lets the bot in again
+following a gap, with what it caught up on.
 
 **📄 Daily report (HTML file)**: open it in your browser for everything above with charts.
 It opens with **📋 At a glance**: the portfolio to follow, how it's really doing vs the S&P 500,
 red flags in its stocks, and the signals on probation. It can also be published as a web page
 you open on your phone (optional, see the end of `.github/workflows/nightly.yml`; the page is
 public, like this repository).
+
+**📧 Daily email** (optional): the same report as an email attachment, with a few lines on how the
+portfolio is doing and the bot's health. Free through a Gmail "app password"; it is off until you
+add the EMAIL_USER and EMAIL_APP_PASSWORD secrets (see `trend_bot/email_report.py`).
 
 **🔬 Research run**: results of a test run started from the Actions tab (attached as a file).
 
