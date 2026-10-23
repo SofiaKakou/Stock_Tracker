@@ -111,6 +111,8 @@ def test_portfolio_backtest_of_the_top_ideas(tmp_path):
     con = db.connect(tmp_path / "m.db")
     ideas.save_backtest(con, m, 20)
     assert "Following the top 20 from" in ideas.backtest_note(con)
+    curve = ideas.growth_curve(con)
+    assert curve is not None and curve.iloc[0].between(0.5, 1.5).all() and list(curve.columns) == ["portfolio", "spy"]
 
 
 def test_study_ideas_end_to_end(model_db, tmp_path, monkeypatch, capsys):
@@ -126,7 +128,7 @@ def test_study_ideas_end_to_end(model_db, tmp_path, monkeypatch, capsys):
                  "--split-year", "2026"]) == 0
     out = capsys.readouterr().out
     assert "Top ideas + weather filter" in out and "S&P 500 (buy & hold)" in out and "Year by year" in out
-    assert "Luck check" in out and "random portfolios" in out and "Kinds of market" in out
+    assert "Luck check" in out and "random portfolios" in out and "Kinds of market" in out and "Robustness" in out
     assert json.loads(db.get_meta(model_db, "ideas_backtest"))["hold"] == 5
 
 
@@ -321,3 +323,17 @@ def test_market_types_label_each_month_by_what_was_known():
     assert k.loc["Rising market", "months"] + k.loc["Falling market", "months"] == len(monthly.dropna())
     assert k.loc["Volatile market", "months"] >= 6
     assert ideas.market_types(monthly, spy.head(100)).empty
+
+
+def test_robustness_nudges_the_settings():
+    df = panel_with_edge(months=48, n=180).dropna(subset=["ret"]).reset_index(drop=True)
+    split = pd.Timestamp("2021-01-01")
+    t = ideas.robustness(df, ideas.scores(df), split)
+    assert len(t) == 9 and t["current"].sum() == 1
+    assert t.loc[t["current"].astype(bool)].index[0] == "hold 20, sell below top 40"
+    assert set(t["buffer"]) >= {22, 30, 40, 50, 38, 62}
+    assert t[["all", "before", "after"]].notna().all().all()
+    assert ideas.robustness_verdict(t).startswith(("Stable", "Fragile"))
+    fake = pd.DataFrame({"all": [0.10, 0.105, 0.20], "current": [True, False, False]})
+    assert ideas.robustness_verdict(fake).startswith("Fragile: some settings differ by up to 10.0%")
+    assert ideas.robustness_verdict(fake.iloc[:2]).startswith("Stable")

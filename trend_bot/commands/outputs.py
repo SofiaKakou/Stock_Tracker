@@ -272,13 +272,20 @@ def cmd_send_email(args: argparse.Namespace) -> int:
     if not cfg:
         print("Email isn't set up (EMAIL_USER / EMAIL_APP_PASSWORD); skipped.")
         return 0
-    summary = []
+    summary, chart, title = [], None, None
     if Path(args.db).exists():
+        from trend_bot import charts, ideas
+
         with closing(db.connect(args.db)) as con:
             problems = health.check(con, failed_steps=health.read_problems_file(args.problems))
             summary = email_report.digest(con, problems)
+            curve = ideas.growth_curve(con)
+            if curve is not None:
+                chart = charts.growth_png(curve)
+                title = f"What $10,000 would have become in testing ({curve.index[0]:%Y}–{curve.index[-1]:%Y})"
     report = Path(args.path)
-    msg = email_report.build(cfg, summary, report if report.exists() else None)
+    msg = email_report.build(cfg, summary, report if report.exists() else None, chart=chart,
+                             **({"chart_title": title} if title else {}))
     if args.dry_run:
         print(msg)
         return 0

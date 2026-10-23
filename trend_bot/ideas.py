@@ -446,6 +446,44 @@ def market_types(monthly: pd.DataFrame, spy: pd.Series, col: str = "top20") -> p
     return pd.DataFrame(rows).T
 
 
+ROBUST_HOLDS = (15, 20, 25)
+ROBUST_BUFFERS = (1.5, 2.0, 2.5)    # sell below this many times the number held (now 2.0: top 40 for 20)
+
+
+def robustness(df: pd.DataFrame, score: pd.Series, split: pd.Timestamp, cost_bps: float = 10) -> pd.DataFrame:
+    """The same ranking with the settings nudged: hold 15/20/25 stocks, sell below 1.5/2/2.5 times that.
+    One row per setting: yearly return for all years and each side of `split`. Trustworthy results
+    barely move; results that swing a lot were partly luck of the chosen settings."""
+    d = df.dropna(subset=["ret"]).reset_index(drop=True)
+    score = pd.Series(score.to_numpy(), index=d.index) if len(score) == len(d) else score
+    cost = cost_bps / 10_000 * 2
+    yearly = lambda x: (1 + x).prod() ** (12 / len(x)) - 1 if len(x) >= 12 else np.nan
+    rows = {}
+    for hold in ROBUST_HOLDS:
+        for mult in ROBUST_BUFFERS:
+            buffer = int(round(hold * mult))
+            r = _hold_returns(d, score, hold, buffer, cost)
+            if r.empty:
+                continue
+            rows[f"hold {hold}, sell below top {buffer}"] = {
+                "hold": hold, "buffer": buffer, "all": yearly(r), "before": yearly(r[r.index < split]),
+                "after": yearly(r[r.index >= split]), "current": hold == 20 and mult == 2.0}
+    return pd.DataFrame(rows).T
+
+
+def robustness_verdict(table: pd.DataFrame, tolerance: float = 0.02) -> str:
+    """Plain words: do all the nudged settings land within `tolerance` a year of the current one?"""
+    if table.empty or not table["current"].any():
+        return "Not enough data to check."
+    now = table[table["current"].astype(bool)].iloc[0]
+    spread = (table["all"].astype(float) - float(now["all"])).abs().max()
+    if spread <= tolerance:
+        return (f"Stable: every setting lands within {spread:.1%} a year of the current one, so the results "
+                "don't hinge on the exact settings chosen.")
+    return (f"Fragile: some settings differ by up to {spread:.1%} a year from the current one, so part of the "
+            "result may be luck of the chosen settings.")
+
+
 def luck_verdict(row) -> str:
     """Plain words for one luck_test row."""
     share = row["beats_share"]
@@ -502,11 +540,26 @@ def save_backtest(con: sqlite3.Connection, monthly: pd.DataFrame, hold: int) -> 
     s = model.summarize(monthly, [col, "SPY"])
     if col not in s.index or "SPY" not in s.index:
         return
+    both = monthly[[col, "SPY"]].dropna()
+    grown = (1 + both).cumprod()
+    curve = [[f"{m:%Y-%m}", round(float(a), 4), round(float(b), 4)] for m, (a, b) in grown.iterrows()]
     set_meta(con, "ideas_backtest", json.dumps({
         "hold": hold, "from": f"{monthly.index.min():%Y}", "to": f"{monthly.index.max():%Y}", "cap": bool(cap),
         "cagr": float(s.loc[col, "cagr"]), "max_drawdown": float(s.loc[col, "max_drawdown"]),
-        "spy_cagr": float(s.loc["SPY", "cagr"]), "spy_max_drawdown": float(s.loc["SPY", "max_drawdown"])}))
+        "spy_cagr": float(s.loc["SPY", "cagr"]), "spy_max_drawdown": float(s.loc["SPY", "max_drawdown"]),
+        "curve": curve}))
     con.commit()
+
+
+def growth_curve(con: sqlite3.Connection) -> pd.DataFrame | None:
+    """The tested growth of 1 in the portfolio and in the S&P 500, month by month (from the ideas study)."""
+    raw = get_meta(con, "ideas_backtest")
+    curve = json.loads(raw).get("curve") if raw else None
+    if not curve or len(curve) < 12:
+        return None
+    df = pd.DataFrame(curve, columns=["month", "portfolio", "spy"])
+    df["month"] = pd.to_datetime(df["month"]) + pd.offsets.MonthEnd(0)
+    return df.set_index("month")
 
 
 def backtest_note(con: sqlite3.Connection) -> str:
