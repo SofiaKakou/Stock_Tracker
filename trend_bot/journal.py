@@ -15,6 +15,7 @@ Tables (dbo.):
 - study_results    the latest 10-year test of each day-trading pattern
 - runs             the bot's logbook: every command run, when, how it ended, and what made it
 - stocks           every listed stock: name, exchange, sector, fund or not, latest price, in the portfolio
+- forecast_outcomes what each ranked stock did after each snapshot (next 21 trading days) vs the S&P 500
 
 These dbo tables are the staging area for the star schema (schema dw, sql/dw.sql): after writing
 them, the nightly run calls dw.usp_Load, which fills the dimensions (DimStock, DimDate, DimPattern,
@@ -58,13 +59,15 @@ TABLES = {
         pct FLOAT, PRIMARY KEY (snapshot_date, ticker, measure)""",
     "runs": """started VARCHAR(30) NOT NULL, command NVARCHAR(200) NOT NULL, finished VARCHAR(30), exit_code INT,
         error NVARCHAR(400), seconds FLOAT, code VARCHAR(64), data VARCHAR(64), PRIMARY KEY (started, command)""",
+    "forecast_outcomes": """snapshot_date DATE NOT NULL, ticker VARCHAR(12) NOT NULL, days INT, ret FLOAT,
+        market_ret FLOAT, final BIT, PRIMARY KEY (snapshot_date, ticker)""",
     "stocks": """ticker VARCHAR(12) NOT NULL PRIMARY KEY, name NVARCHAR(300), exchange VARCHAR(40), sector NVARCHAR(100),
         cik INT, is_fund BIT, first_date DATE, last_date DATE, last_close FLOAT, dollar_vol FLOAT, in_portfolio BIT""",
 }
 KEYS = {"day_trades": "trade_date", "day_summary": "trade_date", "account_values": "value_date",
         "monthly_holdings": "portfolio_date", "safety_events": "event_date", "runs": "started",
         "news": "news_date", "macro": "value_date", "ranking_snapshots": "snapshot_date",
-        "measure_snapshots": "snapshot_date"}
+        "measure_snapshots": "snapshot_date", "forecast_outcomes": "snapshot_date"}
 ADDED_COLUMNS = {"day_trades": {"bid": "FLOAT", "ask": "FLOAT", "spread": "FLOAT"}}   # for tables made earlier
 
 
@@ -233,6 +236,43 @@ def snapshot_rows(con: sqlite3.Connection, skip: set[str]) -> tuple[list[dict], 
     return rank, measure
 
 
+HORIZON = 21          # trading days after a snapshot: about a month, the portfolio's holding period
+MARKET = "SPY"
+
+
+def outcome_rows(con: sqlite3.Connection, dates: list[str], today: dt.date | None = None) -> list[dict]:
+    """For each snapshot date, every ranked stock's return from that day's close over the next HORIZON
+    trading days (so far, if fewer have passed) and the S&P 500's over the same days. final = the
+    whole horizon has passed (or 45 days have, for a stock that stopped trading)."""
+    import pandas as pd
+
+    today = today or dt.date.today()
+    out = []
+    for d in dates:
+        end = (dt.date.fromisoformat(d) + dt.timedelta(days=HORIZON * 2 + 10)).isoformat()
+        px = pd.read_sql_query(
+            "SELECT p.ticker, p.date, p.adj_close FROM prices p JOIN ranking_snapshots r "
+            "ON r.ticker = p.ticker AND r.date = ? WHERE p.date >= ? AND p.date <= ? "
+            "UNION ALL SELECT ticker, date, adj_close FROM prices WHERE ticker = ? AND date >= ? AND date <= ? "
+            "ORDER BY 1, 2", con, params=(d, d, end, MARKET, d, end))
+        px = px.dropna().drop_duplicates(["ticker", "date"])
+        mkt = px[px["ticker"] == MARKET]["adj_close"].to_numpy()
+        old = (today - dt.date.fromisoformat(d)).days > 45
+        for t, g in px.groupby("ticker", sort=False):
+            if t == MARKET and t not in {r for (r,) in con.execute(
+                    "SELECT ticker FROM ranking_snapshots WHERE date = ? AND ticker = ?", (d, t))}:
+                continue
+            v = g["adj_close"].to_numpy()
+            if g["date"].iloc[0] != d or len(v) < 2 or not v[0]:
+                continue                              # no price on the snapshot day itself
+            n = min(len(v) - 1, HORIZON)
+            m = min(n, len(mkt) - 1)
+            out.append({"snapshot_date": d, "ticker": t, "days": int(n), "ret": float(v[n] / v[0] - 1),
+                        "market_ret": float(mkt[m] / mkt[0] - 1) if m > 0 and mkt[0] else None,
+                        "final": int(n >= HORIZON or old)})
+    return out
+
+
 def stock_rows(con: sqlite3.Connection) -> list[dict]:
     """Every listed stock, with its industry group and whether it's a fund or in the portfolio."""
     from trend_bot.company_info import is_fund
@@ -307,6 +347,12 @@ def sync(conn, market: sqlite3.Connection, day_state: dict, intraday_results: di
     rank, measure = snapshot_rows(market, stored(conn, "ranking_snapshots", "snapshot_date"))
     written["ranking_snapshots"] = replace(conn, "ranking_snapshots", rank)
     written["measure_snapshots"] = replace(conn, "measure_snapshots", measure)
+    # What each snapshot's stocks did since: resent until the month after it has fully passed.
+    snaps = [d for (d,) in market.execute("SELECT DISTINCT date FROM ranking_snapshots ORDER BY date")]
+    done = stored(conn, "forecast_outcomes", "snapshot_date")
+    recent = (today - dt.timedelta(days=60)).isoformat()
+    written["forecast_outcomes"] = replace(conn, "forecast_outcomes", outcome_rows(
+        market, [d for d in snaps if d not in done or d >= recent], today))
     written["stocks"] = replace_all(conn, "stocks", stock_rows(market))
     log("[journal] " + ", ".join(f"{t} {n:,}" for t, n in written.items()))
     return written

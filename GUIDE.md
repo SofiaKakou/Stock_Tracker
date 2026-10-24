@@ -312,6 +312,7 @@ nothing. Every dimension has an *Unknown* row with key **-1** for facts whose st
 | `dw.FactSafetyEvent` | warning or emergency exit | DateKey, StockKey |
 | `dw.FactNews` | headline and stock it mentions: tone | NewsId, DateKey, StockKey |
 | `dw.FactMacro` | series and day: value | DateKey, SeriesKey |
+| `dw.FactForecastOutcome` | stock and snapshot day: its return over the next month (21 trading days) and the S&P 500's | DateKey, StockKey |
 
 Ready-made views: **`dw.vStockSearch`** (one row per stock: what it is plus the bot's latest
 forecast, last 30 days' news and day trades), `dw.vForecast` (every ranking, readable) and
@@ -341,6 +342,30 @@ JOIN dw.DimStock s ON s.StockKey = f.StockKey JOIN dw.DimMeasure m ON m.MeasureK
 WHERE s.Ticker = 'AAPL' AND f.DateKey = (SELECT MAX(DateKey) FROM dw.FactForecastMeasure)
 ORDER BY f.Pct DESC;
 ```
+
+**Is the bot right?** Two views answer it, and fill up on their own as weeks pass:
+
+- **`dw.vForecastCheck`**: one row per ranking snapshot. How the bot's **top 20** did over the next
+  month vs **every other ranked stock** and vs the **S&P 500** (`Top20MinusRest`, `Top20MinusMarket`,
+  and the share of the top 20 that beat the market). `IsFinal = 0` means the month isn't over yet
+  (the numbers are "so far"). `dw.vForecastDeciles` does the same per tenth of the ranking (1 = the
+  best 10%): if the ranking works, the returns fall from 1 to 10.
+- **`dw.vPatternScorecard`**: each day-trading pattern, the 10-year test's "per trade after costs"
+  next to what live trading actually got, with the hit rate, slippage and spread. It says
+  "too early to tell" until a pattern has 20 closed trades.
+
+```sql
+-- Over all finished months: does the top 20 beat the rest and the market, on average?
+SELECT COUNT(*) AS Months, AVG(Top20MinusRest) AS VsRest, AVG(Top20MinusMarket) AS VsMarket
+FROM dw.vForecastCheck WHERE IsFinal = 1;
+
+-- The live day-trading scorecard
+SELECT Pattern, TestPerTrade, ClosedTrades, LivePerTrade, LiveMinusTest, HitRate, Verdict
+FROM dw.vPatternScorecard WHERE IsLive = 1;
+```
+
+(One week or one month is mostly luck: judge the ranking after many snapshots, and a pattern after
+dozens of trades.)
 
 (Prices stay in `TrendBotMarket`: Azure SQL can't join across databases, so a price fact may come
 later as its own step.)
