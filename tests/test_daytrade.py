@@ -459,8 +459,33 @@ def test_a_past_days_report_can_be_redone_from_that_days_orders(tmp_path, monkey
     monkeypatch.setattr(daytrade.DayBroker, "from_env", classmethod(lambda cls: broker))
     state = tmp_path / "s.json"
     state.write_text(json.dumps({"start_equity": 71_498.0, "days": {"2026-10-23": {"momentum": {"pnl": 4_563.0, "trades": 1}}}}))
-    assert main(["daytrade", "--phase", "report", "--date", "2026-10-23", "--state", str(state),
+    assert main(["daytrade", "--date", "2026-10-23", "--state", str(state),          # a date alone means: report
                  "--intraday-db", str(tmp_path / "none.db"), "--log-csv", str(tmp_path / "l.csv")]) == 0
     s = json.loads(state.read_text())
     assert s["days"] == {"2026-10-23": {"momentum": {"pnl": 30.0, "trades": 1}}}
     assert s["start_equity"] == pytest.approx(100_000.0)
+
+
+def test_a_refused_close_at_1558_is_retried_and_reported():
+    class Stubborn(FakeBroker):
+        def __init__(self):
+            super().__init__()
+            self.tries = 0
+
+        def order(self, symbol, qty, side, tag, tif="day", stop=None):
+            if tif == "cls":
+                raise PaperError("403 too late for a closing order")
+            super().order(symbol, qty, side, tag, tif, stop)
+
+        def close(self, symbol):
+            self.tries += 1
+            if self.tries == 1:
+                raise PaperError("403 held_for_orders")
+            super().close(symbol)
+
+    clock = Clock(dt.datetime(2026, 10, 26, 15, 57, tzinfo=daytrade.NY))
+    broker = Stubborn()
+    broker.held = {"PFE": 50}
+    s = daytrade.Session(broker, FakeData(clock), ["PFE"], DAY, log=lambda *_: None, sleep=clock.sleep, now=clock.now)
+    s.flatten()
+    assert broker.tries == 2 and broker.closed == ["PFE"] and not broker.held

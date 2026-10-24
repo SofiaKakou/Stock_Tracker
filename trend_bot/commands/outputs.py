@@ -321,7 +321,7 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
         print(f"The day-trading account isn't set up ({daytrade.KEY_ENV} / {daytrade.SECRET_ENV}); skipped.")
         return 0
     now = dt.datetime.now(daytrade.NY)
-    phase = args.phase
+    phase = "report" if args.date and args.phase == "auto" else args.phase   # a date means: redo that report
     if phase == "safety":   # the independent safety net: only in its windows, so a summer/winter twin is harmless
         t = now.time()
         if not (dt.time(15, 50) <= t < dt.time(15, 59) or t >= dt.time(16, 2) or t < dt.time(9, 29)):

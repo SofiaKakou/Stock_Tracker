@@ -383,9 +383,21 @@ class Session:
         closing = {o["symbol"] for o in self.b.open_orders() if o.get("time_in_force") == "cls"}
         left = [p["symbol"] for p in self.b.positions() if p["symbol"] not in closing]
         for sym in left:
-            self.b.close(sym)
+            for attempt in (1, 2):
+                try:
+                    self.b.close(sym)
+                    break
+                except PaperError as e:
+                    if attempt == 2:
+                        self.log(f"[day] couldn't close {sym} at 15:58 ({str(e)[:80]}); the safety net closes it")
+                    else:
+                        self.sleep(5)
         if left:
             self.log(f"[day] closed what had no closing order at 15:58: {', '.join(left)}")
+            self.sleep(20)
+            still = [p["symbol"] for p in self.b.positions() if p["symbol"] not in closing]
+            if still:
+                self.log(f"[day] ⚠️ still open after closing at 15:58: {', '.join(still)}")
 
     def wait_for(self, done, seconds: float, step: float = 2) -> bool:
         """Check `done()` every `step` seconds for up to `seconds`; True once it holds."""
