@@ -42,3 +42,14 @@ def test_the_demo_accounts_can_only_reach_the_paper_server():
     src = Path(paper.__file__).read_text() + Path(paper.__file__).with_name("daytrade.py").read_text()
     assert paper.PAPER_URL == "https://paper-api.alpaca.markets/v2"
     assert "api.alpaca.markets" not in src.replace("paper-api.alpaca.markets", "").replace("data.alpaca.markets", "")
+
+
+def test_a_refused_sec_download_is_retried_from_a_fresh_machine_with_the_same_nights_database():
+    nightly = yaml.safe_load((WORKFLOWS[0].parent / "nightly.yml").read_text())["jobs"]
+    retry = nightly["sec-retry"]
+    assert retry["needs"] == "run" and "needs.run.outputs.sec_refused == '1'" in retry["if"]
+    assert nightly["run"]["outputs"]["sec_refused"] == "${{ steps.sec.outputs.refused }}"
+    restore = next(s for s in retry["steps"] if "cache/restore" in s.get("uses", ""))
+    assert restore["with"]["restore-keys"] == "market-db-${{ github.run_id }}"     # tonight's, never an older one
+    save = next(s for s in retry["steps"] if "cache/save" in s.get("uses", ""))
+    assert save["if"] == "steps.retry.outputs.tried == '1'"                          # nothing saved unless it ran
