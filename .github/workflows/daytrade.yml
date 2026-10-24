@@ -18,6 +18,10 @@ on:
         type: choice
         default: auto
         options: [auto, morning, afternoon, report]
+      date:
+        description: "With report: redo that day's report (YYYY-MM-DD); empty = today"
+        type: string
+        default: ""
 
 concurrency:
   group: day-trading
@@ -63,7 +67,9 @@ jobs:
           restore-keys: daytrade-state-
 
       - name: Trade
-        run: python -m trend_bot daytrade --phase "${{ inputs.phase || 'auto' }}" --discord
+        env:
+          REDO_DATE: ${{ inputs.date }}
+        run: python -m trend_bot daytrade --phase "${{ inputs.phase || 'auto' }}" ${REDO_DATE:+--date "$REDO_DATE"} --discord
 
       # Every trade so far (expected vs actual price, result): download it from the run's page.
       - name: Keep the trade log

@@ -61,7 +61,7 @@ class Clock:
 
 class FakeBroker:
     def __init__(self, equity=100_000.0, last_equity=100_000.0, assets=None):
-        self.orders, self.held, self.closed_all, self.cancelled = [], {}, False, 0
+        self.orders, self.held, self.closed_all, self.cancelled, self.closed = [], {}, False, 0, []
         self.equity, self.last_equity, self.assets = equity, last_equity, assets or {}
 
     def account(self):
@@ -73,9 +73,11 @@ class FakeBroker:
 
     def cancel_all(self):
         self.cancelled += 1
+        for o in self.orders:
+            o["cancelled"] = True
 
-    def open_orders(self):
-        return [o for o in self.orders if o.get("tif") == "cls" or o.get("type") == "stop"]
+    def open_orders(self, nested=False):
+        return [o for o in self.orders if (o.get("tif") == "cls" or o.get("type") == "stop") and not o.get("cancelled")]
 
     def order(self, symbol, qty, side, tag, tif="day", stop=None):
         if symbol == "NOSHORT" and side == "sell":
@@ -100,6 +102,10 @@ class FakeBroker:
     def close_all(self):
         self.closed_all = True
         self.held = {}
+
+    def close(self, symbol):
+        self.closed.append(symbol)
+        self.held.pop(symbol, None)
 
 
 class FakeData:
@@ -358,3 +364,103 @@ def test_positions_without_a_stop_get_one_once():
     assert stops["AAA"]["side"] == "sell" and stops["AAA"]["stop"] == pytest.approx(95)
     assert stops["BBB"]["side"] == "buy" and stops["BBB"]["stop"] == pytest.approx(105)
     assert s.protect() == 0                                     # already protected
+
+
+# --- What went wrong on the first live day (2026-10-23) ------------------------------------------
+
+def test_a_trade_whose_exit_hasnt_filled_yet_counts_nothing_not_its_whole_size():
+    # The report ran at 15:58, before the closing orders filled at 16:00: each position's full size
+    # (about $4,700) showed up as a gain or loss and the account looked 40% up.
+    t = "td-20261023"
+    orders = [{"symbol": "IWM", "side": "sell", "status": "filled", "filled_qty": "17", "filled_avg_price": "276",
+               "client_order_id": f"{t}-momentum-IWM"},
+              {"symbol": "IWM", "side": "buy", "status": "new", "filled_qty": "0", "filled_avg_price": None,
+               "client_order_id": f"{t}-x-IWM-exit"}]
+    r = daytrade.pnl(orders)
+    assert "momentum" not in r and r["open"]["symbols"] == ["IWM"]
+    state, e = daytrade.report(orders, 100_230.0, {}, dt.date(2026, 10, 23), last_equity=100_000.0)
+    assert state["start_equity"] == 100_000.0 and "Not closed yet" in e["description"] and "IWM" in e["description"]
+    assert "+0.23%" in e["description"]                     # the account's own change, not +40%
+    assert "some fill is missing" in e["description"]       # $0 of trades vs +$230 in the account
+
+
+def test_the_trades_must_add_up_to_the_accounts_change():
+    t = "td-20261026"
+    orders = [{"symbol": "SPY", "side": "buy", "status": "filled", "filled_qty": "6", "filled_avg_price": "760",
+               "client_order_id": f"{t}-momentum-SPY"},
+              {"symbol": "SPY", "side": "sell", "status": "filled", "filled_qty": "6", "filled_avg_price": "765",
+               "client_order_id": f"{t}-x-SPY-exit"}]
+    _, e = daytrade.report(orders, 100_030.0, {}, DAY, last_equity=100_000.0)
+    assert "missing" not in e["description"] and "$+30" in e["description"]
+
+
+def test_redoing_the_first_day_fixes_the_starting_value():
+    state = {"start_equity": 71_498.0, "days": {"2026-10-23": {"breakout": {"pnl": 23_707.0, "trades": 17}}}}
+    state, e = daytrade.report([], 100_230.0, state, dt.date(2026, 10, 23), last_equity=100_000.0)
+    assert state["start_equity"] == 100_000.0 and "+40" not in e["description"]
+
+
+class SlowCloseBroker(FakeBroker):
+    """Like Alpaca: closing (market-on-close) orders stay open until 16:00; the first one is refused
+    because the cancelled stop still holds the shares."""
+
+    def __init__(self):
+        super().__init__()
+        self.refused = 0
+
+    def order(self, symbol, qty, side, tag, tif="day", stop=None):
+        if tif == "cls":
+            if symbol == "AAPL" and not self.refused:
+                self.refused += 1
+                raise PaperError("403 insufficient qty available (held_for_orders)")
+            self.orders.append({"symbol": symbol, "qty": qty, "side": side, "client_order_id": tag, "tif": tif,
+                                "time_in_force": tif})
+            return
+        super().order(symbol, qty, side, tag, tif, stop)
+
+
+def test_closing_orders_are_retried_and_left_to_fill_at_the_close():
+    clock = Clock(dt.datetime(2026, 10, 26, 15, 40, tzinfo=daytrade.NY))
+    broker = SlowCloseBroker()
+    broker.held = {"AAPL": 14, "MSFT": -10}
+    s = daytrade.Session(broker, FakeData(clock), ["AAPL", "MSFT"], DAY, log=lambda *_: None, sleep=clock.sleep,
+                         now=clock.now)
+    s.flatten()
+    assert broker.refused == 1 and {o["symbol"] for o in broker.orders if o["tif"] == "cls"} == {"AAPL", "MSFT"}
+    assert broker.closed == [] and not broker.closed_all        # both have closing orders: left alone at 15:58
+
+
+def test_a_stop_attached_to_its_entry_order_counts_as_protection():
+    class Nested(FakeBroker):
+        def open_orders(self, nested=False):
+            leg = {"symbol": "AAPL", "type": "stop"}
+            return [{"symbol": "AAPL", "type": "market", "legs": [leg]}] if nested else []
+
+    broker = Nested()
+    broker.held = {"AAPL": 14}
+    s = daytrade.Session(broker, None, ["AAPL"], DAY, log=lambda *_: None)
+    assert s.protect() == 0 and not [o for o in broker.orders if o.get("type") == "stop"]
+
+
+def test_a_past_days_report_can_be_redone_from_that_days_orders(tmp_path, monkeypatch):
+    import json
+
+    from trend_bot.cli import main
+
+    t = "td-20261023"
+    friday = [{"symbol": "SPY", "side": "buy", "status": "filled", "filled_qty": "6", "filled_avg_price": "760",
+               "client_order_id": f"{t}-momentum-SPY", "submitted_at": "2026-10-23T19:30:00Z"},
+              {"symbol": "SPY", "side": "sell", "status": "filled", "filled_qty": "6", "filled_avg_price": "765",
+               "client_order_id": f"{t}-x-SPY-exit", "submitted_at": "2026-10-23T19:45:00Z"}]
+    later = [{"symbol": "QQQ", "side": "buy", "status": "filled", "filled_qty": "1", "filled_avg_price": "1",
+              "client_order_id": "td-20261026-momentum-QQQ", "submitted_at": "2026-10-26T19:30:00Z"}]
+    broker = FakeBroker(equity=100_030.0)
+    broker.orders = friday + later
+    monkeypatch.setattr(daytrade.DayBroker, "from_env", classmethod(lambda cls: broker))
+    state = tmp_path / "s.json"
+    state.write_text(json.dumps({"start_equity": 71_498.0, "days": {"2026-10-23": {"momentum": {"pnl": 4_563.0, "trades": 1}}}}))
+    assert main(["daytrade", "--phase", "report", "--date", "2026-10-23", "--state", str(state),
+                 "--intraday-db", str(tmp_path / "none.db"), "--log-csv", str(tmp_path / "l.csv")]) == 0
+    s = json.loads(state.read_text())
+    assert s["days"] == {"2026-10-23": {"momentum": {"pnl": 30.0, "trades": 1}}}
+    assert s["start_equity"] == pytest.approx(100_000.0)

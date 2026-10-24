@@ -361,8 +361,19 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
         state.setdefault("pending", []).extend(session.entries)
         Path(args.state).write_text(json.dumps(state, indent=1))
     if phase in ("afternoon", "report"):
-        state, embed = daytrade.report(session.today_orders(), float(broker.account()["equity"]),
-                                       state, now.date(), meta.get("results"))
+        if phase == "afternoon":
+            session.settle()                     # the closing orders fill at 16:00: wait for them
+        day = dt.date.fromisoformat(args.date) if args.date else now.date()
+        account = broker.account()
+        if day == now.date():
+            orders, last = session.today_orders(), float(account.get("last_equity") or 0) or None
+        else:   # redo a past day's report (e.g. after a fix): only that day's orders
+            start = dt.datetime.combine(day, dt.time(9, 0), daytrade.NY).astimezone(dt.timezone.utc)
+            end = (start + dt.timedelta(days=1)).isoformat()
+            orders = [o for o in broker.orders_since(start.isoformat()) if str(o.get("submitted_at", "")) < end]
+            last = None
+        state, embed = daytrade.report(orders, float(account["equity"]), state, day, meta.get("results"),
+                                       last_equity=last)
         Path(args.state).write_text(json.dumps(state, indent=1))
         daytrade.write_csv(state["log"], args.log_csv)
         print(embed["description"].replace("**", ""))
