@@ -195,13 +195,14 @@ class Session:
         """Give every open position without a protective stop one (STOP_LOSS from its entry price): covers
         positions opened before stops existed, or a stop that got lost. Returns how many were added."""
         orders = self.b.open_orders(nested=True)
-        stopped = {x["symbol"] for o in orders for x in [o, *(o.get("legs") or [])]
-                   if x.get("type") in ("stop", "stop_limit", "trailing_stop")}
+        flat = [x for o in orders for x in [o, *(o.get("legs") or [])]]
+        stopped = {x["symbol"] for x in flat if x.get("type") in ("stop", "stop_limit", "trailing_stop")}
         added = 0
         for p in self.b.positions():
-            if p["symbol"] in stopped:
-                continue
             qty, entry = float(p["qty"]), float(p.get("avg_entry_price") or 0)
+            closing = "sell" if qty > 0 else "buy"
+            if p["symbol"] in stopped or any(x["symbol"] == p["symbol"] and x.get("side") == closing for x in flat):
+                continue                    # protected, or already being closed (e.g. left over the weekend)
             if not qty or not entry:
                 continue
             long = qty > 0
@@ -604,6 +605,30 @@ def safety_net(broker: DayBroker, now: dt.datetime, log=print) -> dict | None:
                            + " Fake money; the trading job's log on the Actions tab shows what went wrong."}
 
 
+def settle_carried(state: dict, orders: list[dict], today: dt.date) -> tuple[list[dict], list[str], float]:
+    """Trades from earlier days still open (held overnight, e.g. closed by the safety net at the next open):
+    today's closing fill completes their row in the log and their day's totals. Returns (today's other
+    orders, what was settled, its $ total)."""
+    open_rows = [r for r in state.get("log", []) if r["date"] < today.isoformat() and r.get("exit") is None
+                 and r.get("entry")]
+    rest, done, total = list(orders), [], 0.0
+    for r in open_rows:
+        want = "sell" if r["side"] > 0 else "buy"
+        o = next((o for o in rest if o["symbol"] == r["symbol"] and o.get("side") == want
+                  and o.get("status") == "filled" and o.get("filled_avg_price")), None)
+        if o is None:
+            continue
+        rest.remove(o)
+        exit_ = float(o["filled_avg_price"])
+        r.update(exit=exit_, ret=r["side"] * (exit_ / r["entry"] - 1), pnl=r["side"] * r["qty"] * (exit_ - r["entry"]))
+        d = state.setdefault("days", {}).setdefault(r["date"], {}).setdefault(r["pattern"], {"pnl": 0.0, "trades": 0})
+        d["pnl"] += r["pnl"]
+        d["trades"] += 1
+        done.append(f"{r['symbol']} {r['pnl']:+,.0f} (from {r['date']})")
+        total += r["pnl"]
+    return rest, done, total
+
+
 def report(orders: list[dict], equity: float, state: dict, today: dt.date, tested: dict | None = None,
            last_equity: float | None = None) -> tuple[dict, dict]:
     """Add today's results to the running state (and the trade log); returns (state, Discord embed).
@@ -612,6 +637,7 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     in the account is the truth the trade-by-trade results must add up to; a gap is flagged."""
     from trend_bot.alerts import GOLD, GREEN, RED, lead
 
+    orders, carried, carried_pnl = settle_carried(state, orders, today)
     rows = trade_log(orders, state.pop("pending", []), today)
     state["log"] = [r for r in state.get("log", []) if r["date"] != today.isoformat()] + rows
     day = pnl(orders)
@@ -629,7 +655,7 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
             t["trades"] += r["trades"]
     names = {"gap": ("gap_fade", "Fade big opening gaps"), "breakout": ("opening_range", "Breakout from the first half hour"),
              "momentum": ("intraday_momentum", "Market's last half hour follows its first"), "other": ("", "Other")}
-    today_total = sum(r["pnl"] for r in day.values())
+    today_total = sum(r["pnl"] for r in day.values()) + carried_pnl
     lines = [lead("the bot's day-trading practice account (fake money) traded today and closed everything by the "
                   "close. A test of whether intraday patterns make money; nothing real was bought or sold."), ""]
     if not day:
@@ -669,6 +695,8 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     for p in sorted(newly):
         lines.append(f"⏸️ **{PATTERN_NAME[p]} is paused**: after {cmp[p]['n']} live trades it's doing clearly worse "
                      "than its 10-year history. It resumes on its own if its record comes back within range.")
+    if carried:
+        lines += ["", f"Closed today, from earlier days (held overnight): {', '.join(carried)}: ${carried_pnl:+,.0f}"]
     if still_open:
         lines += ["", f"⚠️ Not closed yet when this was written (no result counted for them): {', '.join(still_open)}"]
     if last_equity and abs((equity - last_equity) - today_total) > max(50.0, 0.0005 * equity):

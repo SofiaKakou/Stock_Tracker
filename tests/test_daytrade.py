@@ -489,3 +489,53 @@ def test_a_refused_close_at_1558_is_retried_and_reported():
     s = daytrade.Session(broker, FakeData(clock), ["PFE"], DAY, log=lambda *_: None, sleep=clock.sleep, now=clock.now)
     s.flatten()
     assert broker.tries == 2 and broker.closed == ["PFE"] and not broker.held
+
+
+def test_positions_held_over_the_weekend_are_settled_into_their_own_day():
+    state = {"start_equity": 100_000.0,
+             "log": [{"date": "2026-10-23", "symbol": "PFE", "pattern": "breakout", "side": 1, "qty": 100,
+                      "entry": 25.0, "exit": None, "ret": None, "pnl": None}],
+             "days": {"2026-10-23": {"breakout": {"pnl": 311.0, "trades": 11}}}}
+    orders = [{"symbol": "PFE", "side": "sell", "status": "filled", "filled_qty": "100", "filled_avg_price": "25.5",
+               "client_order_id": "safety-close"}]
+    state, e = daytrade.report(orders, 100_361.0, state, DAY, last_equity=100_311.0)
+    row = state["log"][0]
+    assert row["exit"] == 25.5 and row["pnl"] == pytest.approx(50) and row["ret"] == pytest.approx(0.02)
+    assert state["days"]["2026-10-23"]["breakout"] == {"pnl": pytest.approx(361.0), "trades": 12}
+    d = e["description"]
+    assert "from earlier days" in d and "PFE +50" in d and "Not closed yet" not in d and "missing" not in d
+
+
+def test_a_position_already_being_closed_gets_no_new_stop():
+    broker = FakeBroker()
+    broker.held = {"PFE": 100}
+    # A closing order queued for the open (like the safety net's on Friday night), not a stop:
+    broker.open_orders = lambda nested=False: [{"symbol": "PFE", "side": "sell", "type": "market"}]
+    s = daytrade.Session(broker, None, ["PFE"], DAY, log=lambda *_: None)
+    assert s.protect() == 0
+
+
+def test_each_part_runs_once_a_day_even_with_backup_schedules(tmp_path, monkeypatch):
+    import json
+
+    from trend_bot.cli import main
+    from trend_bot.commands import outputs
+
+    broker = FakeBroker()
+    broker.clock = lambda: {"is_open": True}
+    monkeypatch.setattr(daytrade.DayBroker, "from_env", classmethod(lambda cls: broker))
+    ran = []
+    monkeypatch.setattr(daytrade.Session, "morning", lambda self: ran.append("morning"))
+    state = tmp_path / "s.json"
+    args = ["daytrade", "--state", str(state), "--intraday-db", str(tmp_path / "none.db"),
+            "--log-csv", str(tmp_path / "l.csv")]
+
+    class Late(dt.datetime):          # GitHub started the morning part an hour late: 10:17
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime(2026, 10, 26, 10, 17, tzinfo=tz)
+
+    monkeypatch.setattr(outputs, "_dt", dt)
+    monkeypatch.setattr(dt, "datetime", Late)
+    assert main(args) == 0 and main(args) == 0          # the backup schedule fires too
+    assert ran == ["morning"] and json.loads(state.read_text())["ran"] == {"2026-10-26": ["morning"]}
