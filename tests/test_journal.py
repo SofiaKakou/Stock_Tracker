@@ -1,6 +1,8 @@
 import datetime as dt
 import json
 
+import pytest
+
 from trend_bot import db, journal
 
 
@@ -52,7 +54,7 @@ def test_the_journal_writes_every_table_once_per_day(tmp_path):
     written = journal.sync(conn, con, state, results, log=lambda *_: None)
     assert written == {"day_trades": 1, "day_summary": 1, "account_values": 2, "monthly_holdings": 2,
                        "safety_events": 1, "study_results": 1, "runs": 1, "news": 1, "macro": 2,
-                       "ranking_snapshots": 1, "measure_snapshots": 2, "stocks": 0}
+                       "ranking_snapshots": 1, "measure_snapshots": 2, "forecast_outcomes": 0, "stocks": 0}
     alters = [s for s, _ in conn.sql if "ALTER TABLE" in s]
     assert len(alters) == 3                              # bid, ask, spread added to an older day_trades
     creates = [s for s, _ in conn.sql if s.startswith("IF OBJECT_ID")]
@@ -135,3 +137,23 @@ def test_a_sleeping_database_is_given_time_to_wake_up(monkeypatch):
     except pymssql.OperationalError:
         pass
     assert calls.count("bad") == 1                                   # other errors aren't retried
+
+
+def test_each_snapshot_gets_its_stocks_next_month_and_the_markets(tmp_path):
+    import pandas as pd
+
+    con = db.connect(tmp_path / "m.db")
+    days = [str(d.date()) for d in pd.bdate_range("2026-09-01", periods=30)]
+    for t, step in (("AAA", 0.01), ("BBB", -0.01), ("SPY", 0.002)):
+        con.executemany("INSERT INTO prices(ticker, date, adj_close) VALUES (?, ?, ?)",
+                        [(t, d, 100 * (1 + step) ** i) for i, d in enumerate(days)])
+    con.executemany("INSERT INTO ranking_snapshots VALUES (?, ?, ?, 0, ?, 'x', 1)",
+                    [(days[0], "AAA", 1, 1.0), (days[0], "BBB", 2, 0.5), (days[25], "AAA", 1, 1.0)])
+    rows = {(r["snapshot_date"], r["ticker"]): r for r in journal.outcome_rows(con, [days[0], days[25]],
+                                                                             today=dt.date(2026, 10, 20))}
+    a = rows[(days[0], "AAA")]
+    assert a["days"] == 21 and a["final"] == 1 and a["ret"] == pytest.approx(1.01 ** 21 - 1)
+    assert a["market_ret"] == pytest.approx(1.002 ** 21 - 1) and rows[(days[0], "BBB")]["ret"] < 0
+    late = rows[(days[25], "AAA")]
+    assert late["days"] == 4 and late["final"] == 0          # only 4 days so far: not final yet
+    assert (days[0], "SPY") not in rows                      # the market itself wasn't ranked

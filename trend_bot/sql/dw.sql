@@ -186,6 +186,18 @@ CREATE TABLE dw.FactNews (                          -- one row per headline and 
 );
 GO
 
+IF OBJECT_ID('dw.FactForecastOutcome', 'U') IS NULL
+CREATE TABLE dw.FactForecastOutcome (               -- what each ranked stock did after the snapshot
+    DateKey      INT NOT NULL REFERENCES dw.DimDate (DateKey),       -- the snapshot day
+    StockKey     INT NOT NULL REFERENCES dw.DimStock (StockKey),
+    Days         INT NULL,                          -- trading days measured (21 = the full month)
+    Ret          FLOAT NULL,                        -- its return from the snapshot day's close
+    MarketRet    FLOAT NULL,                        -- the S&P 500 (SPY) over the same days
+    IsFinal      BIT NULL,                          -- the whole month has passed
+    PRIMARY KEY (DateKey, StockKey)
+);
+GO
+
 IF OBJECT_ID('dw.FactMacro', 'U') IS NULL
 CREATE TABLE dw.FactMacro (
     DateKey      INT NOT NULL REFERENCES dw.DimDate (DateKey),
@@ -276,6 +288,7 @@ BEGIN
           UNION SELECT ticker FROM dbo.monthly_holdings
           UNION SELECT ticker FROM dbo.ranking_snapshots
           UNION SELECT ticker FROM dbo.safety_events
+          UNION SELECT ticker FROM dbo.forecast_outcomes
           UNION SELECT REPLACE(LTRIM(RTRIM(v.value)), '.', '-') FROM dbo.news n
                 CROSS APPLY STRING_SPLIT(n.symbols, ',') v) x
     WHERE x.ticker <> '' AND NOT EXISTS (SELECT 1 FROM dw.DimStock d WHERE d.Ticker = x.ticker);
@@ -392,6 +405,12 @@ BEGIN
     LEFT JOIN dw.DimStock s ON s.Ticker = REPLACE(LTRIM(RTRIM(v.value)), '.', '-')
     WHERE LTRIM(RTRIM(v.value)) <> '' AND NOT EXISTS (SELECT 1 FROM dw.FactNews f WHERE f.NewsId = n.id);
 
+    DELETE FROM dw.FactForecastOutcome;
+    INSERT INTO dw.FactForecastOutcome (DateKey, StockKey, Days, Ret, MarketRet, IsFinal)
+    SELECT CONVERT(INT, CONVERT(CHAR(8), o.snapshot_date, 112)), ISNULL(s.StockKey, -1), o.days, o.ret,
+           o.market_ret, o.final
+    FROM dbo.forecast_outcomes o LEFT JOIN dw.DimStock s ON s.Ticker = o.ticker;
+
     COMMIT TRANSACTION;
 
     SELECT 'DimStock' AS [Table], COUNT(*) AS [Rows] FROM dw.DimStock
@@ -403,7 +422,8 @@ BEGIN
     UNION ALL SELECT 'FactHolding', COUNT(*) FROM dw.FactHolding
     UNION ALL SELECT 'FactSafetyEvent', COUNT(*) FROM dw.FactSafetyEvent
     UNION ALL SELECT 'FactNews', COUNT(*) FROM dw.FactNews
-    UNION ALL SELECT 'FactMacro', COUNT(*) FROM dw.FactMacro;
+    UNION ALL SELECT 'FactMacro', COUNT(*) FROM dw.FactMacro
+    UNION ALL SELECT 'FactForecastOutcome', COUNT(*) FROM dw.FactForecastOutcome;
 END;
 GO
 
@@ -448,4 +468,58 @@ FROM dw.FactDayTrade t
 JOIN dw.DimDate d ON d.DateKey = t.DateKey
 JOIN dw.DimStock s ON s.StockKey = t.StockKey
 JOIN dw.DimPattern p ON p.PatternKey = t.PatternKey;
+GO
+
+-- Did the forecast work? One row per snapshot: the bot's top 20 vs every other ranked stock vs the
+-- S&P 500 over the next month (so far, until IsFinal). Over many snapshots, Top20MinusRest > 0 means
+-- the ranking picks winners. e.g.
+--   SELECT AVG(Top20MinusRest), AVG(Top20MinusMarket), COUNT(*) FROM dw.vForecastCheck WHERE IsFinal = 1
+CREATE OR ALTER VIEW dw.vForecastCheck AS
+SELECT d.[Date], MIN(o.Days) AS Days, CAST(MIN(CAST(o.IsFinal AS INT)) AS BIT) AS IsFinal,
+       COUNT(*) AS Stocks,
+       AVG(CASE WHEN f.[Rank] <= 20 THEN o.Ret END) AS Top20Return,
+       AVG(CASE WHEN f.[Rank] > 20 THEN o.Ret END) AS RestReturn,
+       AVG(o.MarketRet) AS MarketReturn,
+       AVG(CASE WHEN f.[Rank] <= 20 THEN o.Ret END) - AVG(CASE WHEN f.[Rank] > 20 THEN o.Ret END) AS Top20MinusRest,
+       AVG(CASE WHEN f.[Rank] <= 20 THEN o.Ret END) - AVG(o.MarketRet) AS Top20MinusMarket,
+       AVG(CASE WHEN f.[Rank] <= 20 THEN CASE WHEN o.Ret > o.MarketRet THEN 1.0 ELSE 0 END END) AS Top20BeatMarketShare
+FROM dw.FactForecastOutcome o
+JOIN dw.FactForecast f ON f.DateKey = o.DateKey AND f.StockKey = o.StockKey
+JOIN dw.DimDate d ON d.DateKey = o.DateKey
+GROUP BY d.[Date];
+GO
+
+-- The same by tenth of the ranking (1 = the best 10%): the returns should fall from 1 to 10.
+CREATE OR ALTER VIEW dw.vForecastDeciles AS
+SELECT d.[Date], CASE WHEN f.Pct >= 0.9 THEN 1 WHEN f.Pct <= 0.1 THEN 10 ELSE CAST(FLOOR((1 - f.Pct) * 10) AS INT) + 1 END AS Decile, COUNT(*) AS Stocks,
+       AVG(o.Ret) AS AvgReturn, AVG(o.Ret - o.MarketRet) AS VsMarket, CAST(MIN(CAST(o.IsFinal AS INT)) AS BIT) AS IsFinal
+FROM dw.FactForecastOutcome o
+JOIN dw.FactForecast f ON f.DateKey = o.DateKey AND f.StockKey = o.StockKey
+JOIN dw.DimDate d ON d.DateKey = o.DateKey
+WHERE f.Pct IS NOT NULL
+GROUP BY d.[Date], CASE WHEN f.Pct >= 0.9 THEN 1 WHEN f.Pct <= 0.1 THEN 10 ELSE CAST(FLOOR((1 - f.Pct) * 10) AS INT) + 1 END;
+GO
+
+-- Each day-trading pattern: what the 10-year test promised vs what live trading delivers.
+-- (Live returns are what the account got, fill to fill, so they include real costs like the
+-- 10-year test's "after costs" number.) Judge only after ~20 live trades; a single day is luck.
+CREATE OR ALTER VIEW dw.vPatternScorecard AS
+WITH live AS (
+    SELECT t.PatternKey, COUNT(*) AS Trades, COUNT(t.Ret) AS ClosedTrades, AVG(t.Ret) AS LivePerTrade,
+           SUM(t.Pnl) AS LiveDollars, AVG(CASE WHEN t.Ret > 0 THEN 1.0 WHEN t.Ret IS NOT NULL THEN 0 END) AS HitRate,
+           AVG(t.Slippage) AS AvgSlippage, AVG(t.Spread) AS AvgSpread,
+           MIN(d.[Date]) AS FirstTrade, MAX(d.[Date]) AS LastTrade, COUNT(DISTINCT t.DateKey) AS Days
+    FROM dw.FactDayTrade t JOIN dw.DimDate d ON d.DateKey = t.DateKey
+    GROUP BY t.PatternKey)
+SELECT p.Pattern, p.Description, p.IsLive, p.StudyPerTrade AS TestPerTrade, p.StudyYearly AS TestYearly,
+       p.StudyVerdict AS TestVerdict, ISNULL(l.Trades, 0) AS Trades, ISNULL(l.ClosedTrades, 0) AS ClosedTrades,
+       l.Days, l.LivePerTrade, l.LivePerTrade - p.StudyPerTrade AS LiveMinusTest, l.LiveDollars, l.HitRate,
+       l.AvgSlippage, l.AvgSpread, l.FirstTrade, l.LastTrade,
+       CASE WHEN ISNULL(l.ClosedTrades, 0) = 0 THEN 'no live trades yet'
+            WHEN l.ClosedTrades < 20 THEN 'too early to tell'
+            WHEN l.LivePerTrade > p.StudyPerTrade THEN 'live better than the test so far'
+            ELSE 'live worse than the test so far' END AS Verdict
+FROM dw.DimPattern p
+LEFT JOIN live l ON l.PatternKey = p.PatternKey
+WHERE p.PatternKey <> -1;
 GO
