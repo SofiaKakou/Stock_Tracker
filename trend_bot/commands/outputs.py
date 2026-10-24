@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -309,6 +310,10 @@ def cmd_send_email(args: argparse.Namespace) -> int:
     return 0
 
 
+MORNING_WINDOW = (_dt.time(9, 0), _dt.time(11, 40))       # New York time a part may start in
+AFTERNOON_WINDOW = (_dt.time(12, 0), _dt.time(15, 40))    # (after 15:40 the closing orders can't be placed)
+
+
 def cmd_daytrade(args: argparse.Namespace) -> int:
     """Day-trading demo account (fake money, its own paper account): one part of today's session."""
     import datetime as dt
@@ -332,11 +337,17 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
         if alert and args.discord and alerts.load_webhook():
             alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [alert]})
         return 0
-    if phase == "auto":   # two schedules per part (summer and winter time): only the right one runs
-        phase = ("morning" if dt.time(9, 0) <= now.time() < dt.time(9, 50) else
-                 "afternoon" if dt.time(12, 0) <= now.time() < dt.time(12, 50) else "")
+    if phase == "auto":   # several schedules per part (summer/winter time, and backups because GitHub
+        # sometimes starts a scheduled run late or not at all): the first one in its window runs the part,
+        # the others see it already ran today. A late start skips what it missed and doesn't chase it.
+        phase = ("morning" if MORNING_WINDOW[0] <= now.time() < MORNING_WINDOW[1] else
+                 "afternoon" if AFTERNOON_WINDOW[0] <= now.time() < AFTERNOON_WINDOW[1] else "")
         if not phase:
             print(f"[day] {now:%H:%M} New York time is not a start time; nothing to do (the other schedule runs).")
+            return 0
+        ran = daytrade.load_state(args.state).get("ran", {})
+        if phase in ran.get(now.date().isoformat(), []):
+            print(f"[day] the {phase} part already ran today; nothing to do.")
             return 0
     if phase in ("morning", "afternoon"):
         clock = broker.clock()
@@ -350,6 +361,9 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
     symbols = meta.get("universe") or intraday.ETFS + daytrade.FALLBACK_STOCKS
     data = intraday.Data.from_env(daytrade.KEY_ENV, daytrade.SECRET_ENV)
     state = daytrade.load_state(args.state)
+    if phase in ("morning", "afternoon"):     # remembered (kept even if the part stops early)
+        today_key = now.date().isoformat()
+        state["ran"] = {today_key: sorted(set(state.get("ran", {}).get(today_key, [])) | {phase})}
     session = daytrade.Session(broker, data, symbols, now.date(), share=state.get("share"),
                                paused=state.get("paused"))
     try:
