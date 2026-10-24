@@ -33,7 +33,7 @@ CACHE_DIR = Path("data_cache") / "sec"
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
-REQUEST_GAP = 0.2  # seconds between requests; SEC allows at most 10 per second, we stay well below
+REQUEST_GAP = 0.5  # seconds between requests; the SEC allows 10 a second, we send at most 2 (shared machines)
 
 CODE_NAMES = {
     "P": "BUY", "S": "SELL", "A": "AWARD", "M": "OPTION EXERCISE", "F": "TAX WITHHOLDING",

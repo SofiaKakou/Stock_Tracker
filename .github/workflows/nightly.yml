@@ -25,6 +25,8 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    outputs:
+      sec_refused: ${{ steps.sec.outputs.refused }}
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
@@ -60,6 +62,15 @@ jobs:
             echo "the saved database wasn't found, so tonight started from an empty one (Actions -> Import database fixes it)" >> reports/problems.txt
           fi
           python -m trend_bot db update --flag-incomplete reports/prices_incomplete || { echo "::warning::db update did not finish (see log); continuing"; echo "the data update didn't finish" >> reports/problems.txt; }
+
+      # Is the SEC refusing us (tonight, or a pause from an earlier night)? Then the sec-retry job
+      # below tries again from a fresh GitHub machine (a different address) once this run is done.
+      - name: Did the SEC refuse?
+        id: sec
+        if: always()
+        run: |
+          refused=$(python -c "import datetime as d, sqlite3; r = sqlite3.connect('market.db').execute(\"SELECT value FROM meta WHERE key = 'sec_paused_until'\").fetchone(); print(1 if r and r[0] and r[0] > d.datetime.now().isoformat() else 0)" 2>/dev/null || echo 0)
+          echo "refused=$refused" >> "$GITHUB_OUTPUT"
 
       # If Yahoo refused or stopped partway (usually a short rate limit), wait an hour and try the
       # prices once more, so tonight's messages use today's prices instead of waiting for tomorrow.
@@ -128,10 +139,10 @@ jobs:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
           python -m trend_bot collect || echo "collecting news / the economy failed" >> reports/problems.txt
-          # Weekly ranking snapshot after Friday's close (this run starts early Saturday, UTC), and
-          # straight away when there is none yet.
+          # Weekly ranking snapshot after Friday's close (Friday in New York: GitHub often starts this
+          # run hours late, past midnight UTC), and straight away when there is none yet.
           has_snapshot=$(python -c "import sqlite3; print(1 if sqlite3.connect('market.db').execute('SELECT 1 FROM ranking_snapshots LIMIT 1').fetchone() else 0)" 2>/dev/null || echo 0)
-          if [ "$(date -u +%u)" = "6" ] || [ "$has_snapshot" = "0" ]; then
+          if [ "$(TZ=America/New_York date +%u)" = "5" ] || [ "$has_snapshot" = "0" ]; then
             python -m trend_bot ideas --no-record > /dev/null || echo "the weekly ranking snapshot failed" >> reports/problems.txt
           fi
 
@@ -216,6 +227,54 @@ jobs:
           path: reports/latest.html
           if-no-files-found: ignore
           retention-days: 30
+
+  # The SEC sometimes blocks the shared GitHub machine a run lands on (other users' heavy traffic
+  # from the same addresses). When tonight's run was refused, try the SEC part once more from a
+  # fresh machine, and keep what it catches up on for the next night.
+  sec-retry:
+    needs: run
+    if: always() && needs.run.outputs.sec_refused == '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Restore database
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}-sec
+          restore-keys: market-db-${{ github.run_id }}
+      - name: Try the SEC again from this machine
+        id: retry
+        if: steps.restore.outputs.cache-matched-key != ''
+        run: |
+          if python -m trend_bot sec-check; then
+            python -m trend_bot db update --insiders-only || true
+            echo "tried=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "The SEC refuses this machine too; the next nightly run tries again."
+          fi
+      - name: Save database
+        if: steps.retry.outputs.tried == '1'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}-sec
 
   # Optional: publish the report as a web page you can open on your phone. Off unless you turn it on,
   # because the page is public (anyone with the link can see it, like this public repository):
