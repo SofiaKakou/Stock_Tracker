@@ -283,6 +283,7 @@ def make_parser() -> argparse.ArgumentParser:
                      help="auto: whichever part of the day it is now (for the schedule)")
     dtp.add_argument("--intraday-db", default="intraday.db", help="stocks to watch and the 10-year test results")
     dtp.add_argument("--state", default="daytrade.json", help="running totals since the first day")
+    dtp.add_argument("--date", help="with --phase report: redo that day's report (YYYY-MM-DD), e.g. after a fix")
     dtp.add_argument("--log-csv", default="daytrade_log.csv", help="the trade log as a spreadsheet file")
     dtp.add_argument("--discord", action="store_true", help="post the evening report")
     dtp.set_defaults(func=cmd_daytrade)

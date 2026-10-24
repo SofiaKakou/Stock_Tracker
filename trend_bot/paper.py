@@ -63,8 +63,12 @@ class Paper:
     def positions(self) -> list[dict]:
         return self._call("GET", "/positions")
 
-    def open_orders(self) -> list[dict]:
-        return self._call("GET", "/orders", params={"status": "open", "limit": 500})
+    def open_orders(self, nested: bool = False) -> list[dict]:
+        """Open orders; nested=True lists a bracket's protective legs under their entry order."""
+        params = {"status": "open", "limit": 500}
+        if nested:
+            params["nested"] = "true"
+        return self._call("GET", "/orders", params=params)
 
     def order(self, symbol: str, qty: int, side: str, tag: str) -> dict:
         return self._call("POST", "/orders", json={"symbol": symbol, "qty": str(qty), "side": side,

@@ -38,7 +38,7 @@ GAP_LATEST = dt.time(10, 15)          # a late start still fades the gap until 1
 MORNING_CHECKS = [dt.time(10, 30), dt.time(11, 0), dt.time(11, 30), dt.time(12, 0)]
 AFTERNOON_CHECKS = [dt.time(12, 30), dt.time(13, 0), dt.time(13, 30), dt.time(14, 0), dt.time(14, 30),
                     dt.time(15, 0), dt.time(15, 30)]
-MOC_AT, FLAT_AT = dt.time(15, 45), dt.time(15, 58)
+MOC_AT, FLAT_AT, SETTLE_AT = dt.time(15, 45), dt.time(15, 58), dt.time(16, 1)
 STOP_LOSS = 0.05        # every position has a stop at the broker: out if it moves 5% against us
 DAILY_LOSS_LIMIT = 0.03  # the account down 3% on the day: close everything, no more trades today
 GUARD_EVERY = 300        # seconds between loss-limit checks while waiting
@@ -118,8 +118,10 @@ def pnl(orders: list[dict]) -> dict[str, dict]:
     """Per pattern from today's filled td- orders: {pattern: {"pnl": $, "trades": n, "symbols": [...]}}.
 
     Each symbol's entry order carries the pattern in its tag (td-<yyyymmdd>-<pattern>-<symbol>); its money
-    in minus money out over the day is the trade's result."""
+    in minus money out over the day is the trade's result. A symbol still held (its exit hasn't filled)
+    has no result yet: it goes under "open" instead of counting its whole size as a gain or loss."""
     flows: dict[str, float] = {}
+    net: dict[str, float] = {}
     pattern_of: dict[str, str] = {}
     for o in orders:
         if o.get("status") != "filled" or not o.get("filled_avg_price"):
@@ -127,11 +129,15 @@ def pnl(orders: list[dict]) -> dict[str, dict]:
         tag = str(o.get("client_order_id", ""))
         sym, qty, price = o["symbol"], float(o["filled_qty"]), float(o["filled_avg_price"])
         flows[sym] = flows.get(sym, 0.0) + (qty * price if o["side"] == "sell" else -qty * price)
+        net[sym] = net.get(sym, 0.0) + (qty if o["side"] == "buy" else -qty)
         parts = tag.split("-")          # td-<yyyymmdd>-<pattern>-<symbol>, exits: td-<yyyymmdd>-x-<symbol>-exit
         if tag.startswith("td-") and len(parts) >= 4 and parts[2] != "x":
             pattern_of.setdefault(sym, parts[2])
     out: dict[str, dict] = {}
     for sym, money in flows.items():
+        if abs(net[sym]) > 1e-9:   # not closed yet (its exit hasn't filled): no result, not the position's size
+            out.setdefault("open", {"pnl": 0.0, "trades": 0, "symbols": []})["symbols"].append(sym)
+            continue
         p = pattern_of.get(sym, "other")
         r = out.setdefault(p, {"pnl": 0.0, "trades": 0, "symbols": []})
         r["pnl"] += money
@@ -188,7 +194,9 @@ class Session:
     def protect(self) -> int:
         """Give every open position without a protective stop one (STOP_LOSS from its entry price): covers
         positions opened before stops existed, or a stop that got lost. Returns how many were added."""
-        stopped = {o["symbol"] for o in self.b.open_orders() if o.get("type") in ("stop", "stop_limit", "trailing_stop")}
+        orders = self.b.open_orders(nested=True)
+        stopped = {x["symbol"] for o in orders for x in [o, *(o.get("legs") or [])]
+                   if x.get("type") in ("stop", "stop_limit", "trailing_stop")}
         added = 0
         for p in self.b.positions():
             if p["symbol"] in stopped:
@@ -356,17 +364,44 @@ class Session:
         The protective stops are cancelled first (they hold the shares the closing orders need)."""
         self.wait_until(MOC_AT)
         self.b.cancel_all()
+        self.wait_for(lambda: not self.b.open_orders(), seconds=60)    # cancelling takes a moment
         for p in self.b.positions():
             qty = abs(int(float(p["qty"])))
             side = "sell" if float(p["qty"]) > 0 else "buy"
-            try:
-                self.b.order(p["symbol"], qty, side, f"td-{self.today:%Y%m%d}-x-{p['symbol']}-exit", tif="cls")
-            except PaperError as e:
-                self.log(f"[day] closing order for {p['symbol']} refused ({str(e)[:80]}); closed at 15:58 instead")
+            tag = f"td-{self.today:%Y%m%d}-x-{p['symbol']}-exit"
+            for attempt in (1, 2):
+                try:
+                    self.b.order(p["symbol"], qty, side, tag, tif="cls")
+                    break
+                except PaperError as e:
+                    if attempt == 2:
+                        self.log(f"[day] closing order for {p['symbol']} refused ({str(e)[:80]}); closed at 15:58 instead")
+                    else:
+                        self.sleep(5)
         self.wait_until(FLAT_AT)
-        if self.b.positions():
-            self.b.close_all()
-            self.log("[day] closed what was left at 15:58")
+        # Positions with a closing order are still open until it fills at 16:00: leave those alone.
+        closing = {o["symbol"] for o in self.b.open_orders() if o.get("time_in_force") == "cls"}
+        left = [p["symbol"] for p in self.b.positions() if p["symbol"] not in closing]
+        for sym in left:
+            self.b.close(sym)
+        if left:
+            self.log(f"[day] closed what had no closing order at 15:58: {', '.join(left)}")
+
+    def wait_for(self, done, seconds: float, step: float = 2) -> bool:
+        """Check `done()` every `step` seconds for up to `seconds`; True once it holds."""
+        waited = 0.0
+        while not done():
+            if waited >= seconds:
+                return False
+            self.sleep(step)
+            waited += step
+        return True
+
+    def settle(self) -> None:
+        """After the close: wait until the closing orders have filled, so the report sees every exit."""
+        self.wait_until(SETTLE_AT)
+        if not self.wait_for(lambda: not self.b.positions() and not self.b.open_orders(), seconds=600, step=15):
+            self.log("[day] some closing orders still hadn't filled 10 minutes after the close")
 
 
 # --- Learning from the live trades ----------------------------------------------------------------
@@ -557,13 +592,21 @@ def safety_net(broker: DayBroker, now: dt.datetime, log=print) -> dict | None:
                            + " Fake money; the trading job's log on the Actions tab shows what went wrong."}
 
 
-def report(orders: list[dict], equity: float, state: dict, today: dt.date, tested: dict | None = None) -> tuple[dict, dict]:
-    """Add today's results to the running state (and the trade log); returns (state, Discord embed)."""
+def report(orders: list[dict], equity: float, state: dict, today: dt.date, tested: dict | None = None,
+           last_equity: float | None = None) -> tuple[dict, dict]:
+    """Add today's results to the running state (and the trade log); returns (state, Discord embed).
+
+    last_equity: the account's value at the previous close (the broker's own number). The day's change
+    in the account is the truth the trade-by-trade results must add up to; a gap is flagged."""
     from trend_bot.alerts import GOLD, GREEN, RED, lead
 
     rows = trade_log(orders, state.pop("pending", []), today)
     state["log"] = [r for r in state.get("log", []) if r["date"] != today.isoformat()] + rows
     day = pnl(orders)
+    still_open = day.pop("open", {}).get("symbols", [])
+    first_day = not state.get("days") or set(state["days"]) == {today.isoformat()}
+    if first_day:   # (re)set on the first day, so a redone first day fixes the starting value too
+        state["start_equity"] = last_equity if last_equity else equity - sum(r["pnl"] for r in day.values())
     state.setdefault("start_equity", equity - sum(r["pnl"] for r in day.values()))
     state.setdefault("days", {})[today.isoformat()] = {p: {"pnl": r["pnl"], "trades": r["trades"]} for p, r in day.items()}
     totals: dict[str, dict] = {}
@@ -614,6 +657,11 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     for p in sorted(newly):
         lines.append(f"⏸️ **{PATTERN_NAME[p]} is paused**: after {cmp[p]['n']} live trades it's doing clearly worse "
                      "than its 10-year history. It resumes on its own if its record comes back within range.")
+    if still_open:
+        lines += ["", f"⚠️ Not closed yet when this was written (no result counted for them): {', '.join(still_open)}"]
+    if last_equity and abs((equity - last_equity) - today_total) > max(50.0, 0.0005 * equity):
+        lines += ["", f"⚠️ The trades add up to ${today_total:+,.0f} but the account changed "
+                      f"${equity - last_equity:+,.0f} today: some fill is missing from the records."]
     lines += ["", f"**Today: ${today_total:+,.0f}** · account ${equity:,.0f} "
                   f"(**{equity / start - 1:+.2%}** since {min(state['days'])}, {len(state['days'])} trading day"
                   f"{'s' if len(state['days']) != 1 else ''})"]
