@@ -220,7 +220,7 @@ separate and unaffected.
 
 ## The demo accounts week by week
 
-Every **Friday evening** "📅 The week" shows both demo accounts and the S&P 500 this week and since
+Every **Friday night** (after the close) "📅 The week" shows both demo accounts and the S&P 500 this week and since
 the start, the day-trading patterns' week, and a chart of both accounts against the S&P 500. The same
 chart is in the report and the email every day.
 
@@ -233,7 +233,7 @@ pattern), `account_values` (both demo accounts and the S&P 500 each day), `month
 (the portfolio after each monthly update), `safety_events`, `study_results` (the 10-year tests),
 `runs` (the bot's logbook), and the extra data it collects:
 - `ranking_snapshots` / `measure_snapshots`: **what the bot thought**: every stock's place and its
-  rank on each measure, at each monthly update and every Friday. Later you can check: was it right?
+  rank on each measure, at each monthly update and after every Friday's close. Later you can check: was it right?
 - `news`: headlines for the stocks it follows (Alpaca News), with a tone score (+ good, − bad).
 - `macro`: the economy from FRED: 10-year and 2-year rates, the yield curve, the Fed rate, inflation,
   unemployment, high-yield credit spreads and the VIX (the market's fear gauge).

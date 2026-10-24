@@ -103,7 +103,7 @@ jobs:
           ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
         run: python -m trend_bot paper --discord || echo "the demo account step failed" >> reports/problems.txt
 
-      # Both demo accounts' history (the report's chart) and, on Fridays, the week in one message.
+      # Both demo accounts' history (the report's chart) and, after Friday's close, the week in one message.
       - name: Restore day-trading results
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -120,7 +120,7 @@ jobs:
         run: python -m trend_bot accounts --weekly --discord || echo "the demo accounts' history failed" >> reports/problems.txt
 
       # Extra data for the record (nothing here changes how the bot trades): news headlines for the
-      # stocks it follows, the economy from FRED, and on Fridays the whole ranking as a snapshot.
+      # stocks it follows, the economy from FRED, and after Friday's close the whole ranking as a snapshot.
       - name: Collect news, the economy and the ranking
         env:
           ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
@@ -128,8 +128,11 @@ jobs:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
           python -m trend_bot collect || echo "collecting news / the economy failed" >> reports/problems.txt
-          if [ "$(date -u +%u)" = "5" ]; then
-            python -m trend_bot ideas --no-record > /dev/null || echo "the Friday ranking snapshot failed" >> reports/problems.txt
+          # Weekly ranking snapshot after Friday's close (this run starts early Saturday, UTC), and
+          # straight away when there is none yet.
+          has_snapshot=$(python -c "import sqlite3; print(1 if sqlite3.connect('market.db').execute('SELECT 1 FROM ranking_snapshots LIMIT 1').fetchone() else 0)" 2>/dev/null || echo 0)
+          if [ "$(date -u +%u)" = "6" ] || [ "$has_snapshot" = "0" ]; then
+            python -m trend_bot ideas --no-record > /dev/null || echo "the weekly ranking snapshot failed" >> reports/problems.txt
           fi
 
       # Optional: the trading journal in SQL Server (Azure SQL, open it in SSMS). Does nothing until the
