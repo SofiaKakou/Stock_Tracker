@@ -469,7 +469,8 @@ def cmd_accounts(args: argparse.Namespace) -> int:
     for name, h in hist.items():
         print(f"[accounts] {name}: {len(h['values'])} days, last {h['values'][-1]:,.2f}")
     today = dt.date.today()
-    if args.weekly and (today.weekday() == 4 or args.force):
+    # The nightly run after Friday's close starts early Saturday (UTC): that's when the week is complete.
+    if args.weekly and (today.weekday() == 5 or args.force):
         state = json.loads(Path(args.day_state).read_text()) if Path(args.day_state).exists() else {}
         e = accounts.weekly(hist, state, today, live)
         print(e["description"].replace("**", ""))
