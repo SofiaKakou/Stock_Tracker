@@ -53,3 +53,12 @@ def test_a_refused_sec_download_is_retried_from_a_fresh_machine_with_the_same_ni
     assert restore["with"]["restore-keys"] == "market-db-${{ github.run_id }}"     # tonight's, never an older one
     save = next(s for s in retry["steps"] if "cache/save" in s.get("uses", ""))
     assert save["if"] == "steps.retry.outputs.tried == '1'"                          # nothing saved unless it ran
+
+
+def test_the_morning_part_starts_the_afternoon_part_itself():
+    job = yaml.safe_load((WORKFLOWS[0].parent / "daytrade.yml").read_text())["jobs"]["trade"]
+    step = next(s for s in job["steps"] if s.get("name") == "Start the afternoon part")
+    assert job["permissions"] == {"contents": "read", "actions": "write"}
+    assert "gh workflow run daytrade.yml" in step["run"] and "'afternoon' not in ran" in step["run"]
+    code = step["run"].split('python -c "', 1)[1].split('")', 1)[0]
+    compile(code, "step", "exec")                                   # the embedded Python is valid
