@@ -218,6 +218,18 @@ Setup: a second paper account in Alpaca, its
 keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
 separate and unaffected.
 
+## The $100 account
+
+A third practice account (fake money) holds **the same 20-stock monthly portfolio at $100**, the size
+a first real-money account would start at. It buys in **dollar amounts** (fractional shares: about $4.90
+of each stock, even a $400 one), so it shows exactly what your first $100 would hold and how it does.
+Stocks the broker can't split into fractions are left out (named in its Discord message). It trades on
+the same nights as the monthly account and gets the same emergency exits.
+
+Setup: an Alpaca paper account with its balance set to $100, and its keys as the secrets
+`ALPACA_SMALL_KEY_ID` and `ALPACA_SMALL_SECRET_KEY`. It starts at the next nightly run (or right away:
+Actions → Demo account → Run workflow with "follow now").
+
 ## The demo accounts week by week
 
 Every **Friday night** (after the close) "📅 The week" shows both demo accounts and the S&P 500 this week and since

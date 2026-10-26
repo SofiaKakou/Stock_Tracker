@@ -67,6 +67,13 @@ jobs:
         if: inputs.follow_now
         run: python -m trend_bot paper --discord --changed-flag changed.flag
 
+      - name: Follow the portfolio now ($100 account)
+        if: always() && inputs.follow_now
+        env:
+          ALPACA_SMALL_KEY_ID: ${{ secrets.ALPACA_SMALL_KEY_ID }}
+          ALPACA_SMALL_SECRET_KEY: ${{ secrets.ALPACA_SMALL_SECRET_KEY }}
+        run: python -m trend_bot paper --account small --discord --changed-flag changed.flag
+
       - name: Save database
         if: inputs.follow_now && hashFiles('changed.flag') != ''
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6

@@ -221,3 +221,60 @@ def test_left_out_stocks_are_named_in_the_message():
     e = paper.embed({"traded": [], "failed": [], "left_out": [("NVR", 7000.0)], "status": {"equity": 1e5, "cash": 1e5}},
                     "2026-11-02")
     assert "NVR ($7,000 a share)" in e["description"]
+
+
+# --- The $100 account: the same portfolio in dollar amounts (fractional shares) ---------------------
+
+class SmallBroker(FakeBroker):
+    """The $100 account: dollar orders; BRK.B can't be bought in fractions."""
+
+    def __init__(self, **kw):
+        super().__init__(equity=100.0, **kw)
+        self.values = {}
+
+    def _call(self, method, path, params=None):
+        if path.startswith("/assets/"):
+            sym = path.split("/")[-1]
+            return {"symbol": sym, "tradable": True, "fractionable": sym != "BRK.B"}
+        return super()._call(method, path, params)
+
+    def positions(self):
+        return [{"symbol": s, "qty": "0.1", "market_value": str(v)} for s, v in self.values.items()]
+
+    def order_notional(self, symbol, dollars, side, tag):
+        assert len(tag) <= 48 and dollars >= paper.MIN_ORDER
+        self.sent.append((symbol, side, dollars))
+
+
+def test_plan_in_dollars_buys_equal_amounts_and_skips_what_cant_be_split():
+    left = []
+    orders = paper.plan_dollars(["AAA", "BRK-B", "CCC"], {"OLD": 3.0, "CCC": 10.0}, equity=100.0,
+                                tradable={"AAA", "CCC"}, left_out=left)
+    each = 100 * paper.INVESTED / 2                           # $49 each: BRK.B left out
+    assert orders[0] == ("OLD", "close", 0.0) and left == [("BRK.B", 0.0)]
+    assert ("AAA", "buy", round(each, 2)) in orders and ("CCC", "buy", round(each - 10, 2)) in orders
+    assert paper.plan_dollars(["AAA"], {"AAA": 97.5}, equity=100.0) == []        # within 10%: left alone
+
+
+def test_the_100_account_keeps_its_own_notes_and_orders_in_dollars(tmp_path):
+    con = setup(tmp_path)
+    broker = SmallBroker()
+    res = paper.sync(con, broker, today=dt.date(2026, 11, 2), log=lambda *_: None, prefix="small", fractional=True)
+    assert {s for s, _, _ in res["traded"]} == {"AAA", "CCC"} and res["left_out"] == [("BRK.B", 0.0)]
+    assert all(side == "buy" and amount == pytest.approx(49.0) for _, side, amount in broker.sent)
+    assert db.get_meta(con, "small_synced") == "2026-11-02" and db.get_meta(con, "paper_synced") is None
+    assert json.loads(db.get_meta(con, "small_status"))["start_equity"] == 100.0
+    e = paper.embed(res, "2026-11-02", small=True)
+    assert "$100 account" in e["title"] and "buy $49.00 of AAA" in e["description"]
+    assert "in fractions: BRK.B" in e["description"]
+    assert "$100 account" in paper.line(con, prefix="small") and paper.line(con) == ""   # the monthly one is untouched
+
+
+def test_the_small_account_uses_its_own_keys(tmp_path, monkeypatch, capsys):
+    from trend_bot.cli import main
+
+    monkeypatch.delenv(paper.SMALL_KEY_ENV, raising=False)
+    monkeypatch.setenv(paper.KEY_ENV, "k")
+    monkeypatch.setenv(paper.SECRET_ENV, "s")
+    assert main(["paper", "--account", "small", "--db", str(tmp_path / "m.db")]) == 0
+    assert "ALPACA_SMALL_KEY_ID" in capsys.readouterr().out       # never falls back to the monthly account's keys

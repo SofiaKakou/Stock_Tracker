@@ -328,6 +328,8 @@ def make_parser() -> argparse.ArgumentParser:
 
     pp = sub.add_parser("paper", help="demo account: follow the portfolio on Alpaca paper trading (fake money)")
     pp.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    pp.add_argument("--account", choices=["monthly", "small"], default="monthly",
+                    help="small = the $100 account (fractional shares, keys ALPACA_SMALL_KEY_ID / _SECRET_KEY)")
     pp.add_argument("--dry-run", action="store_true", help="show the orders it would send, send nothing")
     pp.add_argument("--discord", action="store_true", help="post a message when it trades")
     pp.add_argument("--morning", action="store_true",

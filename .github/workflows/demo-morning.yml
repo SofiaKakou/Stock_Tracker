@@ -51,6 +51,13 @@ jobs:
         if: steps.restore.outputs.cache-matched-key != ''
         run: python -m trend_bot paper --morning --discord --changed-flag changed.flag
 
+      - name: Check the $100 account
+        if: always() && steps.restore.outputs.cache-matched-key != ''
+        env:
+          ALPACA_SMALL_KEY_ID: ${{ secrets.ALPACA_SMALL_KEY_ID }}
+          ALPACA_SMALL_SECRET_KEY: ${{ secrets.ALPACA_SMALL_SECRET_KEY }}
+        run: python -m trend_bot paper --account small --morning --discord --changed-flag changed.flag
+
       # Saved only when something changed, so most mornings add nothing to GitHub's cache.
       - name: Save database
         if: hashFiles('changed.flag') != ''

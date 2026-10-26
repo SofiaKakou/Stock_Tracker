@@ -114,6 +114,14 @@ jobs:
           ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
         run: python -m trend_bot paper --discord || echo "the demo account step failed" >> reports/problems.txt
 
+      # Optional: the $100 account (fake money): the same portfolio at a first real account's size,
+      # bought in dollar amounts (fractional shares). Nothing until ALPACA_SMALL_KEY_ID / _SECRET_KEY exist.
+      - name: $100 account
+        env:
+          ALPACA_SMALL_KEY_ID: ${{ secrets.ALPACA_SMALL_KEY_ID }}
+          ALPACA_SMALL_SECRET_KEY: ${{ secrets.ALPACA_SMALL_SECRET_KEY }}
+        run: python -m trend_bot paper --account small --discord || echo "the \$100 account step failed" >> reports/problems.txt
+
       # Both demo accounts' history (the report's chart) and, after Friday's close, the week in one message.
       - name: Restore day-trading results
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
