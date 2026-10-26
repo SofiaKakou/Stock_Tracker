@@ -128,3 +128,27 @@ def test_earnings_dates_after_the_close_count_for_the_next_day(tmp_path):
     got = intraday.earnings_days(con, ["SPY", "AAA", "BBB"], fetch=lambda s: stamps[s], log=lambda *_: None)
     assert got == {("AAA", "2024-01-26"), ("BBB", "2024-01-25")}
     assert intraday.earnings_days(con, ["AAA"], fetch=lambda s: 1 / 0) == got   # kept, not fetched again
+
+
+def test_the_exit_rules_follow_each_trade_through_the_day():
+    rng = np.random.default_rng(5)
+    df = bars_frame([str(d.date()) for d in pd.bdate_range("2020-01-01", "2020-06-30")], ["AAA", "BBB"], rng,
+                    noise=0.01)
+    paths = intraday._paths(df)
+    for name, f in (("gap_fade", intraday.gap_fade), ("opening_range", intraday.opening_range)):
+        p = paths[name]
+        held = intraday._walk(p["side"], p["entry"], p["start"], p["high"], p["low"], p["close"], None, None)
+        assert sorted(held) == pytest.approx(sorted(f(df)["ret"]))            # same trades as the pattern itself
+
+
+def test_a_take_profit_and_a_stop_on_made_up_paths():
+    # Two longs bought at 100 at the open: one runs to +6% by 11:00 and ends +1%; one falls 6% then recovers.
+    high = np.full((2, 13), 101.0)
+    low = np.full((2, 13), 99.0)
+    close = np.full((2, 13), 101.0)
+    high[0, 3] = 106.0
+    low[1, 2] = 94.0
+    args = (np.array([1.0, 1.0]), np.array([100.0, 100.0]), np.array([0, 0]), high, low, close)
+    assert list(intraday._walk(*args, None, None)) == pytest.approx([0.01, 0.01])
+    assert list(intraday._walk(*args, 0.05, 0.05)) == pytest.approx([0.05, -0.05])    # took +5%; stopped at -5%
+    assert list(intraday._walk(*args, 0.05, 0.02)) == pytest.approx([0.02, -0.05])   # +2% taken; the fall came first
