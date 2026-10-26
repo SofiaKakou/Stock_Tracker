@@ -141,6 +141,7 @@ def _study_intraday(con, args: argparse.Namespace) -> int:
         ic.commit()
     print(intraday.text(results, feed, df["date"].min(), df["date"].max()))
     print(intraday.filters_text(tested_filters))
+    print(intraday.exits_text(intraday.exits_study(df)))
     return 0
 
 

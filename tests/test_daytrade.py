@@ -152,9 +152,8 @@ def test_a_whole_simulated_day_trades_each_pattern_once_and_ends_flat():
     tags = [o["client_order_id"] for o in broker.orders]
     assert tags.count("td-20261026-breakout-BREAKY") == 1                              # never twice
     assert "td-20261026-momentum-SPY" in tags and "td-20261026-momentum-QQQ" not in tags   # QQQ was flat
-    exits = [o for o in broker.orders if o["tif"] == "cls"]
-    assert {o["symbol"] for o in exits} == {"GAPPY", "BREAKY", "SPY"}
-    assert not broker.positions() and clock.now().time() >= daytrade.FLAT_AT
+    assert {"GAPPY", "BREAKY", "SPY"} <= set(broker.closed)                            # closed at 15:50
+    assert not broker.positions() and dt.time(15, 50) <= clock.now().time() < daytrade.FLAT_AT
 
 
 def test_a_late_morning_start_skips_the_gap_fade_and_missed_checks():
@@ -403,34 +402,32 @@ def test_redoing_the_first_day_fixes_the_starting_value():
     assert state["start_equity"] == 100_000.0 and "+40" not in e["description"]
 
 
-class SlowCloseBroker(FakeBroker):
-    """Like Alpaca: closing (market-on-close) orders stay open until 16:00; the first one is refused
-    because the cancelled stop still holds the shares."""
+class StickyBroker(FakeBroker):
+    """Like the paper account on 2026-10-26: some closes don't go through the first time."""
 
-    def __init__(self):
+    def __init__(self, sticky):
         super().__init__()
-        self.refused = 0
+        self.sticky = dict(sticky)     # symbol: how many close attempts fail
 
-    def order(self, symbol, qty, side, tag, tif="day", stop=None):
-        if tif == "cls":
-            if symbol == "AAPL" and not self.refused:
-                self.refused += 1
-                raise PaperError("403 insufficient qty available (held_for_orders)")
-            self.orders.append({"symbol": symbol, "qty": qty, "side": side, "client_order_id": tag, "tif": tif,
-                                "time_in_force": tif})
-            return
-        super().order(symbol, qty, side, tag, tif, stop)
+    def close(self, symbol):
+        if self.sticky.get(symbol, 0) > 0:
+            self.sticky[symbol] -= 1
+            raise PaperError("403 insufficient qty available (held_for_orders)")
+        super().close(symbol)
 
 
-def test_closing_orders_are_retried_and_left_to_fill_at_the_close():
+def test_every_position_is_closed_before_the_close_and_checked():
+    # Market-on-close orders didn't fill on the paper account (37 positions stayed open overnight):
+    # now plain market closes at 15:50, checked, retried, and a last sweep at 15:58.
     clock = Clock(dt.datetime(2026, 10, 26, 15, 40, tzinfo=daytrade.NY))
-    broker = SlowCloseBroker()
-    broker.held = {"AAPL": 14, "MSFT": -10}
-    s = daytrade.Session(broker, FakeData(clock), ["AAPL", "MSFT"], DAY, log=lambda *_: None, sleep=clock.sleep,
-                         now=clock.now)
+    broker = StickyBroker({"AAPL": 1, "MSFT": 3})        # AAPL closes on round 2; MSFT only at 15:58
+    broker.held = {"AAPL": 14, "MSFT": -10, "NVDA": 5}
+    s = daytrade.Session(broker, FakeData(clock), ["AAPL", "MSFT", "NVDA"], DAY, log=lambda *_: None,
+                         sleep=clock.sleep, now=clock.now)
     s.flatten()
-    assert broker.refused == 1 and {o["symbol"] for o in broker.orders if o["tif"] == "cls"} == {"AAPL", "MSFT"}
-    assert broker.closed == [] and not broker.closed_all        # both have closing orders: left alone at 15:58
+    assert not broker.positions() and broker.closed.count("MSFT") == 1
+    assert not any(o.get("tif") == "cls" for o in broker.orders)                         # no market-on-close
+    assert clock.now().time() >= daytrade.FLAT_AT                                        # MSFT needed the sweep
 
 
 def test_a_stop_attached_to_its_entry_order_counts_as_protection():

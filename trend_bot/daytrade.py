@@ -4,7 +4,7 @@ on a second Alpaca paper account (separate from the monthly portfolio's account)
 Each weekday, two scheduled jobs share the day (a GitHub job may run at most 6 hours):
 - morning (from 9:30 New York time): gap fade at the open, then breakout checks at 10:30 ... 12:00
 - afternoon (from 12:30): breakout checks at 12:30 ... 15:30, the market's last half hour at 15:30,
-  everything closed at the closing price (market-on-close orders at 15:45, anything left at 15:58),
+  everything closed with market orders at 15:50 (checked and retried; a last sweep at 15:58),
   and an evening report: today's trades, profit or loss per pattern, the running total, next to each
   pattern's result in the 10-year test.
 
@@ -40,7 +40,7 @@ GAP_LATEST = dt.time(10, 15)          # a late start still fades the gap until 1
 MORNING_CHECKS = [dt.time(10, 30), dt.time(11, 0), dt.time(11, 30), dt.time(12, 0)]
 AFTERNOON_CHECKS = [dt.time(12, 30), dt.time(13, 0), dt.time(13, 30), dt.time(14, 0), dt.time(14, 30),
                     dt.time(15, 0), dt.time(15, 30)]
-MOC_AT, FLAT_AT, SETTLE_AT = dt.time(15, 45), dt.time(15, 58), dt.time(16, 1)
+CLOSE_AT, FLAT_AT, SETTLE_AT = dt.time(15, 50), dt.time(15, 58), dt.time(16, 1)
 STOP_LOSS = 0.05        # every position has a stop at the broker: out if it moves 5% against us
 # Short the big gap-ups (tested only; the only idea that passed the 20-year swing study after costs):
 # any stock in the market that opens 20%+ above yesterday's close (price $5+, $5M+ traded a day),
@@ -410,44 +410,34 @@ class Session:
         self.flatten()
 
     def flatten(self) -> None:
-        """Out at the closing price: market-on-close orders at 15:45, then anything left at 15:58.
+        """Out before the close: every position closed with a market order at 15:50, checked, and closed
+        again if it's still there; a last sweep at 15:58. (Market-on-close orders were tried first, but on
+        the paper account they hadn't filled 10 minutes after the close: 37 positions stayed open.)
         The protective stops are cancelled first (they hold the shares the closing orders need)."""
-        self.wait_until(MOC_AT)
+        self.wait_until(CLOSE_AT)
         self.b.cancel_all()
         self.wait_for(lambda: not self.b.open_orders(), seconds=60)    # cancelling takes a moment
-        for p in self.b.positions():
-            qty = abs(int(float(p["qty"])))
-            side = "sell" if float(p["qty"]) > 0 else "buy"
-            tag = f"td-{self.today:%Y%m%d}-x-{p['symbol']}-exit"
-            for attempt in (1, 2):
-                try:
-                    self.b.order(p["symbol"], qty, side, tag, tif="cls")
-                    break
-                except PaperError as e:
-                    if attempt == 2:
-                        self.log(f"[day] closing order for {p['symbol']} refused ({str(e)[:80]}); closed at 15:58 instead")
-                    else:
-                        self.sleep(5)
+        for attempt in (1, 2, 3):
+            left = self.close_positions()
+            if not left:
+                return
+            self.log(f"[day] still open after closing (round {attempt}): {', '.join(left)}")
+            self.sleep(30)
         self.wait_until(FLAT_AT)
-        # Positions with a closing order are still open until it fills at 16:00: leave those alone.
-        closing = {o["symbol"] for o in self.b.open_orders() if o.get("time_in_force") == "cls"}
-        left = [p["symbol"] for p in self.b.positions() if p["symbol"] not in closing]
-        for sym in left:
-            for attempt in (1, 2):
-                try:
-                    self.b.close(sym)
-                    break
-                except PaperError as e:
-                    if attempt == 2:
-                        self.log(f"[day] couldn't close {sym} at 15:58 ({str(e)[:80]}); the safety net closes it")
-                    else:
-                        self.sleep(5)
+        self.b.cancel_all()                                          # whatever is blocking them
+        left = self.close_positions()
         if left:
-            self.log(f"[day] closed what had no closing order at 15:58: {', '.join(left)}")
-            self.sleep(20)
-            still = [p["symbol"] for p in self.b.positions() if p["symbol"] not in closing]
-            if still:
-                self.log(f"[day] ⚠️ still open after closing at 15:58: {', '.join(still)}")
+            self.log(f"[day] ⚠️ still open at 15:58: {', '.join(left)}; the safety net closes them")
+
+    def close_positions(self) -> list[str]:
+        """Close every open position with a market order; then return the ones still open."""
+        for p in self.b.positions():
+            try:
+                self.b.close(p["symbol"])
+            except PaperError as e:
+                self.log(f"[day] couldn't close {p['symbol']} ({str(e)[:80]})")
+        self.wait_for(lambda: not self.b.positions(), seconds=60, step=5)
+        return [p["symbol"] for p in self.b.positions()]
 
     def wait_for(self, done, seconds: float, step: float = 2) -> bool:
         """Check `done()` every `step` seconds for up to `seconds`; True once it holds."""
@@ -637,8 +627,8 @@ def write_csv(log: list[dict], path: str) -> None:
 def safety_net(broker: DayBroker, now: dt.datetime, log=print) -> dict | None:
     """Independent of the trading jobs: close anything that shouldn't still be open. Returns an alert or None.
 
-    - before the close (from 15:50 New York): positions without a pending closing order (the main
-      job didn't place them) are closed now
+    - just before the close (from 15:56 New York, after the trading job's 15:50 closing): anything
+      still open is closed now
     - after the close or before the open: any position at all was left overnight; it's closed (at the
       next open if the market is shut) and you're told."""
     from trend_bot.alerts import RED

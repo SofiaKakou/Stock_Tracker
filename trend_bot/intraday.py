@@ -281,6 +281,89 @@ NAMES = {"intraday_momentum": "Market's last half hour follows its first",
 LIVE = {"intraday_momentum", "opening_range", "gap_fade"}    # the ones the day-trading account trades
 
 
+# --- Exits: hold to the close, or take the profit (or the loss) during the day? -------------------
+
+EXITS = [(None, None), (0.05, None), (0.05, 0.02), (0.05, 0.03), (0.05, 0.05)]   # (stop, take profit)
+
+
+def _walk(side: np.ndarray, entry: np.ndarray, start: np.ndarray, high: np.ndarray, low: np.ndarray,
+          close: np.ndarray, stop: float | None, take: float | None) -> np.ndarray:
+    """Each trade's return from `entry` (bought or sold short at half hour `start`) to the close, unless
+    the stop or the take-profit level is touched first. If both are touched in the same half hour we
+    don't know which came first, so the stop counts (the cautious choice)."""
+    ret = side * (close[:, 12] / entry - 1)
+    done = np.zeros(len(entry), bool)
+    for k in range(13):
+        live = ~done & (k >= start)
+        if stop:
+            bad = np.where(side > 0, low[:, k] <= entry * (1 - stop), high[:, k] >= entry * (1 + stop))
+            hit = live & bad
+            ret[hit], done = -stop, done | hit
+        if take:
+            live = ~done & (k >= start)
+            good = np.where(side > 0, high[:, k] >= entry * (1 + take), low[:, k] <= entry * (1 - take))
+            hit = live & good
+            ret[hit], done = take, done | hit
+    return ret
+
+
+def _paths(df: pd.DataFrame) -> dict[str, dict]:
+    """The stock patterns' trades with what's needed to follow them through the day."""
+    stocks = df[~df["symbol"].isin(ETFS)]
+    grids = [_grid(stocks, c) for c in ("open", "high", "low", "close")]
+    idx = grids[0].index
+    for g in grids[1:]:
+        idx = idx.intersection(g.index)
+    opn, high, low, close = (g.loc[idx].sort_index() for g in grids)
+    idx = opn.index
+    o, h, lo_, c = (x.to_numpy() for x in (opn, high, low, close))
+    out = {}
+    prev = close[12].groupby(level="symbol").shift(1).to_numpy()          # yesterday's close
+    gap = o[:, 0] / prev - 1
+    keep = np.abs(gap) > GAP
+    out["gap_fade"] = {"side": -np.sign(gap[keep]), "entry": o[keep, 0], "start": np.zeros(keep.sum(), int),
+                       "rows": keep}
+    cc = c[:, 1:12]
+    up, down = cc > h[:, [0]], cc < lo_[:, [0]]
+    first = (up | down).argmax(axis=1)
+    keep = (up | down).any(axis=1)
+    rows = np.arange(len(cc))
+    out["opening_range"] = {"side": np.where(up[rows, first], 1.0, -1.0)[keep],
+                            "entry": o[rows, first + 2][keep], "start": (first + 2)[keep], "rows": keep}
+    for p in out.values():
+        r = p.pop("rows")
+        p.update(high=h[r], low=lo_[r], close=c[r], date=idx.get_level_values("date")[r],
+                 symbol=idx.get_level_values("symbol")[r])
+    return out
+
+
+def exits_study(df: pd.DataFrame, draws: int = 200) -> dict[str, dict[str, dict]]:
+    """Per pattern: each exit rule (EXITS) on the same trades, after costs."""
+    out = {}
+    for name, p in _paths(df).items():
+        out[name] = {}
+        for stop, take in EXITS:
+            ret = _walk(p["side"], p["entry"], p["start"], p["high"], p["low"], p["close"], stop, take)
+            label = ("held to the close" if not stop else f"stop {stop:.0%}" + (f", take profit at +{take:.0%}" if take
+                                                                                 else ", else to the close"))
+            trades = pd.DataFrame({"date": p["date"], "symbol": p["symbol"], "ret": ret, "cost": COST["stock"]})
+            out[name][label] = evaluate(trades, draws=draws)
+    return out
+
+
+def exits_text(ex: dict[str, dict[str, dict]]) -> str:
+    lines = ["", "Exits (the same trades, sold at a profit target or a stop during the day instead of only at the "
+                 "close; if both are touched in the same half hour, the stop counts):"]
+    for name, rules in ex.items():
+        lines.append(f"  {NAMES[name]}:")
+        for label, r in rules.items():
+            if not r.get("days"):
+                continue
+            lines.append(f"    {label:<40} per trade {r['per_trade']:+.3%} after costs, right {r['hit']:.0%}, "
+                         f"yearly {r['yearly']:+.1%} → {verdict(r)}")
+    return "\n".join(lines)
+
+
 # --- Filters: does a pattern work better on some days? -----------------------------------------
 
 def earnings_days(con: sqlite3.Connection, symbols: list[str], fetch=None, log=print) -> set[tuple[str, str]]:
