@@ -32,20 +32,25 @@ SINCE = "2006-01-01"
 
 
 def _daily(con: sqlite3.Connection, tickers: list[str], since: str) -> pd.DataFrame:
-    q = (f"SELECT ticker, date, open, close, adj_close, volume FROM prices WHERE ticker IN "
+    q = (f"SELECT ticker, date, open, high, close, adj_close, volume FROM prices WHERE ticker IN "
          f"({','.join('?' * len(tickers))}) AND date >= ? ORDER BY ticker, date")
     df = pd.read_sql_query(q, con, params=[*tickers, since])
     df = df.dropna(subset=["open", "close", "adj_close"])
     df = df[(df["open"] > 0) & (df["close"] > 0)]
     f = df["adj_close"] / df["close"]                 # splits and dividends, applied to the open too
-    df["o"], df["c"] = df["open"] * f, df["adj_close"]
+    df["o"], df["c"], df["h"] = df["open"] * f, df["adj_close"], df["high"].fillna(df["open"]) * f
     g = df.groupby("ticker", sort=False)
     prev_raw = g["close"].shift(1)
     df["prev"] = g["c"].shift(1)
-    df["liquid"] = (prev_raw >= MIN_PRICE) & (
-        (df["close"] * df["volume"]).groupby(df["ticker"]).transform(lambda s: s.rolling(20).mean().shift(1))
-        >= MIN_DOLLAR_VOL)
-    return df[["ticker", "date", "o", "c", "prev", "liquid"]]   # ~25 million rows for all stocks: keep it lean
+
+    def avg(col: pd.Series) -> pd.Series:
+        return col.groupby(df["ticker"]).transform(lambda s: s.rolling(20).mean().shift(1))
+
+    df["dvol"] = avg(df["close"] * df["volume"])          # average $ traded a day, the 20 days before
+    df["vol_x"] = df["volume"] / avg(df["volume"])        # today's volume vs normal (a real gap is busy)
+    df["liquid"] = (prev_raw >= MIN_PRICE) & (df["dvol"] >= MIN_DOLLAR_VOL)
+    # ~25 million rows for all stocks: keep it lean
+    return df[["ticker", "date", "o", "h", "c", "prev", "liquid", "dvol", "vol_x"]]
 
 
 def mover_trades(df: pd.DataFrame, hold: int = 1) -> pd.DataFrame:
@@ -58,6 +63,60 @@ def mover_trades(df: pd.DataFrame, hold: int = 1) -> pd.DataFrame:
     out = df.loc[m, ["date", "ticker", "gap", "o", "exit"]].copy()
     out["ret"] = out["exit"] / out["o"] - 1
     return out[["date", "ticker", "gap", "ret"]].reset_index(drop=True)
+
+
+FADE = [   # (smallest gap, trading days held, stop above the entry, min $ traded a day, borrow fee a year)
+    (0.10, 1, 0.10, 5e6, 0.30), (0.10, 1, 0.10, 20e6, 0.30), (0.20, 1, 0.15, 5e6, 0.30),
+    (0.20, 1, 0.15, 20e6, 0.30), (0.10, 5, 0.15, 20e6, 0.30), (0.20, 5, 0.20, 20e6, 0.50),
+]
+MIN_VOLUME_X = 2.0     # a real gap trades at least twice its usual volume (a price error usually doesn't)
+SHORT_SLIPPAGE = 0.002   # extra cost when a stop is hit (jumpy stocks move past the stop price)
+
+
+def fade_trades(df: pd.DataFrame, min_gap: float, hold: int, stop: float, min_dvol: float,
+                borrow: float) -> pd.DataFrame:
+    """[date, ticker, gap, ret]: sold short at the open of every stock that opened at least `min_gap`
+    up (busy volume, enough $ traded), bought back at the close `hold` trading days later, or at the
+    stop (`stop` above the entry; at the open if a later day opens past it). ret includes the borrow
+    fee for the nights held, and slippage when stopped out."""
+    g = df.groupby("ticker", sort=False)
+    gap = df["o"] / df["prev"] - 1
+    m = (df["liquid"] & (df["dvol"] >= min_dvol) & (df["vol_x"] >= MIN_VOLUME_X)
+         & (gap >= min_gap) & (gap < GAPS[-1][1]))
+    entry = df["o"]
+    level = entry * (1 + stop)
+    ret = pd.Series(np.nan, index=df.index)
+    out_ = pd.Series(False, index=df.index)
+    for k in range(hold):
+        o_k, h_k, c_k = (g[c].shift(-k) for c in ("o", "h", "c"))
+        live = ~out_
+        opened_past = live & (k > 0) & (o_k >= level)          # gapped past the stop overnight
+        ret[opened_past] = -(o_k[opened_past] / entry[opened_past] - 1) - SHORT_SLIPPAGE
+        hit = live & ~opened_past & (h_k >= level)
+        ret[hit] = -stop - SHORT_SLIPPAGE
+        out_ |= opened_past | hit
+        if k == hold - 1:
+            last = ~out_ & c_k.notna()
+            ret[last] = -(c_k[last] / entry[last] - 1)
+            out_ |= last
+    ret -= borrow / 252 * (hold - 1)                            # a short held overnight pays a fee
+    keep = m & ret.notna()
+    return pd.DataFrame({"date": df.loc[keep, "date"], "ticker": df.loc[keep, "ticker"],
+                         "gap": gap[keep], "ret": ret[keep]}).reset_index(drop=True)
+
+
+def fade_study(df: pd.DataFrame) -> dict[str, dict]:
+    out = {}
+    for gap, hold, stop, dvol, borrow in FADE:
+        tr = fade_trades(df, gap, hold, stop, dvol, borrow)
+        held = "to the close" if hold == 1 else f"for {hold} days (borrow fee {borrow:.0%} a year)"
+        name = (f"Short {gap:.0%}+ gap-ups at the open, held {held}, stop {stop:.0%} above, "
+                f"stocks trading ${dvol / 1e6:g}M+ a day")
+        out[name] = evaluate(tr["ret"], tr["date"], COST["movers"])
+        if not tr.empty:
+            out[name]["stopped"] = float((tr["ret"] <= -stop - SHORT_SLIPPAGE + 1e-9).mean())
+            out[name]["worst"] = float(tr["ret"].min())
+    return out
 
 
 def earnings_trades(df: pd.DataFrame, events: pd.DataFrame, spy: pd.Series, hold: int) -> pd.DataFrame:
@@ -179,6 +238,15 @@ def run(con: sqlite3.Connection, since: str = SINCE, log=print, chunk: int = 300
         lines += [f"Stocks that opened 10%+ up ({dream['n']:,} times): by that day's close {dream['up10']:.0%} had "
                   f"gained another 10%+, {dream['down10']:.0%} had lost 10%+; the typical one {dream['median']:+.1%}.", ""]
     every = dict(movers)
+    fade = fade_study(df)
+    every.update(fade)
+    lines += [f"SHORTING BIG GAP-UPS (only gaps on at least {MIN_VOLUME_X:g}x the usual volume, so price errors "
+              f"stay out; a stop hit costs {SHORT_SLIPPAGE:.1%} extra; whether the broker can lend the shares "
+              "can't be known for the past: the $20M+ lines are the more borrowable stocks)", ""]
+    for name, r in fade.items():
+        lines += line(name, r)
+        if r.get("trades"):
+            lines.insert(-1, f"  stopped out {r['stopped']:.0%} of the time; worst trade {r['worst']:+.1%}")
     facts = fundamentals.load_facts(con)
     if facts.empty:
         lines.append("EARNINGS DRIFT: no company financials yet (run the fundamentals refresh).")
