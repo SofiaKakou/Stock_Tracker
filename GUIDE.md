@@ -218,6 +218,16 @@ Setup: a second paper account in Alpaca, its
 keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
 separate and unaffected.
 
+## Short the big gap-ups (day trading, tested only)
+
+The only idea that passed the 20-year swing study after realistic costs: a stock that **opens 20%+
+above yesterday's close** usually falls back during the day. Each morning the day-trading account looks
+at the whole market's biggest risers (Alpaca's screener), and **sells short** up to 3 that opened
+20-60% up (price $5+, $5M+ traded a day, and only if the broker can lend the shares), with a **stop 15%
+above** and everything bought back by the close (never overnight: a short's loss has no limit). The
+study made about +0.35% a trade after costs, mostly in smaller stocks, and less in recent years; the
+scorecard (`dw.vPatternScorecard`, pattern `gapup`) shows whether live trading matches.
+
 ## The $100 account
 
 A third practice account (fake money) holds **the same 20-stock monthly portfolio at $100**, the size
