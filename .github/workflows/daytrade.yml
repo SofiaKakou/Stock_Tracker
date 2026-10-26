@@ -38,6 +38,9 @@ jobs:
   trade:
     runs-on: ubuntu-latest
     timeout-minutes: 300
+    permissions:
+      contents: read
+      actions: write      # only to start the afternoon part when the morning part ends (below)
     env:
       ALPACA_DAY_KEY_ID: ${{ secrets.ALPACA_DAY_KEY_ID }}
       ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
@@ -89,6 +92,24 @@ jobs:
         with:
           path: daytrade.json
           key: daytrade-state-${{ github.run_id }}
+
+      # GitHub sometimes starts scheduled runs late or not at all. So when the morning part ends (just
+      # after 12:00 New York), it starts the afternoon part itself; that run begins as soon as this one
+      # ends. (The afternoon schedules stay as backups; whichever comes first runs, the others exit.)
+      - name: Start the afternoon part
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          next=$(python -c "
+          import datetime as d, json, os, zoneinfo
+          now = d.datetime.now(zoneinfo.ZoneInfo('America/New_York'))
+          s = json.load(open('daytrade.json')) if os.path.exists('daytrade.json') else {}
+          ran = s.get('ran', {}).get(now.date().isoformat(), [])
+          print('yes' if 'morning' in ran and 'afternoon' not in ran and d.time(11, 40) <= now.time() < d.time(15, 40) else 'no')")
+          if [ "$next" = "yes" ]; then
+            gh workflow run daytrade.yml --ref "$GITHUB_REF_NAME" -f phase=auto && echo "afternoon part started"
+          fi
 
       - name: Tell me if this failed
         if: failure()
