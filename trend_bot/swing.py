@@ -74,14 +74,14 @@ SHORT_SLIPPAGE = 0.002   # extra cost when a stop is hit (jumpy stocks move past
 
 
 def fade_trades(df: pd.DataFrame, min_gap: float, hold: int, stop: float, min_dvol: float,
-                borrow: float) -> pd.DataFrame:
+                borrow: float, min_volume_x: float = MIN_VOLUME_X) -> pd.DataFrame:
     """[date, ticker, gap, ret]: sold short at the open of every stock that opened at least `min_gap`
     up (busy volume, enough $ traded), bought back at the close `hold` trading days later, or at the
     stop (`stop` above the entry; at the open if a later day opens past it). ret includes the borrow
     fee for the nights held, and slippage when stopped out."""
     g = df.groupby("ticker", sort=False)
     gap = df["o"] / df["prev"] - 1
-    m = (df["liquid"] & (df["dvol"] >= min_dvol) & (df["vol_x"] >= MIN_VOLUME_X)
+    m = (df["liquid"] & (df["dvol"] >= min_dvol) & (df["vol_x"] >= min_volume_x)
          & (gap >= min_gap) & (gap < GAPS[-1][1]))
     entry = df["o"]
     level = entry * (1 + stop)
@@ -106,12 +106,14 @@ def fade_trades(df: pd.DataFrame, min_gap: float, hold: int, stop: float, min_dv
 
 
 def fade_study(df: pd.DataFrame) -> dict[str, dict]:
+    """Each FADE line; and the live pattern's own version (20%+, same day, 15% stop, $5M+) without the
+    volume filter: the gap day's volume isn't known at the open, so live trading can't use it."""
     out = {}
-    for gap, hold, stop, dvol, borrow in FADE:
-        tr = fade_trades(df, gap, hold, stop, dvol, borrow)
+    for gap, hold, stop, dvol, borrow, vol_x in [(*f, MIN_VOLUME_X) for f in FADE] + [(0.20, 1, 0.15, 5e6, 0.30, 0.0)]:
+        tr = fade_trades(df, gap, hold, stop, dvol, borrow, vol_x)
         held = "to the close" if hold == 1 else f"for {hold} days (borrow fee {borrow:.0%} a year)"
         name = (f"Short {gap:.0%}+ gap-ups at the open, held {held}, stop {stop:.0%} above, "
-                f"stocks trading ${dvol / 1e6:g}M+ a day")
+                f"stocks trading ${dvol / 1e6:g}M+ a day" + ("" if vol_x else ", no volume filter (as live)"))
         out[name] = evaluate(tr["ret"], tr["date"], COST["movers"])
         if not tr.empty:
             out[name]["stopped"] = float((tr["ret"] <= -stop - SHORT_SLIPPAGE + 1e-9).mean())
