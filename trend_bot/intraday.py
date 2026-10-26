@@ -101,6 +101,16 @@ class Data:
         return pd.DataFrame(rows, columns=["symbol", "t", "open", "high", "low", "close", "volume"])
 
 
+MOVERS_URL = "https://data.alpaca.markets/v1beta1/screener/stocks/movers"
+
+
+def movers(data: Data, top: int = 50) -> list[str]:
+    """Today's biggest risers in the whole market (Alpaca's screener), biggest first."""
+    resp = data.http.get(MOVERS_URL, params={"top": top}, timeout=30)
+    resp.raise_for_status()
+    return [m["symbol"] for m in resp.json().get("gainers") or []]
+
+
 QUOTES_URL = "https://data.alpaca.markets/v2/stocks/quotes/latest"
 
 

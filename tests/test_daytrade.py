@@ -240,7 +240,7 @@ def test_forecast_vs_actual():
 def test_money_shifts_slowly_within_limits_and_a_broken_pattern_pauses():
     few = rows("gap", [0.05] * 5)                                   # a lucky few days: nothing changes
     share, paused = daytrade.allocate(daytrade.compare(few, TESTED), None)
-    assert share == pytest.approx({"gap": 1 / 3, "breakout": 1 / 3, "momentum": 1 / 3}) and not paused
+    assert share == pytest.approx({p: 1 / 4 for p in daytrade.PATTERN_TEST}) and not paused
 
     log = rows("gap", [0.004] * 30) + rows("breakout", [0.0] * 30) + rows("momentum", [0.0002] * 30)
     share, paused = daytrade.allocate(daytrade.compare(log, TESTED), None)
@@ -249,12 +249,13 @@ def test_money_shifts_slowly_within_limits_and_a_broken_pattern_pauses():
 
     huge = rows("gap", [0.5] * 200) + rows("breakout", [0.0] * 30) + rows("momentum", [0.0] * 30)
     share, _ = daytrade.allocate(daytrade.compare(huge, TESTED), None)
-    assert share["gap"] == pytest.approx(daytrade.MAX_SHARE)        # never more than the cap
+    cap = min(daytrade.MAX_SHARE, 1 - daytrade.MIN_SHARE * (len(share) - 1))   # the others need their minimum
+    assert share["gap"] == pytest.approx(cap) and sum(share.values()) == pytest.approx(1)   # never more than the cap
 
     broken = rows("breakout", [-0.01] * 50) + rows("gap", [0.001] * 25)
     share, paused = daytrade.allocate(daytrade.compare(broken, TESTED), None)
     assert paused == {"breakout"} and "breakout" not in share
-    assert daytrade.size_factor(share, "gap") == pytest.approx(share["gap"] * 2)   # equal split = 1.0 each
+    assert daytrade.size_factor(share, "gap") == pytest.approx(share["gap"] * len(share))   # equal split = 1.0 each
 
 
 def test_measured_cost_after_enough_trades_lowers_the_expected_gain():
@@ -548,7 +549,7 @@ def test_one_busy_day_cant_shift_the_money_or_pause_a_pattern():
     cmp = daytrade.compare(one_day, TESTED)
     assert cmp["breakout"]["n"] == 60 and cmp["breakout"]["days"] == 1
     share, paused = daytrade.allocate(cmp, None)
-    assert not paused and share == pytest.approx({"gap": 1 / 3, "breakout": 1 / 3, "momentum": 1 / 3})
+    assert not paused and share == pytest.approx({p: 1 / 4 for p in daytrade.PATTERN_TEST})
     spread = rows("breakout", [-0.01] * 60, per_day=6) + rows("gap", [0.004] * 60, per_day=6)
     share, paused = daytrade.allocate(daytrade.compare(spread, TESTED), None)    # the same over 10 days
     assert paused == {"breakout"}
@@ -559,3 +560,52 @@ def test_up_to_37_positions_of_the_usual_size_within_twice_the_account():
     s = daytrade.Session(broker, None, [], DAY, log=lambda *_: None)
     assert s.budget() == pytest.approx(100_000 * daytrade.INVESTED / 20)        # about $4,900 each, as before
     assert daytrade.STOCK_SLOTS + daytrade.ETF_SLOTS == 37 and daytrade.BUYING_POWER == 2.0
+
+
+# --- Short the big gap-ups (tested only) ----------------------------------------------------------
+
+def test_only_big_gap_ups_in_big_enough_stocks_are_shorted():
+    opens = {"HOT": 12.5, "MILD": 11.0, "PENNY": 3.0, "THIN": 13.0, "DEAL": 17.0}
+    prev = {"HOT": 10.0, "MILD": 10.0, "PENNY": 2.0, "THIN": 10.0, "DEAL": 10.0}
+    vol = {"HOT": 2e7, "MILD": 2e7, "PENNY": 2e7, "THIN": 1e5, "DEAL": 2e7}
+    # +25% shorted; +10% too small; under $5; barely traded; +70% (a takeover or a data error) left alone
+    assert daytrade.gapup_signals(opens, prev, vol) == [("HOT", -1)]
+
+
+class GapData:
+    """A stock that opens 25% up today, with 25 normal days before."""
+
+    def bars(self, symbols, start, end, timeframe="30Min"):
+        rows = []
+        for s in symbols:
+            if timeframe == "1Day":
+                for d in pd.bdate_range("2026-09-21", "2026-10-23"):
+                    rows.append((s, f"{d.date()}T04:00:00Z", 10.0, 10.0, 10.0, 10.0, 2e6))
+            elif timeframe == "1Min":
+                rows.append((s, "2026-10-26T13:30:00Z", 12.5, 12.6, 12.4, 12.5, 1e5))
+        return pd.DataFrame(rows, columns=["symbol", "t", "open", "high", "low", "close", "volume"])
+
+
+def test_a_market_wide_gap_up_is_shorted_with_a_wider_stop(monkeypatch):
+    from trend_bot import intraday
+
+    monkeypatch.setattr(intraday, "movers", lambda data, top=50: ["SPY", "HOT"])
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 31, 30, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    s = daytrade.Session(broker, GapData(), ["AAPL"], DAY, log=lambda *_: None, sleep=clock.sleep, now=clock.now)
+    assert s.gapups() == 1
+    o = broker.orders[-1]
+    assert o["client_order_id"] == "td-20261026-gapup-HOT" and o["side"] == "sell"
+    assert o["stop"] == pytest.approx(12.5 * (1 + daytrade.GAPUP_STOP))      # 15% above, not the usual 5%
+    assert s.gapups() == 0                                                    # not twice
+
+
+def test_no_screener_means_the_pattern_just_sits_out(monkeypatch):
+    from trend_bot import intraday
+
+    def broken(data, top=50):
+        raise RuntimeError("403 not in your plan")
+
+    monkeypatch.setattr(intraday, "movers", broken)
+    s = daytrade.Session(FakeBroker(), GapData(), [], DAY, log=lambda *_: None)
+    assert s.gapups() == 0
