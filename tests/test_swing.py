@@ -68,3 +68,36 @@ def test_the_whole_study_runs_and_says_what_passed(tmp_path):
     out = swing.run(con, since="2000-01-01", log=lambda *_: None)
     assert "BIG MOVERS" in out and "Opened 10%-20% up" in out and "Passed:" in out
     assert "no company financials yet" in out
+
+
+def fade_frame(days):
+    """One stock, liquid, normal volume; `days`: list of (open, high, close, volume_x) from the gap day on."""
+    rows = [("X", pd.Timestamp("2020-01-01") + pd.Timedelta(days=i), 100.0, 100.0, 100.0, 100.0, True, 50e6, 1.0)
+            for i in range(3)]
+    for i, (o, h, c, vx) in enumerate(days):
+        rows.append(("X", pd.Timestamp("2020-01-04") + pd.Timedelta(days=i), o, h, c, None, True, 50e6, vx))
+    df = pd.DataFrame(rows, columns=["ticker", "date", "o", "h", "c", "prev", "liquid", "dvol", "vol_x"])
+    df["prev"] = df["c"].shift(1)
+    return df
+
+
+def test_shorting_a_gap_up_that_fades_wins():
+    df = fade_frame([(120, 121, 110, 3.0)])                          # opened +20%, closed 110
+    tr = swing.fade_trades(df, 0.10, 1, 0.10, 5e6, 0.30)
+    assert len(tr) == 1 and tr["ret"].iloc[0] == pytest.approx(-(110 / 120 - 1))
+
+
+def test_a_squeeze_hits_the_stop_and_an_overnight_gap_past_it_costs_more():
+    df = fade_frame([(120, 140, 135, 3.0)])                          # ran to 140: stopped at 132
+    tr = swing.fade_trades(df, 0.10, 1, 0.10, 5e6, 0.30)
+    assert tr["ret"].iloc[0] == pytest.approx(-0.10 - swing.SHORT_SLIPPAGE)
+    df = fade_frame([(120, 125, 125, 3.0), (150, 150, 150, 2.0), (150, 150, 150, 1.0)])   # opened at 150 next day
+    tr = swing.fade_trades(df, 0.10, 3, 0.15, 5e6, 0.30)
+    assert tr["ret"].iloc[0] == pytest.approx(-(150 / 120 - 1) - swing.SHORT_SLIPPAGE - 0.30 / 252 * 2)
+
+
+def test_a_gap_on_normal_volume_is_treated_as_a_price_error():
+    df = fade_frame([(120, 121, 110, 1.0)])                          # no extra volume: left out
+    assert swing.fade_trades(df, 0.10, 1, 0.10, 5e6, 0.30).empty
+    df = fade_frame([(120, 121, 110, 3.0)])
+    assert swing.fade_trades(df, 0.10, 1, 0.10, 100e6, 0.30).empty   # not traded enough for this line
