@@ -28,6 +28,10 @@ from trend_bot.db import get_meta, set_meta
 
 PAPER_URL = "https://paper-api.alpaca.markets/v2"   # fixed on purpose: paper keys only work here
 KEY_ENV, SECRET_ENV = "ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY"
+# The $100 account: the same portfolio at the size a first real-money account would have, bought in
+# dollar amounts (fractional shares: $5 of a $400 stock), so it shows exactly what $100 would hold.
+SMALL_KEY_ENV, SMALL_SECRET_ENV = "ALPACA_SMALL_KEY_ID", "ALPACA_SMALL_SECRET_KEY"
+MIN_ORDER = 1.0          # the broker's smallest dollar order
 INVESTED = 0.98          # keep 2% in cash so whole-share rounding and price moves never overdraw
 REBALANCE_BAND = 0.10    # leave a holding alone if it's within 10% of its target amount
 ONE_SHARE_MAX = 2.0      # a stock pricier than its amount still gets 1 share, up to twice the amount
@@ -47,8 +51,8 @@ class Paper:
         self.http.headers.update({"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret})
 
     @classmethod
-    def from_env(cls) -> "Paper | None":
-        key, secret = os.environ.get(KEY_ENV), os.environ.get(SECRET_ENV)
+    def from_env(cls, key_env: str = KEY_ENV, secret_env: str = SECRET_ENV) -> "Paper | None":
+        key, secret = os.environ.get(key_env), os.environ.get(secret_env)
         return cls(key, secret) if key and secret else None
 
     def _call(self, method: str, path: str, **kw):
@@ -72,6 +76,12 @@ class Paper:
 
     def order(self, symbol: str, qty: int, side: str, tag: str) -> dict:
         return self._call("POST", "/orders", json={"symbol": symbol, "qty": str(qty), "side": side,
+                                                    "type": "market", "time_in_force": "day",
+                                                    "client_order_id": tag})
+
+    def order_notional(self, symbol: str, dollars: float, side: str, tag: str) -> dict:
+        """A market order for a dollar amount (fractional shares)."""
+        return self._call("POST", "/orders", json={"symbol": symbol, "notional": f"{dollars:.2f}", "side": side,
                                                     "type": "market", "time_in_force": "day",
                                                     "client_order_id": tag})
 
@@ -166,6 +176,30 @@ def plan(targets: list[str], prices: dict[str, float], holdings: dict[str, float
     return sells + buys
 
 
+def plan_dollars(targets: list[str], values: dict[str, float], equity: float, band: float = REBALANCE_BAND,
+                 tradable: set[str] | None = None, left_out: list | None = None) -> list[tuple[str, str, float]]:
+    """Like plan, in dollars (fractional shares): [(symbol, 'close'|'sell'|'buy', dollars)].
+    values: $ held per Alpaca symbol. Stocks the broker can't trade in fractions (not in `tradable`,
+    when given) are left out; so are differences under the broker's $1 minimum."""
+    want = [symbol(t) for t in targets]
+    if tradable is not None:
+        for s in [s for s in want if s not in tradable]:
+            if left_out is not None:
+                left_out.append((s, 0.0))
+        want = [s for s in want if s in tradable]
+    each = equity * INVESTED / max(len(want), 1)
+    sells, buys = [], []
+    for s, v in values.items():
+        if s not in want and v:
+            sells.append((s, "close", 0.0))
+    for s in want:
+        diff = each - values.get(s, 0.0)
+        if abs(diff) <= band * each or abs(diff) < MIN_ORDER:
+            continue
+        (buys if diff > 0 else sells).append((s, "buy" if diff > 0 else "sell", round(abs(diff), 2)))
+    return sells + buys
+
+
 def _prices(con: sqlite3.Connection, tickers: list[str]) -> dict[str, float]:
     out = {}
     for t in tickers:
@@ -176,13 +210,15 @@ def _prices(con: sqlite3.Connection, tickers: list[str]) -> dict[str, float]:
 
 
 def sync(con: sqlite3.Connection, client: Paper, today: dt.date | None = None, dry_run: bool = False,
-         log=print) -> dict:
+         log=print, prefix: str = "paper", fractional: bool = False) -> dict:
     """Bring the demo account to the portfolio to follow (if it changed) and save the account's value.
 
     If the broker refuses an order while the market is closed (it may not queue some orders for the
     open), the month isn't marked done, so the morning check (market open) tries again; a refusal
     while the market is open (e.g. a stock the broker doesn't offer) is final for that month.
     dry_run: work out the orders ("planned") but send nothing and save nothing.
+    prefix: where this account's own notes are kept ("paper" = the monthly account, "small" = $100).
+    fractional: dollar orders (fractional shares) instead of whole shares.
     Returns {"traded", "failed", "left_out", "skipped", "status"}."""
     from trend_bot import ideas
 
@@ -207,15 +243,28 @@ def sync(con: sqlite3.Connection, client: Paper, today: dt.date | None = None, d
             out["failed"].append((s, "close", 0, str(e)))
     if not port:
         out["skipped"] = "no portfolio to follow yet"
-    elif get_meta(con, "paper_synced") == port["date"]:
+    elif get_meta(con, f"{prefix}_synced") == port["date"]:
         out["skipped"] = f"already matches the portfolio of {port['date']}"
     elif client.open_orders():
         out["skipped"] = "earlier orders haven't filled yet (they fill at the next open)"
     else:
         targets = [p["ticker"] for p in port["buys"] + port["holds"] if symbol(p["ticker"]) not in keep_out]
-        holdings = {p["symbol"]: float(p["qty"]) for p in client.positions() if p["symbol"] not in keep_out}
+        positions = [p for p in client.positions() if p["symbol"] not in keep_out]
         prices = _prices(con, targets)
-        orders = plan(targets, prices, holdings, equity, left_out=out["left_out"])
+        if fractional:
+            tradable = set()
+            for t in targets:
+                try:
+                    a = client._call("GET", f"/assets/{symbol(t)}")
+                    if a.get("fractionable") and a.get("tradable"):
+                        tradable.add(symbol(t))
+                except PaperError:
+                    pass
+            values = {p["symbol"]: abs(float(p.get("market_value") or 0)) for p in positions}
+            orders = plan_dollars(targets, values, equity, tradable=tradable, left_out=out["left_out"])
+        else:
+            holdings = {p["symbol"]: float(p["qty"]) for p in positions}
+            orders = plan(targets, prices, holdings, equity, left_out=out["left_out"])
         if dry_run:
             return {**out, "planned": out.get("planned", []) + orders, "status": {"equity": equity}}
         ref = {symbol(t): p for t, p in prices.items()}
@@ -225,6 +274,8 @@ def sync(con: sqlite3.Connection, client: Paper, today: dt.date | None = None, d
             try:
                 if side == "close":
                     client.close(s)
+                elif fractional:
+                    client.order_notional(s, qty, side, f"tb-{port['date']}-{s}-{side}-{stamp}"[:48])
                 else:
                     client.order(s, qty, side, f"tb-{port['date']}-{s}-{side}-{stamp}"[:48])
                 out["traded"].append((s, side, qty))
@@ -232,11 +283,11 @@ def sync(con: sqlite3.Connection, client: Paper, today: dt.date | None = None, d
                 out["failed"].append((s, side, qty, str(e)))
         market_open = bool(client.clock().get("is_open"))
         if not out["failed"] or market_open:
-            set_meta(con, "paper_synced", port["date"])
+            set_meta(con, f"{prefix}_synced", port["date"])
         else:
             out["retry"] = True
         if out["traded"]:
-            set_meta(con, "paper_sent", json.dumps({
+            set_meta(con, f"{prefix}_sent", json.dumps({
                 "portfolio": port["date"], "sent_at": now.isoformat(timespec="seconds"), "reported": False,
                 "orders": [{"symbol": s, "side": side, "qty": qty, "ref": ref.get(s) or _last_close(con, s)}
                            for s, side, qty in out["traded"]]}))
@@ -246,11 +297,11 @@ def sync(con: sqlite3.Connection, client: Paper, today: dt.date | None = None, d
 
     if dry_run:
         return {**out, "planned": out.get("planned", []), "status": {"equity": equity}}
-    status = json.loads(get_meta(con, "paper_status") or "{}")
+    status = json.loads(get_meta(con, f"{prefix}_status") or "{}")
     if out["traded"] and "start_date" not in status:
         status.update(start_date=today.isoformat(), start_equity=equity)
     status.update(date=today.isoformat(), equity=equity, cash=float(acct.get("cash") or 0))
-    set_meta(con, "paper_status", json.dumps(status))
+    set_meta(con, f"{prefix}_status", json.dumps(status))
     con.commit()
     out["status"] = status
     return out
@@ -262,13 +313,13 @@ def _last_close(con: sqlite3.Connection, alpaca_symbol: str) -> float | None:
     return float(row[0]) if row and row[0] else None
 
 
-def fills(con: sqlite3.Connection, client: Paper) -> dict | None:
+def fills(con: sqlite3.Connection, client: Paper, prefix: str = "paper") -> dict | None:
     """The last orders sent, as filled: price paid vs the close they were planned at (once per batch).
 
     Returns {"portfolio", "filled": [(symbol, side, qty, price, ref)], "waiting": n, "cost": share} or
     None when there's nothing new. cost: how much worse than the planned prices, as a share of the
     money traded (buys paying more, sells getting less), the real cost of trading the next morning."""
-    sent = json.loads(get_meta(con, "paper_sent") or "{}")
+    sent = json.loads(get_meta(con, f"{prefix}_sent") or "{}")
     if not sent or sent.get("reported"):
         return None
     done = client._call("GET", "/orders", params={"status": "closed", "after": sent["sent_at"], "limit": 500})
@@ -293,13 +344,13 @@ def fills(con: sqlite3.Connection, client: Paper) -> dict | None:
         return None
     if not waiting:
         sent["reported"] = True
-        set_meta(con, "paper_sent", json.dumps(sent))
+        set_meta(con, f"{prefix}_sent", json.dumps(sent))
         con.commit()
     return {"portfolio": sent["portfolio"], "filled": filled, "waiting": waiting,
             "cost": worse / traded if traded else None}
 
 
-def fills_embed(f: dict) -> dict:
+def fills_embed(f: dict, small: bool = False) -> dict:
     from trend_bot.alerts import GOLD, lead
 
     lines = [lead("last night's practice orders (fake money) were filled at this morning's prices. "
@@ -307,18 +358,20 @@ def fills_embed(f: dict) -> dict:
                   "prices, which the tests use."), ""]
     for s, side, qty, price, ref in sorted(f["filled"], key=lambda x: x[0]):
         vs = f" ({price / ref - 1:+.2%} vs the close)" if ref else ""
-        lines.append(f"• {'sold' if side in ('sell', 'close') else 'bought'} {qty:,.0f} {s} at ${price:,.2f}{vs}")
+        amount = f"{qty:,.0f}" if qty >= 10 else f"{qty:.4g}"            # fractional shares in the $100 account
+        lines.append(f"• {'sold' if side in ('sell', 'close') else 'bought'} {amount} {s} at ${price:,.2f}{vs}")
     if f["cost"] is not None:
         lines += ["", f"**Cost of buying the next morning: {f['cost']:+.2%}** of the money traded "
                       "(positive = paid more than the tests assume)."]
     if f["waiting"]:
         lines.append(f"{f['waiting']} order(s) not filled yet.")
-    return {"title": "🧪 Demo account: orders filled", "description": "\n".join(lines)[:4000], "color": GOLD}
+    return {"title": "🪙 $100 account: orders filled" if small else "🧪 Demo account: orders filled",
+            "description": "\n".join(lines)[:4000], "color": GOLD}
 
 
-def record(con: sqlite3.Connection, benchmark: str = "SPY") -> dict | None:
+def record(con: sqlite3.Connection, benchmark: str = "SPY", prefix: str = "paper") -> dict | None:
     """The demo account since its first trades vs the S&P 500 over the same days (None before that)."""
-    s = json.loads(get_meta(con, "paper_status") or "{}")
+    s = json.loads(get_meta(con, f"{prefix}_status") or "{}")
     if not s.get("start_date") or not s.get("start_equity"):
         return None
     first = con.execute("SELECT close FROM prices WHERE ticker = ? AND date <= ? ORDER BY date DESC LIMIT 1",
@@ -333,11 +386,15 @@ def record(con: sqlite3.Connection, benchmark: str = "SPY") -> dict | None:
             "bot": bot["portfolio"] if bot else None}
 
 
-def line(con: sqlite3.Connection) -> str:
+def line(con: sqlite3.Connection, prefix: str = "paper") -> str:
     """One line for the report and email: how the demo account is doing."""
-    r = record(con)
+    r = record(con, prefix=prefix)
     if not r:
         return ""
+    if prefix == "small":
+        return (f"🪙 **$100 account** (fake money, fractional shares, the same portfolio): **${r['equity']:,.2f}**, "
+                f"**{r['account']:+.1%}** since {r['start']}"
+                + (f" vs S&P 500 **{r['spy']:+.1%}**" if r["spy"] is not None else "") + ".")
     parts = [f"the bot's own record over the same days **{r['bot']:+.1%}**" if r.get("bot") is not None else "",
              f"S&P 500 **{r['spy']:+.1%}**" if r["spy"] is not None else ""]
     vs = " vs " + " and ".join(p for p in parts if p) if any(parts) else ""
@@ -346,7 +403,7 @@ def line(con: sqlite3.Connection) -> str:
             "real trading (next-morning prices, whole shares, cash).")
 
 
-def embed(result: dict, port_date: str) -> dict | None:
+def embed(result: dict, port_date: str, small: bool = False) -> dict | None:
     """Discord message on the nights the demo account traded (nothing otherwise)."""
     from trend_bot.alerts import GOLD, lead
 
@@ -355,15 +412,20 @@ def embed(result: dict, port_date: str) -> dict | None:
     words = {"close": "sell all", "sell": "sell", "buy": "buy"}
     lines = [lead("the bot's practice account (fake money) is following this month's portfolio. "
                   "The orders fill when the market opens; nothing real is bought or sold."), ""]
-    lines += [f"• {words[side]} {qty:,} {s}" if side != "close" else f"• sell all {s}"
-              for s, side, qty in result["traded"]]
+    lines += [(f"• {words[side]} ${qty:,.2f} of {s}" if small else f"• {words[side]} {qty:,} {s}")
+              if side != "close" else f"• sell all {s}" for s, side, qty in result["traded"]]
     if result["failed"]:
         lines += ["", "Refused by the broker" + (" (tried again in the morning, with the market open):"
                                                  if result.get("retry") else " (left out):")]
         lines += [f"• {s}: {why[:80]}" for s, _, _, why in result["failed"]]
-    if result.get("left_out"):
+    if result.get("left_out") and small:
+        lines += ["", "Left out: the broker doesn't offer these in fractions: "
+                      + ", ".join(s for s, _ in result["left_out"])]
+    elif result.get("left_out"):
         lines += ["", "Left out: one share costs more than twice its share of the account:"]
         lines += [f"• {s} (${price:,.0f} a share)" for s, price in result["left_out"]]
     st = result["status"]
-    lines += ["", f"Account value now: ${st['equity']:,.0f} (cash ${st['cash']:,.0f}). Portfolio of {port_date}."]
-    return {"title": "🧪 Demo account: orders sent", "description": "\n".join(lines)[:4000], "color": GOLD}
+    cents = ",.2f" if small else ",.0f"
+    lines += ["", f"Account value now: ${st['equity']:{cents}} (cash ${st['cash']:{cents}}). Portfolio of {port_date}."]
+    return {"title": "🪙 $100 account: orders sent" if small else "🧪 Demo account: orders sent",
+            "description": "\n".join(lines)[:4000], "color": GOLD}

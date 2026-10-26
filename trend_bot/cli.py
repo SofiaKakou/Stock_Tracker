@@ -188,7 +188,7 @@ def make_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
     st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml",
-                                       "ideas", "candidates", "lookahead", "mllab", "audit", "intraday"])
+                                       "ideas", "candidates", "lookahead", "mllab", "audit", "intraday", "swing"])
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
     st.add_argument("--months", help="lookahead: month-ends to check, e.g. 2012-06-30,2021-06-30, or 'yearly' (one per year)")
     st.add_argument("--intraday-db", default="intraday.db", help="intraday: the half-hour bars database")
@@ -328,6 +328,8 @@ def make_parser() -> argparse.ArgumentParser:
 
     pp = sub.add_parser("paper", help="demo account: follow the portfolio on Alpaca paper trading (fake money)")
     pp.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    pp.add_argument("--account", choices=["monthly", "small"], default="monthly",
+                    help="small = the $100 account (fractional shares, keys ALPACA_SMALL_KEY_ID / _SECRET_KEY)")
     pp.add_argument("--dry-run", action="store_true", help="show the orders it would send, send nothing")
     pp.add_argument("--discord", action="store_true", help="post a message when it trades")
     pp.add_argument("--morning", action="store_true",

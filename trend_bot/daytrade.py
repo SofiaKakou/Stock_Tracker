@@ -32,7 +32,9 @@ from trend_bot.paper import Paper, PaperError
 
 KEY_ENV, SECRET_ENV = "ALPACA_DAY_KEY_ID", "ALPACA_DAY_SECRET_KEY"
 NY = ZoneInfo("America/New_York")
-STOCK_SLOTS, ETF_SLOTS = 17, 3
+STOCK_SLOTS, ETF_SLOTS = 34, 3   # positions at once: up to 34 stocks (gap fade + breakouts) and the 3 funds
+SIZE_SLOTS = 20       # each position is 1/20 of the account (about $4,900 on $100,000)
+BUYING_POWER = 2.0    # all positions together up to 2x the account: intraday buying power, never overnight
 INVESTED = 0.98
 GAP_LATEST = dt.time(10, 15)          # a late start still fades the gap until 10:15, not after
 MORNING_CHECKS = [dt.time(10, 30), dt.time(11, 0), dt.time(11, 30), dt.time(12, 0)]
@@ -251,7 +253,7 @@ class Session:
         return {o["symbol"] for o in self.today_orders() if str(o.get("client_order_id", "")).startswith(tag)}
 
     def budget(self) -> float:
-        return float(self.b.account()["equity"]) * INVESTED / (STOCK_SLOTS + ETF_SLOTS)
+        return float(self.b.account()["equity"]) * INVESTED / SIZE_SLOTS
 
     def enter(self, pattern: str, signals: list[tuple[str, int]], prices: dict[str, float], slots: int,
               strength: dict[str, float] | None = None) -> int:
@@ -263,8 +265,11 @@ class Session:
         done = self.traded()
         used = len(done & set(self.stocks if pattern != "momentum" else self.etfs))
         each, sent = self.budget() * size_factor(self.share, pattern), 0
-        room = float(self.b.account()["equity"]) * INVESTED - sum(
+        account = self.b.account()
+        room = float(account["equity"]) * INVESTED * BUYING_POWER - sum(
             abs(float(p.get("market_value") or 0)) for p in self.b.positions())
+        if account.get("daytrading_buying_power"):        # never more than the broker allows
+            room = min(room, float(account["daytrading_buying_power"]) * INVESTED)
         fresh = self.last_trades([s for s, _ in signals if s not in done])
         try:   # the bid and ask when each order goes out, for the trade log (what the spread cost)
             quotes = intraday.latest_quotes(self.data, [s for s, _ in signals if s not in done][:slots])
@@ -426,6 +431,10 @@ PATTERN_NAME = {"gap": "Fade big opening gaps", "breakout": "Breakout from the f
 MIN_SHARE, MAX_SHARE = 0.15, 0.60     # each pattern's share of the money stays between these
 PRIOR_TRADES = 100                    # the 10-year test counts like this many live trades
 SHIFT_AFTER, PAUSE_AFTER, COST_AFTER = 20, 40, 50   # live trades needed before each kind of change
+# ... and trading days: trades on the same day move together (one market), so one day, however many
+# trades it has, can't shift the money or pause a pattern on its own. (Costs need no days: a trade's
+# spread doesn't depend on the market's direction.)
+SHIFT_DAYS, PAUSE_DAYS = 5, 10
 DEFAULT_SD = 0.01                     # a trade's typical spread of results, if the test didn't say
 
 
@@ -440,7 +449,8 @@ def compare(log: list[dict], tested: dict | None) -> dict[str, dict]:
             float(np.std(rets, ddof=1)) if len(rets) > 2 else DEFAULT_SD)
         live = float(np.mean(rets)) if rets else None
         z = (live - forecast) / (sd / np.sqrt(len(rets))) if rets and forecast is not None and sd else None
-        out[p] = {"n": len(rets), "live": live, "forecast": forecast, "sd": sd, "z": z}
+        days = len({r["date"] for r in log if r.get("pattern") == p and r.get("ret") is not None})
+        out[p] = {"n": len(rets), "days": days, "live": live, "forecast": forecast, "sd": sd, "z": z}
     return out
 
 
@@ -469,21 +479,24 @@ def allocate(cmp: dict[str, dict], cost: float | None) -> tuple[dict[str, float]
 
     The expected gain per trade is the 10-year forecast blended with the live average (the test
     weighs like PRIOR_TRADES trades, so a few days barely move it), minus the measured cost if
-    known. Shares follow the expected gains, only for patterns with SHIFT_AFTER+ live trades, and
-    always stay within MIN_SHARE..MAX_SHARE. A pattern clearly worse live than its history
-    (PAUSE_AFTER+ trades, z below -2) is paused. A great streak never pauses or boosts beyond the cap."""
-    paused = {p for p, c in cmp.items() if c["n"] >= PAUSE_AFTER and c["z"] is not None and c["z"] < -2}
+    known. Shares follow the expected gains, only for patterns with SHIFT_AFTER+ live trades over
+    SHIFT_DAYS+ trading days, and always stay within MIN_SHARE..MAX_SHARE. A pattern clearly worse live than its history
+    (PAUSE_AFTER+ trades over PAUSE_DAYS+ days, z below -2) is paused. A great streak never pauses or boosts beyond the cap."""
+    def ready(c, trades, days):
+        return c["n"] >= trades and c.get("days", days) >= days
+
+    paused = {p for p, c in cmp.items() if ready(c, PAUSE_AFTER, PAUSE_DAYS) and c["z"] is not None and c["z"] < -2}
     active = [p for p in PATTERN_TEST if p not in paused]
     if not active:
         return {}, paused
-    if not any(cmp[p]["n"] >= SHIFT_AFTER for p in active):
+    if not any(ready(cmp[p], SHIFT_AFTER, SHIFT_DAYS) for p in active):
         return {p: 1 / len(active) for p in active}, paused
     edge = {}
     for p in active:
         c = cmp[p]
         prior = c["forecast"] if c["forecast"] is not None else 0.0
         blended = (PRIOR_TRADES * prior + c["n"] * (c["live"] or 0.0)) / (PRIOR_TRADES + c["n"]) \
-            if c["n"] >= SHIFT_AFTER else prior
+            if ready(c, SHIFT_AFTER, SHIFT_DAYS) else prior
         edge[p] = blended - (2 * cost if cost is not None else 0.0)
     lo = min(edge.values())
     raw = {p: e - lo + 1e-4 for p, e in edge.items()}            # the weakest gets the least, never nothing
@@ -682,7 +695,8 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     for p, c in cmp.items():
         f = f"{c['forecast']:+.2%}" if c["forecast"] is not None else "–"
         lv = f"{c['live']:+.2%}" if c["live"] is not None else "–"
-        lines.append(f"• {PATTERN_NAME[p]}: tested {f}, live {lv} over {c['n']} trade{'s' if c['n'] != 1 else ''}: "
+        lines.append(f"• {PATTERN_NAME[p]}: tested {f}, live {lv} over {c['n']} trade{'s' if c['n'] != 1 else ''} "
+                     f"on {c.get('days', 0)} day{'s' if c.get('days', 0) != 1 else ''}: "
                      f"{verdict_vs_test(c)}")
     if cost is not None:
         lines.append(f"Measured cost of getting in: {cost:.3%} a side (from {COST_AFTER}+ trades; the test assumed "
@@ -690,8 +704,8 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     if share:
         lines.append("Tomorrow's money per pattern: " + ", ".join(
             f"{SHORT_NAME[p]} {v:.0%}" for p, v in share.items())
-                     + ("" if any(c["n"] >= SHIFT_AFTER for c in cmp.values())
-                        else f" (equal until a pattern has {SHIFT_AFTER} live trades)"))
+                     + ("" if any(c["n"] >= SHIFT_AFTER and c.get("days", 0) >= SHIFT_DAYS for c in cmp.values())
+                        else f" (equal until a pattern has {SHIFT_AFTER} live trades over {SHIFT_DAYS} trading days)"))
     for p in sorted(newly):
         lines.append(f"⏸️ **{PATTERN_NAME[p]} is paused**: after {cmp[p]['n']} live trades it's doing clearly worse "
                      "than its 10-year history. It resumes on its own if its record comes back within range.")

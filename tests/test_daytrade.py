@@ -216,9 +216,11 @@ def test_the_session_records_what_each_order_expected():
     assert e["BREAKY"]["signal"] == pytest.approx(103 / 101 - 1) and e["BREAKY"]["expected"] == 103.0
 
 
-def rows(pattern, rets, slip=0.0002):
-    return [{"date": "2026-10-20", "pattern": pattern, "symbol": f"S{i}", "ret": r, "slippage": slip}
-            for i, r in enumerate(rets)]
+def rows(pattern, rets, slip=0.0002, per_day=5):
+    """Live trades, `per_day` of them on each trading day (the loop also needs enough days)."""
+    days = pd.bdate_range("2026-08-03", periods=len(rets) // per_day + 1)
+    return [{"date": str(days[i // per_day].date()), "pattern": pattern, "symbol": f"S{i}", "ret": r,
+             "slippage": slip} for i, r in enumerate(rets)]
 
 
 TESTED = {"gap_fade": {"days": 100, "per_trade": 0.001, "sd_trade": 0.01},
@@ -249,7 +251,7 @@ def test_money_shifts_slowly_within_limits_and_a_broken_pattern_pauses():
     share, _ = daytrade.allocate(daytrade.compare(huge, TESTED), None)
     assert share["gap"] == pytest.approx(daytrade.MAX_SHARE)        # never more than the cap
 
-    broken = rows("breakout", [-0.01] * 45) + rows("gap", [0.001] * 25)
+    broken = rows("breakout", [-0.01] * 50) + rows("gap", [0.001] * 25)
     share, paused = daytrade.allocate(daytrade.compare(broken, TESTED), None)
     assert paused == {"breakout"} and "breakout" not in share
     assert daytrade.size_factor(share, "gap") == pytest.approx(share["gap"] * 2)   # equal split = 1.0 each
@@ -275,10 +277,10 @@ def test_a_paused_pattern_doesnt_trade_and_sizes_follow_the_shares():
 
 
 def test_the_report_shows_the_learning_lines():
-    state = {"log": rows("breakout", [-0.01] * 45, slip=0.0006) + rows("gap", [0.001] * 25), "days": {}}
+    state = {"log": rows("breakout", [-0.01] * 50, slip=0.0006) + rows("gap", [0.001] * 25), "days": {}}
     state, e = daytrade.report([], 100_000.0, state, DAY, TESTED)
     d = e["description"]
-    assert "Forecast vs actual" in d and "worse than its history" in d and "Measured cost of getting in: 0.046%" in d
+    assert "Forecast vs actual" in d and "worse than its history" in d and "Measured cost of getting in: 0.047%" in d
     assert "Breakout from the first half hour is paused" in d and state["paused"] == ["breakout"]
     assert "Tomorrow's money per pattern" in d
 
@@ -539,3 +541,21 @@ def test_each_part_runs_once_a_day_even_with_backup_schedules(tmp_path, monkeypa
     monkeypatch.setattr(dt, "datetime", Late)
     assert main(args) == 0 and main(args) == 0          # the backup schedule fires too
     assert ran == ["morning"] and json.loads(state.read_text())["ran"] == {"2026-10-26": ["morning"]}
+
+
+def test_one_busy_day_cant_shift_the_money_or_pause_a_pattern():
+    one_day = rows("breakout", [-0.01] * 60, per_day=60) + rows("gap", [0.004] * 60, per_day=60)
+    cmp = daytrade.compare(one_day, TESTED)
+    assert cmp["breakout"]["n"] == 60 and cmp["breakout"]["days"] == 1
+    share, paused = daytrade.allocate(cmp, None)
+    assert not paused and share == pytest.approx({"gap": 1 / 3, "breakout": 1 / 3, "momentum": 1 / 3})
+    spread = rows("breakout", [-0.01] * 60, per_day=6) + rows("gap", [0.004] * 60, per_day=6)
+    share, paused = daytrade.allocate(daytrade.compare(spread, TESTED), None)    # the same over 10 days
+    assert paused == {"breakout"}
+
+
+def test_up_to_37_positions_of_the_usual_size_within_twice_the_account():
+    broker = FakeBroker()
+    s = daytrade.Session(broker, None, [], DAY, log=lambda *_: None)
+    assert s.budget() == pytest.approx(100_000 * daytrade.INVESTED / 20)        # about $4,900 each, as before
+    assert daytrade.STOCK_SLOTS + daytrade.ETF_SLOTS == 37 and daytrade.BUYING_POWER == 2.0

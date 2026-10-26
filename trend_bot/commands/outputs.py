@@ -543,9 +543,12 @@ def cmd_paper(args: argparse.Namespace) -> int:
     """Demo account: follow the portfolio on Alpaca's paper-trading account (fake money)."""
     from trend_bot import db, ideas, paper
 
-    client = paper.Paper.from_env()
+    small = args.account == "small"
+    keys = (paper.SMALL_KEY_ENV, paper.SMALL_SECRET_ENV) if small else (paper.KEY_ENV, paper.SECRET_ENV)
+    prefix = "small" if small else "paper"
+    client = paper.Paper.from_env(*keys)
     if client is None:
-        print(f"The demo account isn't set up ({paper.KEY_ENV} / {paper.SECRET_ENV}); skipped. "
+        print(f"The {'$100' if small else 'demo'} account isn't set up ({keys[0]} / {keys[1]}); skipped. "
               "See GUIDE.md, 'Demo account'.")
         return 0
     if args.test_trade:
@@ -558,29 +561,29 @@ def cmd_paper(args: argparse.Namespace) -> int:
     with closing(db.connect(args.db)) as con:
         try:
             if args.morning:   # last night's orders as filled, then anything refused overnight again
-                f = paper.fills(con, client)
+                f = paper.fills(con, client, prefix=prefix)
                 if f:
-                    embeds.append(paper.fills_embed(f))
+                    embeds.append(paper.fills_embed(f, small=small))
                     print(f"[demo] {len(f['filled'])} order(s) filled, {f['waiting']} waiting"
                           + (f"; cost of buying the next morning {f['cost']:+.2%}" if f["cost"] is not None else ""))
-            res = paper.sync(con, client, dry_run=args.dry_run)
+            res = paper.sync(con, client, dry_run=args.dry_run, prefix=prefix, fractional=small)
         except paper.PaperError as e:
             print(f"[demo] the broker refused: {e}", file=sys.stderr)
             return 1
-        print(f"[demo] account value ${res['status']['equity']:,.0f}"
+        print(f"[demo{' $100' if small else ''}] account value ${res['status']['equity']:,.2f}"
               + (f"; nothing to do: {res['skipped']}" if res["skipped"] else ""))
         for s, side, qty in res.get("planned", []):
-            print(f"  would {side} {qty:,} {s}")
+            print(f"  would {side} ${qty:,.2f} of {s}" if small else f"  would {side} {qty:,} {s}")
         for s, price in res.get("left_out", []):
             print(f"  left out {s}: one share (${price:,.0f}) costs more than twice its share of the account")
-        line = paper.line(con)
+        line = paper.line(con, prefix=prefix)
         if line:
             print(line.replace("**", ""))
         port = ideas.load_portfolio(con)
-        e = paper.embed(res, port["date"]) if port and not args.dry_run else None
+        e = paper.embed(res, port["date"], small=small) if port and not args.dry_run else None
         if e:
             embeds.append(e)
-        if not args.dry_run:
+        if not args.dry_run and not small:
             from trend_bot import safety
 
             alarms = safety.drawdown(con)

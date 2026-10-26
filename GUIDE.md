@@ -218,6 +218,18 @@ Setup: a second paper account in Alpaca, its
 keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
 separate and unaffected.
 
+## The $100 account
+
+A third practice account (fake money) holds **the same 20-stock monthly portfolio at $100**, the size
+a first real-money account would start at. It buys in **dollar amounts** (fractional shares: about $4.90
+of each stock, even a $400 one), so it shows exactly what your first $100 would hold and how it does.
+Stocks the broker can't split into fractions are left out (named in its Discord message). It trades on
+the same nights as the monthly account and gets the same emergency exits.
+
+Setup: an Alpaca paper account with its balance set to $100, and its keys as the secrets
+`ALPACA_SMALL_KEY_ID` and `ALPACA_SMALL_SECRET_KEY`. It starts at the next nightly run (or right away:
+Actions → Demo account → Run workflow with "follow now").
+
 ## The demo accounts week by week
 
 Every **Friday night** (after the close) "📅 The week" shows both demo accounts and the S&P 500 this week and since
@@ -382,7 +394,7 @@ later as its own step.)
 
 **The day-trading demo account**
 - Every position has a **protective stop at the broker** (out if it moves 5% against us; it works
-  even if our job stops); any position found without one gets one when a trading part starts. At most 20 positions, never more than 98% of the account.
+  even if our job stops); any position found without one gets one when a trading part starts. At most 37 positions of about 1/20 of the account each (~$4,900 on $100,000), all together never more than **2× the account** (the broker's intraday buying power; nothing is ever held overnight). Twice the positions means $ wins and losses can be twice as big: the 3% daily loss limit below is the brake.
 - **Daily loss limit**: down 3% on the day → everything closed, no more trades that day.
 - **Never overnight**: closing orders at 15:45, then anything left at 15:58, and an **independent
   safety net** (15:52, 16:06 and 9:20 New York) closes anything the trading job missed and tells you.

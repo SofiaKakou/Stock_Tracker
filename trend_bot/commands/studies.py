@@ -639,6 +639,11 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "intraday":
             return _study_intraday(con, args)
+        if args.signal == "swing":
+            from trend_bot import swing
+
+            print(swing.run(con, since=args.since))
+            return 0
         if args.signal == "candidates":
             _study_candidates(con, args)
             return 0
