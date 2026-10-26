@@ -7,8 +7,8 @@ name: Day trading safety net
 
 on:
   schedule:
-    - cron: "52 19 * * 1-5"   # 15:52 New York summer time / 14:52 winter (outside the window: no-op)
-    - cron: "52 20 * * 1-5"   # 15:52 winter time
+    - cron: "57 19 * * 1-5"   # 15:57 New York summer time / 14:57 winter (outside the window: no-op)
+    - cron: "57 20 * * 1-5"   # 15:57 winter time
     - cron: "6 20 * * 1-5"    # 16:06 summer
     - cron: "6 21 * * 1-5"    # 16:06 winter
     - cron: "20 13 * * 1-5"   # 9:20 summer: anything left overnight

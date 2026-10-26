@@ -406,8 +406,9 @@ later as its own step.)
 - Every position has a **protective stop at the broker** (out if it moves 5% against us; it works
   even if our job stops); any position found without one gets one when a trading part starts. At most 37 positions of about 1/20 of the account each (~$4,900 on $100,000), all together never more than **2× the account** (the broker's intraday buying power; nothing is ever held overnight). Twice the positions means $ wins and losses can be twice as big: the 3% daily loss limit below is the brake.
 - **Daily loss limit**: down 3% on the day → everything closed, no more trades that day.
-- **Never overnight**: closing orders at 15:45, then anything left at 15:58, and an **independent
-  safety net** (15:52, 16:06 and 9:20 New York) closes anything the trading job missed and tells you.
+- **Never overnight**: every position closed with a market order at 15:50, checked and retried, a
+  last sweep at 15:58, and an **independent safety net** (15:57, 16:06 and 9:20 New York) closes
+  anything the trading job missed and tells you.
 - **Checks before each trade**: the stock must be tradable, shortable and easy to borrow (for shorts),
   and have traded in the last 15 minutes (not halted).
 

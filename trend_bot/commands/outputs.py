@@ -311,7 +311,7 @@ def cmd_send_email(args: argparse.Namespace) -> int:
 
 
 MORNING_WINDOW = (_dt.time(9, 0), _dt.time(11, 40))       # New York time a part may start in
-AFTERNOON_WINDOW = (_dt.time(12, 0), _dt.time(15, 40))    # (after 15:40 the closing orders can't be placed)
+AFTERNOON_WINDOW = (_dt.time(12, 0), _dt.time(15, 40))    # (a later start would miss its own trades)
 
 
 def cmd_daytrade(args: argparse.Namespace) -> int:
@@ -329,7 +329,7 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
     phase = "report" if args.date and args.phase == "auto" else args.phase   # a date means: redo that report
     if phase == "safety":   # the independent safety net: only in its windows, so a summer/winter twin is harmless
         t = now.time()
-        if not (dt.time(15, 50) <= t < dt.time(15, 59) or t >= dt.time(16, 2) or t < dt.time(9, 29)):
+        if not (dt.time(15, 56) <= t < dt.time(15, 59) or t >= dt.time(16, 2) or t < dt.time(9, 29)):
             print(f"[day] safety net: {now:%H:%M} New York is outside its windows; nothing to do")
             return 0
         alert = daytrade.safety_net(broker, now)
@@ -376,7 +376,7 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
         Path(args.state).write_text(json.dumps(state, indent=1))
     if phase in ("afternoon", "report"):
         if phase == "afternoon":
-            session.settle()                     # the closing orders fill at 16:00: wait for them
+            session.settle()                     # wait until every closing order has filled
         day = dt.date.fromisoformat(args.date) if args.date else now.date()
         account = broker.account()
         if day == now.date():
