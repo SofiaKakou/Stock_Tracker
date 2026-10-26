@@ -242,8 +242,10 @@ Actions → Demo account → Run workflow with "follow now").
 
 ## The demo accounts week by week
 
-Every **Friday night** (after the close) "📅 The week" shows both demo accounts and the S&P 500 this week and since
-the start, the day-trading patterns' week, and a chart of both accounts against the S&P 500. The same
+Every **Friday night** (after the close) "📅 The week" shows the demo accounts (monthly, day trading and
+$100) and the S&P 500 this week and since the start, the day-trading patterns' week, and a chart of the
+accounts against the S&P 500 (each as % change, so $100 and $100,000 compare directly). In SSMS the
+$100 account is `small` in `dw.DimAccount` and its daily values are in `dw.FactAccountValue`. The same
 chart is in the report and the email every day.
 
 ## The trading journal in SSMS
@@ -411,11 +413,52 @@ later as its own step.)
   anything the trading job missed and tells you.
 - **Checks before each trade**: the stock must be tradable, shortable and easy to borrow (for shorts),
   and have traded in the last 15 minutes (not halted).
+- **Limit orders, not market orders**: each entry pays at most 0.2% more than the current asking price
+  (or gets at least 0.2% less than the bid for a short). The first live trades paid about 0.17% a side
+  more than expected with market orders; a limit caps that. An entry that hasn't filled in 5 minutes
+  is cancelled (the moment has passed).
+- **Not one big bet on the market**: longs minus shorts at most **50% of the account**. A trade that
+  would tilt it further one way is skipped and logged ("too one-sided"); one that evens it out is fine.
 
 **The bot itself**
 - Both demo accounts can only reach Alpaca's paper-trading (fake money) server; keys live only in
   GitHub Secrets. The GitHub Actions it uses are locked to exact versions and every workflow can only
   read the code by default. ⚠️ Bot health and a Discord message tell you if a trading job fails.
+
+## A reliable timer for the trading jobs (cron-job.org)
+
+GitHub's own schedule is best effort: runs start late or are skipped on busy days (the morning part
+has started an hour late, and once not at all). The bot copes (backup times, the morning starts the
+afternoon itself, a safety net), but a free outside timer that **asks GitHub to start a job** at an exact
+minute is more reliable. GitHub's schedule stays as the backup; a job that already ran today does
+nothing the second time, so double starts are harmless.
+
+1. **A GitHub token that can only start workflows**: GitHub → your picture → Settings → Developer
+   settings → Personal access tokens → **Fine-grained tokens** → Generate new token. Name it
+   "cron-job.org", expiry 1 year, **Repository access: Only select repositories → Stock_Tracker**,
+   **Permissions → Repository → Actions: Read and write** (nothing else). Copy the token; don't share it
+   anywhere else (not in a chat either). If it ever leaks, delete it on the same page.
+2. **A free account at [cron-job.org](https://cron-job.org)**, then **Create cronjob** for each line below:
+   - **URL**: `https://api.github.com/repos/SofiaKakou/Stock_Tracker/actions/workflows/FILE/dispatches`
+     (FILE from the table)
+   - **Schedule**: custom, Monday to Friday, the time below, **time zone America/New_York** (so summer
+     and winter time take care of themselves)
+   - **Advanced → Request method: POST**; **Headers**: `Authorization` = `Bearer ` followed by the token,
+     `Accept` = `application/vnd.github+json`, `Content-Type` = `application/json`;
+     **Request body**: from the table
+   - **Notifications**: on failure (it emails you if GitHub refuses the start)
+
+   | Job | FILE | New York time | Body |
+   |---|---|---|---|
+   | Day trading, morning | `daytrade.yml` | 9:20 | `{"ref":"main","inputs":{"phase":"auto"}}` |
+   | Day trading, afternoon (backup) | `daytrade.yml` | 12:05 | `{"ref":"main","inputs":{"phase":"auto"}}` |
+   | Safety net | `daytrade-safety.yml` | 9:20, 15:57, 16:06 | `{"ref":"main"}` |
+
+3. **Test it**: cron-job.org → the job → **Test run**. It should answer **204** (started), and a new run
+   appears in GitHub → Actions. 401 or 403 means the token or its permission is wrong; 404 means the URL.
+
+The nightly run stays on GitHub's schedule: it isn't time-critical, and a run started from outside
+counts as a manual run, which does the monthly checks every time.
 
 ## Optional setup
 

@@ -16,8 +16,9 @@ import pandas as pd
 
 from trend_bot.db import get_meta, set_meta
 
-NAMES = {"monthly": "Monthly portfolio (demo)", "day": "Day trading (demo)", "spy": "S&P 500"}
-COLORS = {"monthly": "#2a78d6", "day": "#d97706", "spy": "#8d8c86"}
+NAMES = {"monthly": "Monthly portfolio (demo)", "day": "Day trading (demo)", "small": "$100 account (demo)",
+         "spy": "S&P 500"}
+COLORS = {"monthly": "#2a78d6", "day": "#d97706", "small": "#16a34a", "spy": "#8d8c86"}
 
 
 def history(client, start: str) -> pd.Series:
@@ -28,12 +29,12 @@ def history(client, start: str) -> pd.Series:
     return s[~s.index.duplicated(keep="last")]
 
 
-def collect(con: sqlite3.Connection, monthly=None, day=None, start: str | None = None) -> dict:
-    """Read both accounts' histories (whichever are set up) and the S&P 500, save them, return them."""
+def collect(con: sqlite3.Connection, monthly=None, day=None, start: str | None = None, small=None) -> dict:
+    """Read the accounts' histories (whichever are set up) and the S&P 500, save them, return them."""
     start = start or json.loads(get_meta(con, "paper_status") or "{}").get("start_date") or \
         f"{dt.date.today() - dt.timedelta(days=30)}"
     out: dict[str, dict] = {}
-    for name, client in (("monthly", monthly), ("day", day)):
+    for name, client in (("monthly", monthly), ("day", day), ("small", small)):
         if client is None:
             continue
         try:
@@ -77,7 +78,7 @@ def chart_png(hist: dict) -> bytes | None:
     from matplotlib.ticker import FuncFormatter
 
     fig, ax = plt.subplots(figsize=(6.4, 2.8), dpi=150)
-    for name in ("spy", "day", "monthly"):
+    for name in ("spy", "small", "day", "monthly"):
         if name in g:
             s = g[name].dropna()
             ax.plot(s.index, s * 100, color=COLORS[name], lw=2.2 if name != "spy" else 1.8,
@@ -114,7 +115,7 @@ def chart_svg(hist: dict, width: int = 640, height: int = 220) -> str:
              f'<text x="{left - 6}" y="{y(hi) + 4:.1f}" text-anchor="end" font-size="11" fill="var(--ink-2)">{hi:+.1%}</text>',
              f'<text x="{left - 6}" y="{y(lo) + 4:.1f}" text-anchor="end" font-size="11" fill="var(--ink-2)">{lo:+.1%}</text>']
     legend = []
-    for name in ("spy", "day", "monthly"):
+    for name in ("spy", "small", "day", "monthly"):
         if name not in g:
             continue
         s = g[name].dropna()
@@ -136,9 +137,9 @@ def weekly(hist: dict, day_state: dict, today: dt.date, live: str = "") -> dict:
     from trend_bot.alerts import GOLD, lead
 
     monday = today - dt.timedelta(days=today.weekday())
-    lines = [lead("how the bot's two practice accounts (fake money) did this week, next to the S&P 500. "
+    lines = [lead("how the bot's practice accounts (fake money) did this week, next to the S&P 500. "
                   "One week is mostly luck; the 'since the start' numbers say more as they grow."), ""]
-    for name in ("monthly", "day", "spy"):
+    for name in ("monthly", "day", "small", "spy"):
         h = hist.get(name)
         if not h or len(h["values"]) < 2:
             continue

@@ -79,11 +79,11 @@ class FakeBroker:
     def open_orders(self, nested=False):
         return [o for o in self.orders if (o.get("tif") == "cls" or o.get("type") == "stop") and not o.get("cancelled")]
 
-    def order(self, symbol, qty, side, tag, tif="day", stop=None):
+    def order(self, symbol, qty, side, tag, tif="day", stop=None, limit=None):
         if symbol == "NOSHORT" and side == "sell":
             raise PaperError("422 not shortable")
         self.orders.append({"symbol": symbol, "qty": qty, "side": side, "client_order_id": tag, "tif": tif,
-                            "stop": stop, "time_in_force": tif})
+                            "stop": stop, "limit": limit, "time_in_force": tif})
         if tif == "day":
             self.held[symbol] = self.held.get(symbol, 0) + (qty if side == "buy" else -qty)
         else:
@@ -472,10 +472,10 @@ def test_a_refused_close_at_1558_is_retried_and_reported():
             super().__init__()
             self.tries = 0
 
-        def order(self, symbol, qty, side, tag, tif="day", stop=None):
+        def order(self, symbol, qty, side, tag, tif="day", stop=None, limit=None):
             if tif == "cls":
                 raise PaperError("403 too late for a closing order")
-            super().order(symbol, qty, side, tag, tif, stop)
+            super().order(symbol, qty, side, tag, tif, stop, limit)
 
         def close(self, symbol):
             self.tries += 1
@@ -606,3 +606,75 @@ def test_no_screener_means_the_pattern_just_sits_out(monkeypatch):
     monkeypatch.setattr(intraday, "movers", broken)
     s = daytrade.Session(FakeBroker(), GapData(), [], DAY, log=lambda *_: None)
     assert s.gapups() == 0
+
+
+# --- Lower costs and no one big bet ------------------------------------------------------------------
+
+def test_entries_are_limit_orders_near_the_quote_with_the_stop_from_its_middle(monkeypatch):
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    monkeypatch.setattr(daytrade.intraday, "latest_quotes", lambda data, syms: {
+        "GAPPY": {"bid": 104.9, "ask": 105.1}, "BREAKY": {"bid": 102.9, "ask": 103.1}})
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=lambda *_: None,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    by = {o["symbol"]: o for o in broker.orders}
+    assert by["GAPPY"]["limit"] == pytest.approx(104.9 * (1 - daytrade.LIMIT_SLACK))    # a short: at least this
+    assert by["BREAKY"]["limit"] == pytest.approx(103.1 * (1 + daytrade.LIMIT_SLACK))   # a buy: at most this
+    assert by["BREAKY"]["stop"] == pytest.approx(103.0 * 0.95)
+    assert {e["symbol"]: e["expected"] for e in s.entries}["GAPPY"] == pytest.approx(105.0)
+
+
+def test_without_a_quote_the_entry_is_a_market_order():
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=lambda *_: None,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    assert all(o["limit"] is None for o in broker.orders if o["client_order_id"].startswith("td-"))
+
+
+def test_entries_that_dont_fill_in_five_minutes_are_cancelled():
+    clock = Clock(dt.datetime(2026, 10, 26, 10, 0, tzinfo=daytrade.NY))
+
+    class Waiting(FakeBroker):
+        def __init__(self):
+            super().__init__()
+            self.gone = []
+
+        def open_orders(self, nested=False):
+            return [{"id": "old", "client_order_id": "td-20261026-gap-AAA", "submitted_at": "2026-10-26T13:50:00Z"},
+                    {"id": "new", "client_order_id": "td-20261026-gap-BBB", "submitted_at": "2026-10-26T13:58:00Z"},
+                    {"id": "exit", "client_order_id": "td-20261026-x-CCC", "submitted_at": "2026-10-26T13:00:00Z"}]
+
+        def cancel(self, oid):
+            self.gone.append(oid)
+
+    broker = Waiting()
+    s = daytrade.Session(broker, None, [], DAY, log=lambda *_: None, now=clock.now)
+    assert s.cancel_stale_entries() == 1 and broker.gone == ["old"]     # 10 minutes old; the exit stays
+
+
+def test_the_account_never_gets_too_one_sided(monkeypatch):
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+
+    class Long(FakeBroker):     # already $60,000 long on a $100,000 account
+        def positions(self):
+            return [{"symbol": "OLD", "qty": "600", "avg_entry_price": "100", "market_value": "60000"}]
+
+    broker = Long()
+    out = []
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=out.append,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    sides = {o["symbol"]: o["side"] for o in broker.orders}
+    assert sides.get("GAPPY") == "sell"            # a short evens it out: allowed
+    assert "BREAKY" not in sides                    # another long: skipped
+    assert any("too one-sided" in m for m in out)
+
+
+def test_open_positions_are_not_reported_as_no_trades():
+    orders = [{"symbol": "AAA", "side": "buy", "filled_qty": "10", "filled_avg_price": "100", "status": "filled",
+               "client_order_id": "td-20261026-gap-AAA", "filled_at": "2026-10-26T13:35:00Z"}]
+    _, embed = daytrade.report(orders, 100_000.0, {}, DAY)
+    assert "No trades today" not in embed["description"] and "results pending" in embed["description"]

@@ -242,7 +242,25 @@ def gap_fade(df: pd.DataFrame, gap: float = GAP) -> pd.DataFrame:
     d = d[g.abs() > gap]
     return pd.DataFrame({"date": d["date"], "symbol": d["symbol"],
                          "ret": -np.sign(g[g.abs() > gap]) * (d["close"] / d["open"] - 1),
-                         "cost": COST["stock"]})
+                         "cost": COST["stock"], "prev": d["prev_close"], "open": d["open"], "close": d["close"]})
+
+
+def worst_text(df: pd.DataFrame, name: str = "gap_fade", n: int = 8) -> str:
+    """A pattern's worst trades with their prices, to tell a real crash from bad data (a split, a stray
+    print): a "gap" near a split ratio (1:2, 1:3, 10:1 ...) is almost always the data, not the market."""
+    t = STRATEGIES[name](df)
+    if t.empty:
+        return ""
+    lines = ["", f"Worst trades of {NAMES[name]} (check the prices; a split or a stray print shows here):"]
+    for r in t.nsmallest(n, "ret").itertuples():
+        extra = ""
+        if hasattr(r, "prev"):
+            ratio = r.open / r.prev
+            split = any(abs(ratio * k - 1) < 0.03 or abs(ratio / k - 1) < 0.03 for k in (2, 3, 4, 5, 10, 20))
+            extra = (f": yesterday {r.prev:,.2f}, open {r.open:,.2f} ({ratio - 1:+.0%}), close {r.close:,.2f}"
+                     + (" ← looks like a split" if split else ""))
+        lines.append(f"  {r.date} {r.symbol}: {r.ret:+.1%}{extra}")
+    return "\n".join(lines)
 
 
 def opening_drive(df: pd.DataFrame) -> pd.DataFrame:

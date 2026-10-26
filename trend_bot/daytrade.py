@@ -42,6 +42,9 @@ AFTERNOON_CHECKS = [dt.time(12, 30), dt.time(13, 0), dt.time(13, 30), dt.time(14
                     dt.time(15, 0), dt.time(15, 30)]
 CLOSE_AT, FLAT_AT, SETTLE_AT = dt.time(15, 50), dt.time(15, 58), dt.time(16, 1)
 STOP_LOSS = 0.05        # every position has a stop at the broker: out if it moves 5% against us
+LIMIT_SLACK = 0.002     # entries are limit orders at most 0.2% past the quote (a market order can fill far worse)
+STALE_ENTRY_MINUTES = 5  # an entry that hasn't filled in 5 minutes is cancelled (the moment has passed)
+NET_LIMIT = 0.5          # longs minus shorts at most 50% of the account: not one big bet on the market's direction
 # Short the big gap-ups (tested only; the only idea that passed the 20-year swing study after costs):
 # any stock in the market that opens 20%+ above yesterday's close (price $5+, $5M+ traded a day),
 # sold short at the open if the broker can lend it, a 15% stop above, bought back by the close.
@@ -67,9 +70,11 @@ class DayBroker(Paper):
         return cls(key, secret) if key and secret else None
 
     def order(self, symbol: str, qty: int, side: str, tag: str, tif: str = "day",
-              stop: float | None = None) -> dict:
-        body = {"symbol": symbol, "qty": str(qty), "side": side, "type": "market", "time_in_force": tif,
-                "client_order_id": tag}
+              stop: float | None = None, limit: float | None = None) -> dict:
+        body = {"symbol": symbol, "qty": str(qty), "side": side, "type": "limit" if limit else "market",
+                "time_in_force": tif, "client_order_id": tag}
+        if limit:   # pay at most this (a buy) or get at least this (a sale): caps a bad fill
+            body["limit_price"] = f"{limit:.2f}"
         if stop:   # a protective stop at the broker, placed with the entry (works even if our job stops)
             body.update(order_class="oto", stop_loss={"stop_price": f"{stop:.2f}"})
         return self._call("POST", "/orders", json=body)
@@ -255,6 +260,24 @@ class Session:
             return "no recent trades (halted?)"
         return ""
 
+    def cancel_stale_entries(self) -> int:
+        """Entry orders still unfilled after STALE_ENTRY_MINUTES (a limit the price ran away from): cancelled."""
+        tag, n = f"td-{self.today:%Y%m%d}-", 0
+        for o in self.b.open_orders():
+            cid, when = str(o.get("client_order_id", "")), o.get("submitted_at")
+            if not cid.startswith(tag) or "-x-" in cid or not when:
+                continue
+            age = self.now() - dt.datetime.fromisoformat(str(when).replace("Z", "+00:00"))
+            if age.total_seconds() > STALE_ENTRY_MINUTES * 60:
+                try:
+                    self.b.cancel(o["id"])
+                    n += 1
+                except PaperError:
+                    pass
+        if n:
+            self.log(f"[day] cancelled {n} entry order(s) that didn't fill within {STALE_ENTRY_MINUTES} minutes")
+        return n
+
     def last_trades(self, symbols: list[str]) -> dict[str, dt.datetime]:
         """When each stock last traded (the end of its latest 1-minute bar)."""
         bars = self._bars(symbols, "1Min", self.now() - dt.timedelta(minutes=STALE_MINUTES + 5))
@@ -280,6 +303,7 @@ class Session:
             return 0
         if self.guard():
             return 0
+        self.cancel_stale_entries()
         done = self.traded()
         if pattern == "gapup":    # any stock in the market: count this pattern's own trades
             used = sum(1 for o in self.today_orders()
@@ -288,8 +312,11 @@ class Session:
             used = len(done & set(self.stocks if pattern != "momentum" else self.etfs))
         each, sent = self.budget() * size_factor(self.share, pattern), 0
         account = self.b.account()
+        positions = self.b.positions()
         room = float(account["equity"]) * INVESTED * BUYING_POWER - sum(
-            abs(float(p.get("market_value") or 0)) for p in self.b.positions())
+            abs(float(p.get("market_value") or 0)) for p in positions)
+        net = sum(float(p.get("market_value") or 0) for p in positions)      # shorts count negative
+        net_cap = float(account["equity"]) * NET_LIMIT
         if account.get("daytrading_buying_power"):        # never more than the broker allows
             room = min(room, float(account["daytrading_buying_power"]) * INVESTED)
         fresh = self.last_trades([s for s, _ in signals if s not in done])
@@ -308,17 +335,28 @@ class Session:
             if why:
                 self.log(f"[day] {pattern}: {sym} skipped ({why})")
                 continue
-            room -= qty * prices[sym]
+            if abs(net + side * qty * prices[sym]) > net_cap and abs(net + side * qty * prices[sym]) > abs(net):
+                self.log(f"[day] {pattern}: {sym} skipped (the account would be too one-sided: "
+                         f"{'long' if net > 0 else 'short'} ${abs(net):,.0f})")
+                continue
+            q = quotes.get(sym, {})
+            bid, ask = q.get("bid"), q.get("ask")
+            quoted = bid and ask and ask >= bid
+            # The price at the moment of the order: the quote's middle (the half-hour bar can be a minute old).
+            expected = (bid + ask) / 2 if quoted else prices[sym]
+            limit = (ask * (1 + LIMIT_SLACK) if side > 0 else bid * (1 - LIMIT_SLACK)) if quoted else None
             loss = GAPUP_STOP if pattern == "gapup" else STOP_LOSS
-            stop = prices[sym] * (1 - loss) if side > 0 else prices[sym] * (1 + loss)
+            stop = expected * (1 - loss) if side > 0 else expected * (1 + loss)
             try:
                 self.b.order(sym, qty, "buy" if side > 0 else "sell", f"td-{self.today:%Y%m%d}-{pattern}-{sym}",
-                             stop=stop)
+                             stop=stop, limit=limit)
                 sent += 1
+                room -= qty * prices[sym]
+                net += side * qty * prices[sym]
                 self.entries.append({"date": self.today.isoformat(), "time": self.now().strftime("%H:%M"),
                                      "pattern": pattern, "symbol": sym, "side": side, "qty": qty,
-                                     "expected": prices[sym], "signal": (strength or {}).get(sym),
-                                     "bid": quotes.get(sym, {}).get("bid"), "ask": quotes.get(sym, {}).get("ask")})
+                                     "expected": expected, "signal": (strength or {}).get(sym),
+                                     "bid": bid, "ask": ask})
                 self.log(f"[day] {pattern}: {'buy' if side > 0 else 'short'} {qty} {sym} (~${qty * prices[sym]:,.0f})")
             except PaperError as e:   # e.g. a stock that can't be shorted today
                 self.log(f"[day] {pattern}: {sym} refused ({str(e)[:80]})")
@@ -710,7 +748,10 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     today_total = sum(r["pnl"] for r in day.values()) + carried_pnl
     lines = [lead("the bot's day-trading practice account (fake money) traded today and closed everything by the "
                   "close. A test of whether intraday patterns make money; nothing real was bought or sold."), ""]
-    if not day:
+    if not day and still_open:
+        lines.append(f"{len(still_open)} trade{'s' if len(still_open) != 1 else ''} placed today, results pending: "
+                     "not closed yet when this was written (see below).")
+    elif not day and not carried:
         lines.append("No trades today (no pattern triggered).")
     for p, r in sorted(day.items()):
         key, name = names.get(p, ("", p))

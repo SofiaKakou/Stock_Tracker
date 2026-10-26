@@ -152,3 +152,11 @@ def test_a_take_profit_and_a_stop_on_made_up_paths():
     assert list(intraday._walk(*args, None, None)) == pytest.approx([0.01, 0.01])
     assert list(intraday._walk(*args, 0.05, 0.05)) == pytest.approx([0.05, -0.05])    # took +5%; stopped at -5%
     assert list(intraday._walk(*args, 0.05, 0.02)) == pytest.approx([0.02, -0.05])   # +2% taken; the fall came first
+
+
+def test_the_worst_gap_fades_are_listed_with_their_prices_and_splits_flagged():
+    rows = [("AAA", "2024-01-02", s, 200.0, 200.0, 200.0, 200.0, 1) for s in range(13)]
+    rows += [("AAA", "2024-01-03", s, 100.0, 100.0, 100.0, 100.0 if s < 12 else 70.0, 1) for s in range(13)]
+    df = pd.DataFrame(rows, columns=["symbol", "date", "slot", "open", "high", "low", "close", "volume"])
+    text = intraday.worst_text(df)
+    assert "2024-01-03 AAA: -30.0%" in text and "yesterday 200.00, open 100.00" in text and "split" in text

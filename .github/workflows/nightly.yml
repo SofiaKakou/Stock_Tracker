@@ -136,6 +136,8 @@ jobs:
           ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
           ALPACA_DAY_KEY_ID: ${{ secrets.ALPACA_DAY_KEY_ID }}
           ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
+          ALPACA_SMALL_KEY_ID: ${{ secrets.ALPACA_SMALL_KEY_ID }}
+          ALPACA_SMALL_SECRET_KEY: ${{ secrets.ALPACA_SMALL_SECRET_KEY }}
         run: python -m trend_bot accounts --weekly --discord || echo "the demo accounts' history failed" >> reports/problems.txt
 
       # Extra data for the record (nothing here changes how the bot trades): news headlines for the

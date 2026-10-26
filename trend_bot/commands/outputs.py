@@ -478,18 +478,19 @@ def cmd_journal(args: argparse.Namespace) -> int:
 
 
 def cmd_accounts(args: argparse.Namespace) -> int:
-    """Both demo accounts' history (for the report's chart); with --weekly on Fridays, the week's summary."""
+    """The demo accounts' history (for the report's chart); with --weekly on Fridays, the week's summary."""
     import datetime as dt
     import json
 
     from trend_bot import accounts, alerts, daytrade, db, ideas, paper
 
     monthly, day = paper.Paper.from_env(), daytrade.DayBroker.from_env()
-    if monthly is None and day is None:
+    small = paper.Paper.from_env(paper.SMALL_KEY_ENV, paper.SMALL_SECRET_ENV)
+    if monthly is None and day is None and small is None:
         print("No demo account is set up; skipped.")
         return 0
     with closing(db.connect(args.db)) as con:
-        hist = accounts.collect(con, monthly, day)
+        hist = accounts.collect(con, monthly, day, small=small)
         live = ideas.live_line(con)
     for name, h in hist.items():
         print(f"[accounts] {name}: {len(h['values'])} days, last {h['values'][-1]:,.2f}")
