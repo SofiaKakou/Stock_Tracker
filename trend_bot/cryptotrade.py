@@ -1,14 +1,16 @@
-"""The $100 crypto account (fake money, Alpaca paper account PA3HK7NRJ): buys the big dips.
+"""The $100 crypto account (fake money, Alpaca paper account PA3HK7NRJ): buys dips, sells a day later.
 
-From the crypto study (`study crypto`): a big coin that fell 5%+ in the last hour usually bounces; bought
-right after and sold a day later it made +2.3% a trade after fees since 2021, in both halves of the
-data, far better than buying at random times. Rare: about one trade every two or three days.
+From the crypto study (`study crypto --all-coins`, 15-minute prices of Alpaca's 36 coins since 2021): a coin
+that fell sharply in the last hour usually bounces. Bought right after and sold a day later, 3%+ dips made
++0.34% a trade after limit-order fees (about 3.7 a day over all coins), 4%+ +0.81%, 5%+ +1.57%: smaller
+dips, more trades, less each. The user chose 3%+ for more trades.
 
-Every 15 minutes (GitHub, and the outside timer): coins held a day are sold; then any coin whose last
-complete 15-minute bar closed 5%+ below its price an hour earlier is bought for about $25 (up to four at
-once, one per coin), with a limit order at most 0.3% above the asking price that fills now or not at all,
-and a safety stop at the broker 15% below the fill (the study's coins all survived; coins that
-collapsed, like LUNA in 2022, aren't in it, so a dip-buy that keeps falling is cut off). Each trade goes
+Every 15 minutes (GitHub, and the outside timer): coins held their time are sold; then any coin (all of the
+broker's, except the stable ones) whose last complete 15-minute bar closed 3%+ below its price an hour
+earlier is bought for about $16 (up to five at once, one per coin), with a limit order at most 0.3% above
+the asking price that fills now or not at all, and a safety stop at the broker 15% below the fill (coins
+that collapsed, like LUNA in 2022, aren't in the data, so a dip-buy that keeps falling is cut off). Next to
+it, a small experiment: 2%-3% dips sold an hour later (expected to lose to the fees). Each dip trade goes
 to Discord, and the evening run adds a summary.
 
 The account used to hold the monthly portfolio at $100; any stocks still in it are sold on the first run.
@@ -27,24 +29,28 @@ import pandas as pd
 from trend_bot import crypto
 from trend_bot.paper import SMALL_KEY_ENV, SMALL_SECRET_ENV, Paper, PaperError
 
-COINS = crypto.SYMBOLS
-DIP = 0.05               # fell this much in the last hour (4 complete 15-minute bars)
+COINS = crypto.SYMBOLS   # if the broker's list can't be read
+# Coins built not to move (dollar and gold tokens): a "dip" there is a data glitch, never a bounce.
+STABLE = {"USDT", "USDC", "USDG", "PAXG", "DAI", "PYUSD", "TUSD", "USDP", "FDUSD", "XAUT", "USDE"}
+DIP = 0.03               # fell this much in the last hour (4 complete 15-minute bars)
 HOLD = dt.timedelta(days=1)
 STOP = 0.15              # the safety stop, below the fill
 STOP_LIMIT = 0.20        # ... sold at no less than this far below (a stop on a crashing coin needs room)
 SLACK = 0.003            # buy at most 0.3% above the asking price
-AMOUNT = 25.0            # dollars a trade
+AMOUNT = 16.0            # dollars a trade
 SLOTS = 4
-# Two kinds of trade share the account: the tested one, and an experiment the user asked for (more trades a
-# day). The study says the fast one loses to the fees (about -0.2% a trade after 0.30%): it runs to see that
-# live, small and separate, and its results are reported apart.
-KINDS = {"big": {"dip": DIP, "hold": HOLD, "amount": AMOUNT, "slots": 2, "name": "big dip (tested: passes)"},
-         "fast": {"dip": 0.02, "hold": dt.timedelta(hours=1), "amount": 10.0, "slots": 4,
+# Two kinds of trade share the account. The dip (all 36 of Alpaca's coins since 2021, `study crypto
+# --all-coins`): 3%+ in an hour, held a day, +0.34% a trade after limit-order fees, about 3.7 a day; the user
+# chose it over 4%+ (+0.81%, 1.9 a day) and 5%+ (+1.57%, 1.1 a day) for more trades. Our orders take the
+# asking price (the 0.25% fee, not 0.15%), at which the test makes about +0.14% a trade: thin. And an
+# experiment the user asked for: 2%-3% dips sold an hour later, which the test says lose (-0.21% a trade).
+KINDS = {"big": {"dip": DIP, "hold": HOLD, "amount": AMOUNT, "slots": 5, "name": "dip 3%+, held a day (tested: passes, thin)"},
+         "fast": {"dip": 0.02, "hold": dt.timedelta(hours=1), "amount": 10.0, "slots": 2,
                   "name": "fast experiment: 2% dip, sold an hour later (tested: loses to fees)"}}
 MIN_TRADE = 5.0          # less cash than this: no trade
 FRESH = dt.timedelta(minutes=25)   # a signal from a bar older than this is stale (a run started late)
 QUOTES_URL = "https://data.alpaca.markets/v1beta3/crypto/us/latest/quotes"
-TEST = {"per_trade": 0.0233, "hit": 0.63, "per_day": 0.4}   # the study: 1-day hold, after limit-order fees
+TEST = {"per_trade": 0.0034, "hit": 0.53, "per_day": 3.7}   # the study: 3%+ dips held a day, after limit-order fees
 
 
 def key(symbol: str) -> str:
@@ -67,6 +73,19 @@ class CryptoBroker(Paper):
                                                     "type": "stop_limit", "stop_price": f"{stop:.6g}",
                                                     "limit_price": f"{limit:.6g}", "time_in_force": "gtc",
                                                     "client_order_id": tag})
+
+
+def coins(broker, state: dict, today: dt.date) -> list[str]:
+    """Every coin the broker trades against the dollar, except the stable ones; read once a day."""
+    have = state.get("coins") or {}
+    if have.get("date") == today.isoformat() and have.get("list"):
+        return have["list"]
+    try:
+        found = [s for s in crypto.all_coins(broker) if s.split("/")[0] not in STABLE]
+    except Exception:  # noqa: BLE001 - the broker's list can't be read: the big ones
+        return have.get("list") or COINS
+    state["coins"] = {"date": today.isoformat(), "list": found}
+    return found or COINS
 
 
 def latest_quotes(data, symbols: list[str]) -> dict[str, dict]:
@@ -113,7 +132,7 @@ def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None,
         state["stocks_sold"] = now.isoformat()
         embeds.append({"title": "🪙 $100 account: now a crypto account", "color": 0xEDA100,
                        "description": f"Sold its {len(stocks)} stocks (from the monthly portfolio) to trade "
-                                      "crypto: it buys coins that fell 5%+ in an hour and sells them a day later."})
+                                      "crypto: it buys coins that fell sharply in an hour and sells them a day later."})
 
     # A coin held without a record (the saved state was lost): sold within a day from now, like any trade.
     for k, p in held.items():
@@ -157,11 +176,11 @@ def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None,
             _log_trade(state, tr, price, now, "day" if kind == "big" else "hour")
             del open_trades[k]
 
-    # New dips: 5%+ is the tested trade, 2%-5% the fast experiment.
+    # New dips: 3%+ is the tested trade, 2%-3% the fast experiment.
     start = (now - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
-        found = dips(crypto.fetch(data, COINS, start=start, end=now.strftime("%Y-%m-%dT%H:%M:%SZ")), now,
-                     KINDS["fast"]["dip"])
+        found = dips(crypto.fetch(data, coins(broker, state, now.date()), start=start,
+                                  end=now.strftime("%Y-%m-%dT%H:%M:%SZ")), now, KINDS["fast"]["dip"])
     except Exception as e:  # noqa: BLE001 - no prices this time: the next check tries again
         log(f"[crypto] no prices ({str(e)[:80]})")
         return embeds
@@ -204,7 +223,7 @@ def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None,
         cash -= tr["cost"]
         log(f"[crypto] {kind}: bought {qty} {sym} at {price:,.6g} (~${tr['cost']:.2f}) after {found[sym]:+.1%} in an hour")
         if kind == "big":
-            embeds.append({"title": f"🪙 Bought {sym.split('/')[0]} (big dip)", "color": 0x0CA30C,
+            embeds.append({"title": f"🪙 Bought {sym.split('/')[0]} (dip)", "color": 0x0CA30C,
                            "description": f"It fell **{found[sym]:.1%}** in the last hour; bought ~${tr['cost']:.2f} at "
                                           f"{price:,.6g}. Sold in 24 hours, or by the safety stop at "
                                           f"{price * (1 - STOP):,.6g} (15% lower). Fake money ($100 crypto account)."})
@@ -252,15 +271,15 @@ def summary(broker: CryptoBroker, state: dict, now: dt.datetime | None = None) -
     equity, last = float(acct.get("equity") or 0), float(acct.get("last_equity") or 0)
     log = [r for r in state.get("log", []) if r.get("ret") is not None]
     day = [r for r in log if now - dt.datetime.fromisoformat(r["out"]) <= dt.timedelta(days=1)]
-    lines = [lead("the $100 crypto account (fake money) buys big coins that fell 5%+ in an hour and sells them a "
-                  "day later (the only crypto idea that beat Alpaca's fees in our test), and, as an experiment for "
-                  "more trades, 2% dips sold an hour later (the test says those lose to fees)."), ""]
+    lines = [lead("the $100 crypto account (fake money) buys coins that fell 3%+ in an hour and sells them a day "
+                  "later (beat Alpaca's fees in our test, thinly), and, as an experiment, 2% dips sold an hour later "
+                  "(the test says those lose to fees)."), ""]
     lines.append(f"Account **${equity:,.2f}**" + (f" ({equity / last - 1:+.2%} since yesterday)" if last else ""))
     held = state.get("open", {})
-    lines.append(f"Holding: {', '.join(t['symbol'] for t in held.values())}" if held else "Holding: nothing (waiting for a big dip)")
+    lines.append(f"Holding: {', '.join(t['symbol'] for t in held.values())}" if held else "Holding: nothing (waiting for a dip)")
     big_day = [r for r in day if r.get("kind", "big") == "big"]
     if big_day:
-        lines.append("Big dips sold in the last 24 hours: "
+        lines.append("Dip trades sold in the last 24 hours: "
                      + ", ".join(f"{r['symbol'].split('/')[0]} {r['ret']:+.1%}" for r in big_day))
     for kind, k in KINDS.items():
         rows = [r for r in log if r.get("kind", "big") == kind]
@@ -272,8 +291,8 @@ def summary(broker: CryptoBroker, state: dict, now: dt.datetime | None = None) -
                          f"${sum(r['ret'] * r['cost'] for r in rows):+.2f} before fees")
         else:
             lines.append(f"**{k['name']}**: no finished trades yet")
-    lines.append(f"(The test: big dips {TEST['per_trade']:+.1%} a trade after fees, about one every 2-3 days; "
-                 "the fast experiment about -0.2% a trade, several a day.)")
+    lines.append(f"(The test: 3%+ dips {TEST['per_trade']:+.2%} a trade after limit-order fees, about "
+                 f"{TEST['per_day']:.0f} a day over all coins; the fast experiment about -0.2% a trade.)")
     change = equity - last if last else 0
     return {"title": "🪙 $100 crypto account", "description": "\n".join(lines)[:4000],
             "color": GREEN if change > 0 else RED if change < 0 else GOLD}

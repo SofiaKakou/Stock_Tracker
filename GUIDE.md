@@ -243,24 +243,31 @@ Our real costs (about 0.17% a side so far) are higher than the study's, so the l
 ## The $100 crypto account
 
 The third practice account (fake money, $100) trades **crypto**: no day-trading limit, it trades day and
-night, and tiny amounts are normal. It runs the only crypto idea that beat Alpaca's fees in our test
-(`study crypto`, 15-minute prices of 8 big coins since 2021): **a coin that fell 5%+ in the last hour
-usually bounces**. Bought right after and sold a day later, that made about **+2.3% a trade after fees**,
-in both halves of the data, far better than buying at random times. Buying rising coins, small dips,
-new highs, or anything held only 15 minutes lost to the fees.
+night, and tiny amounts are normal. Its rule comes from our test (`study crypto --all-coins`, 15-minute
+prices of all 36 of Alpaca's coins since 2021): **a coin that fell sharply in the last hour usually
+bounces**. Bought right after and sold a day later, after fees:
 
-Every 15 minutes it checks Bitcoin, Ethereum, Solana, XRP, Dogecoin, Litecoin, Chainlink and Avalanche:
-a coin down 5%+ in the last hour is bought for about $25 (up to 4 at once, one per coin, with a limit
-order at most 0.3% above the asking price), with a **safety stop 15% below** at the broker (coins that
-collapsed, like LUNA in 2022, aren't in the test data), and sold **24 hours later**. Expect about one
-trade every 2-3 days: big hourly drops are rare. Every trade goes to Discord ("🪙"), and the nightly
-run adds a summary. Its keys are the secrets `ALPACA_SMALL_KEY_ID` and `ALPACA_SMALL_SECRET_KEY`.
-**Fast experiment (on request, expected to lose):** for more trades a day, the account also buys coins
-that fell **2%+** (but less than 5%) in an hour for **$10**, up to 4 at once, and sells them **an hour
-later**. The study says this loses about 0.2% a trade to the fees; it runs small and separate so we can
-see that live. Its trades aren't posted one by one (several a day); the evening summary shows both kinds
-apart. Big dips get up to 2 trades of $25, so the two never need more than the $100.
-(It used to hold the monthly portfolio at $100; those stocks were sold when it switched to crypto.)
+| Dip in an hour | Trades a day (all coins) | Per trade after fees |
+|---|---|---|
+| 3%+ (**what it trades**, chosen for more trades) | ~3.7 | +0.34% (limit-order fees; ~+0.14% at the fees our orders pay) |
+| 4%+ | ~1.9 | +0.81% |
+| 5%+ | ~1.1 | +1.57% |
+
+Anything held only 15 minutes or an hour lost to the fees.
+
+Every 15 minutes it checks every coin Alpaca trades (except stablecoins and gold tokens, which aren't
+meant to move): a coin down **3%+** in the last hour is bought for about **$16** (up to 5 at once, one per
+coin, with a limit order at most 0.3% above the asking price), with a **safety stop 15% below** at the
+broker (coins that collapsed, like LUNA in 2022, aren't in the test data), and sold **24 hours later**.
+
+**Fast experiment (on request, expected to lose):** coins down **2-3%** in an hour are bought for **$10**
+(up to 2 at once) and sold **an hour later**; the test says about -0.2% a trade after fees. It runs small
+and separate so we can see that live; its trades aren't posted one by one.
+
+Every dip trade goes to Discord ("🪙"), the nightly run adds a summary (both kinds apart), and every
+finished trade is in SQL (`dw.vCryptoTrades`). Its keys are the secrets `ALPACA_SMALL_KEY_ID` and
+`ALPACA_SMALL_SECRET_KEY`. (It used to hold the monthly portfolio at $100; those stocks were sold when it
+switched to crypto.)
 
 ## The demo accounts week by week
 
