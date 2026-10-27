@@ -1,4 +1,4 @@
-"""Everyday outputs: track, report, model, forecast, ideas, health, send-guide, send-report."""
+"""Everyday outputs: track, report, model, forecast, ideas, health, office, send-guide, send-report."""
 
 from __future__ import annotations
 
@@ -227,6 +227,28 @@ def cmd_health(args: argparse.Namespace) -> int:
             alerts.send(webhook, {"username": "Trend Bot", "embeds": [health.embed(kind, problems, args.run_url)]})
             print(f"Sent the health {'warning' if kind == 'problems' else 'all-clear'} to Discord.")
     return 0  # never fail the run over this
+
+
+def cmd_office(args: argparse.Namespace) -> int:
+    """The bot's office: every part of the bot as a pixel-art worker at a desk (a web page)."""
+    from trend_bot import db, health, office
+
+    if not Path(args.db).exists():
+        print(f"{args.db} not found. Build it first:  python -m trend_bot db update", file=sys.stderr)
+        return 1
+    with closing(db.connect(args.db)) as con:
+        workers = office.survey(con, failed_steps=health.read_problems_file(args.problems),
+                                job_status=args.job_status, daytrade_path=args.daytrade)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(office.build_office(workers, run_url=args.run_url, repo=args.repo or office.repo_name()),
+                   encoding="utf-8")
+    for w in workers:
+        print(f"  {office.LABEL[w['status']]:<13} {w['name']:<22} {w['headline']}")
+    print(f"Office saved to {out.resolve()}")
+    if args.open and sys.stdout.isatty():
+        open_file(out)
+    return 0
 
 
 def cmd_send_guide(args: argparse.Namespace) -> int:

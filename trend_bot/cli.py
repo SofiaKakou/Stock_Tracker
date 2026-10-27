@@ -46,6 +46,7 @@ from trend_bot.commands.outputs import (
     cmd_forecast,
     cmd_ideas,
     cmd_health,
+    cmd_office,
     cmd_send_guide,
     cmd_send_report,
 )
@@ -255,6 +256,17 @@ def make_parser() -> argparse.ArgumentParser:
     hp.add_argument("--job-status", help="the cloud run's status so far (success/failure)")
     hp.add_argument("--run-url", help="link to the cloud run, shown in the warning")
     hp.set_defaults(func=cmd_health)
+
+    bs = sub.add_parser("office", help="the bot's office: every part of the bot as a pixel-art worker (a web page)")
+    bs.add_argument("--db", default="market.db", help="database file (default: market.db)")
+    bs.add_argument("--out", default="reports/office.html", help="where to save the page (default: reports/office.html)")
+    bs.add_argument("--problems", help="file listing steps that didn't finish (one per line)")
+    bs.add_argument("--job-status", help="the cloud run's status so far (success/failure)")
+    bs.add_argument("--daytrade", default="daytrade.json", help="the day-trading running totals (default: daytrade.json)")
+    bs.add_argument("--run-url", help="link to the cloud run, shown at the bottom")
+    bs.add_argument("--repo", help="GitHub repository to follow live, owner/name (default: this checkout's)")
+    bs.add_argument("--open", action="store_true", help="open the page when done")
+    bs.set_defaults(func=cmd_office)
 
     sc2 = sub.add_parser("sec-check", help="one small SEC request: is the SEC still refusing us? (lifts the pause if not)")
     sc2.add_argument("--db", default="market.db", help="database file (default: market.db)")
