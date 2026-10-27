@@ -22,6 +22,7 @@ import datetime as dt
 import json
 import math
 import os
+import re
 import time
 from zoneinfo import ZoneInfo
 
@@ -127,6 +128,15 @@ def gapup_signals(opens: dict[str, float], prev: dict[str, float], dollar_vol: d
     ok = [s for s, x in g.items() if GAPUP_MIN <= x < GAPUP_MAX and prev[s] >= GAPUP_MIN_PRICE
           and dollar_vol.get(s, 0) >= GAPUP_MIN_DOLLAR_VOL]
     return [(s, -1) for s in sorted(ok, key=lambda s: -g[s])]
+
+
+FUND_WORDS = re.compile(r"\b(ETF|ETN|Fund|iShares|SPDR|ProShares|Direxion|Leveraged|Inverse|[23]X|Trust, Series)\b", re.I)
+
+
+def is_fund(name: str) -> bool:
+    """A fund rather than a company, from its name (the broker's list doesn't say): the losers short is about
+    one company's bad news, not a whole market or country falling (Oct 27: EWZ, the Brazil fund)."""
+    return bool(FUND_WORDS.search(name or ""))
 
 
 def loser_signals(days: dict[str, list[dict]], today: dt.date) -> list[tuple[str, int, float]]:
@@ -438,7 +448,7 @@ class Session:
             names = sorted(a["symbol"] for a in self.b.list_assets()
                            if a.get("tradable") and a.get("shortable") and a.get("easy_to_borrow")
                            and a.get("exchange") in LOSER_EXCHANGES and a["symbol"].isalpha()
-                           and a["symbol"] not in intraday.ETFS)
+                           and a["symbol"] not in intraday.ETFS and not is_fund(a.get("name", "")))
             start = self.at(dt.time(0, 0)) - dt.timedelta(days=35)
             days: dict[str, list[dict]] = {}
             for i in range(0, len(names), chunk):
