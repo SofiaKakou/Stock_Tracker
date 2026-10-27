@@ -67,7 +67,7 @@ def test_the_whole_study_runs_and_says_what_passed(tmp_path):
     con, _ = make_db(tmp_path)
     out = swing.run(con, since="2000-01-01", log=lambda *_: None)
     assert "BIG MOVERS" in out and "Opened 10%-20% up" in out and "Passed:" in out
-    assert "no company financials yet" in out
+    assert "no company financials yet" in out and "BIG NEWS DAYS" in out
 
 
 def fade_frame(days):
@@ -101,3 +101,20 @@ def test_a_gap_on_normal_volume_is_treated_as_a_price_error():
     assert swing.fade_trades(df, 0.10, 1, 0.10, 5e6, 0.30).empty
     df = fade_frame([(120, 121, 110, 3.0)])
     assert swing.fade_trades(df, 0.10, 1, 0.10, 100e6, 0.30).empty   # not traded enough for this line
+
+
+def test_after_a_big_news_day_it_buys_the_next_open_and_measures_vs_the_market():
+    rows = [("X", pd.Timestamp("2020-01-01") + pd.Timedelta(days=i), 100.0, 100.0, 100.0, None, True, 50e6, 1.0)
+            for i in range(3)]
+    rows += [("X", pd.Timestamp("2020-01-04"), 101.0, 112.0, 110.0, None, True, 50e6, 4.0),   # +10% on 4x volume
+             ("X", pd.Timestamp("2020-01-05"), 111.0, 115.0, 114.0, None, True, 50e6, 2.0),
+             ("X", pd.Timestamp("2020-01-06"), 114.0, 120.0, 120.0, None, True, 50e6, 1.0)]
+    df = pd.DataFrame(rows, columns=["ticker", "date", "o", "h", "c", "prev", "liquid", "dvol", "vol_x"])
+    df["prev"] = df["c"].shift(1)
+    spy = pd.DataFrame({"date": df["date"], "o": 400.0, "c": 400.0})
+    spy.loc[spy["date"] == pd.Timestamp("2020-01-06"), "c"] = 404.0                 # the market +1% by then
+    tr = swing.news_trades(df, spy, hold=2)
+    assert len(tr) == 1 and tr["date"].iloc[0] == pd.Timestamp("2020-01-05")       # the next morning
+    assert tr["ret"].iloc[0] == pytest.approx(120 / 111 - 1 - 0.01)
+    df.loc[3, "vol_x"] = 1.0                                                          # no extra volume: no news
+    assert swing.news_trades(df, spy, hold=2).empty
