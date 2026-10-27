@@ -86,7 +86,7 @@ def test_every_workflow_and_nightly_step_has_a_worker_to_show_it_live():
     assert all(set(office.step_workers(n)) <= set(office.LOOKS) for n in names)
     expect = {"Update data": ["prices", "sec", "finra"], "Retry prices later": ["prices"], "Did the SEC refuse?": ["sec"],
               "Try the SEC again from this machine": ["sec"], "Monthly honesty check": ["ideas"],
-              "Portfolio safety": ["safety"], "Demo account": ["demo"], "$100 account": ["demo"],
+              "Portfolio safety": ["safety"], "Demo account": ["demo"], "Crypto account summary": ["demo"],
               "Demo accounts over time": ["demo"], "Collect news, the economy and the ranking": ["news"],
               "Trading journal": ["journal"], "Report": ["boss"], "Bot health": ["boss"], "Office": ["logbook"],
               "Restore day-trading results": ["logbook"], "Keep the report": ["logbook"], "Save database": ["logbook"]}
