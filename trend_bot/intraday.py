@@ -459,6 +459,51 @@ def filters(df: pd.DataFrame, earnings: set[tuple[str, str]] | None, draws: int 
     return out
 
 
+def pre_earnings(df: pd.DataFrame, earnings: set[tuple[str, str]], entry_slot: int = 0) -> pd.DataFrame:
+    """[date, symbol, ret, cost]: bought on the last session before an earnings report hits the price (the
+    day of an after-close report, or the day before a before-open one), at the open of half hour
+    `entry_slot` (0 = 9:30, 1 = 10:00), sold at the close: never held through the report itself."""
+    stocks = df[~df["symbol"].isin(ETFS)]
+    if stocks.empty or not earnings:
+        return pd.DataFrame(columns=["date", "symbol", "ret", "cost"])
+    opn, close = _grid(stocks, "open"), _grid(stocks, "close")
+    idx = opn.index.intersection(close.index)
+    days = pd.DataFrame({"symbol": idx.get_level_values("symbol"), "date": idx.get_level_values("date"),
+                         "entry": opn.loc[idx, entry_slot].to_numpy(), "exit": close.loc[idx, 12].to_numpy()})
+    days = days.sort_values(["symbol", "date"]).reset_index(drop=True)
+    nxt = days.groupby("symbol")["date"].shift(-1)                 # the next session: does the report hit it?
+    hit = pd.Series([(s, d) in earnings for s, d in zip(days["symbol"], nxt)], index=days.index)
+    t = days[hit]
+    return pd.DataFrame({"date": t["date"], "symbol": t["symbol"], "ret": t["exit"] / t["entry"] - 1,
+                         "cost": COST["stock"]}).reset_index(drop=True)
+
+
+def pre_earnings_text(df: pd.DataFrame, earnings: set[tuple[str, str]] | None) -> str:
+    """The pre-earnings run-up, against the same stocks bought open-to-close on all their other days."""
+    if not earnings:
+        return ""
+    lines = ["", "Pre-earnings run-up (buy on the last session before a report, sell at the close; never through "
+                 "the report):"]
+    every = []
+    for slot, when in ((0, "at the open"), (1, "at 10:00")):
+        t = pre_earnings(df, earnings, slot)
+        if t.empty:
+            lines.append(f"  bought {when}: no trades")
+            continue
+        r = evaluate(t)
+        lines.append(f"  bought {when:<12} {r['trades']:>5,} trades, {r['per_trade']:+.3%} a trade after costs "
+                     f"({r['gross_per_trade']:+.3%} before), right {r['hit']:.0%}, before/from {SPLIT[:4]}: "
+                     f"{r['early']:+.1%}/{r['late']:+.1%} a year, luck {r['luck']:.0%} → "
+                     f"{'PASSES' if verdict(r).startswith('PASSES') else 'no'}")
+        every.append(t)
+    stocks = df[~df["symbol"].isin(ETFS)]
+    d = _days(stocks)
+    if len(d):
+        normal = (d["close"] / d["open"] - 1).mean()
+        lines.append(f"  (the same stocks bought at the open on any day: {normal:+.3%} a trade before costs)")
+    return "\n".join(lines)
+
+
 def evaluate(trades: pd.DataFrame, draws: int = 500, seed: int = 0) -> dict:
     """Daily results (equal amounts in each of a day's trades) after costs, both halves, luck check."""
     if trades.empty:

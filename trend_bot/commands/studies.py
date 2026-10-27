@@ -143,6 +143,7 @@ def _study_intraday(con, args: argparse.Namespace) -> int:
     print(intraday.filters_text(tested_filters))
     print(intraday.exits_text(intraday.exits_study(df)))
     print(intraday.worst_text(df))
+    print(intraday.pre_earnings_text(df, earnings))
     return 0
 
 
