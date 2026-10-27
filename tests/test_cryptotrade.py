@@ -119,7 +119,7 @@ def test_leftover_stocks_are_sold_once_announced(market):
 
 
 def test_slots_per_kind_and_a_stale_signal_is_ignored(market):
-    market({**{f"C{i}/USD": -0.06 for i in range(4)}, **{f"F{i}/USD": -0.03 for i in range(6)}})
+    market({**{f"C{i}/USD": -0.06 for i in range(7)}, **{f"F{i}/USD": -0.025 for i in range(6)}})
     broker, state = Broker(cash=1000.0), {}
     out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
     kinds = [t["kind"] for t in state["open"].values()]
@@ -148,5 +148,24 @@ def test_the_evening_summary_reads_well():
                                   "entry": 2500.0, "exit": 2490.0, "how": "hour", "cost": 10.0, "ret": -0.004,
                                   "kind": "fast"}]}
     d = ct.summary(Broker(), state, now=NOW)["description"]
-    assert "$100.50" in d and "SOL +4.2%" in d and "big dip (tested: passes)**: 1 trades" in d
+    assert "$100.50" in d and "SOL +4.2%" in d and "dip 3%+, held a day (tested: passes, thin)**: 1 trades" in d
     assert "fast experiment" in d and "-0.40%" in d
+
+
+def test_all_the_brokers_coins_except_the_stable_ones_read_once_a_day(monkeypatch):
+    calls = []
+
+    def listed(broker):
+        calls.append(1)
+        return ["BTC/USD", "DOGE/USD", "USDT/USD", "PAXG/USD", "USDC/USD"]
+
+    monkeypatch.setattr(ct.crypto, "all_coins", listed)
+    state = {}
+    assert ct.coins(None, state, NOW.date()) == ["BTC/USD", "DOGE/USD"]
+    assert ct.coins(None, state, NOW.date()) == ["BTC/USD", "DOGE/USD"] and len(calls) == 1   # once a day
+
+    def broken(broker):
+        raise RuntimeError("403")
+
+    monkeypatch.setattr(ct.crypto, "all_coins", broken)
+    assert ct.coins(None, {}, NOW.date()) == ct.COINS                  # the big ones if the list can't be read
