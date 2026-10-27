@@ -25,6 +25,9 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    permissions:
+      contents: read
+      actions: read        # to see whether this week's database backup exists
     outputs:
       sec_refused: ${{ steps.sec.outputs.refused }}
     env:
@@ -214,13 +217,21 @@ jobs:
 
       # A weekly copy outside the cache: if GitHub's cache ever loses the database, Actions ->
       # "Import database" with this run's number puts it back (kept 8 days, so one always exists).
+      # Made whenever there's no backup from the last 6 days (not "on Mondays": GitHub often starts
+      # Monday's run after midnight UTC, and one skipped Monday left no backup at all).
       - name: Weekly database backup
         id: weekday
         if: always()
-        run: echo "day=$(date -u +%u)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          since=$(date -u -d '6 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          recent=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=market-db-export&per_page=20" \
+            --jq "[.artifacts[] | select(.expired | not) | select(.created_at > \"$since\")] | length" || echo 0)
+          echo "due=$([ "${recent:-0}" = "0" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
 
       - name: Upload the weekly backup
-        if: always() && steps.weekday.outputs.day == '1'
+        if: always() && steps.weekday.outputs.due == 'yes'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: market-db-export
