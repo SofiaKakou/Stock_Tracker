@@ -678,3 +678,16 @@ def test_open_positions_are_not_reported_as_no_trades():
                "client_order_id": "td-20261026-gap-AAA", "filled_at": "2026-10-26T13:35:00Z"}]
     _, embed = daytrade.report(orders, 100_000.0, {}, DAY)
     assert "No trades today" not in embed["description"] and "results pending" in embed["description"]
+
+
+def test_the_safety_net_warns_once_when_the_closes_are_already_queued_for_the_open():
+    class Queued(FakeBroker):
+        def open_orders(self, nested=False):
+            return [{"symbol": "AAA", "type": "market", "time_in_force": "day"}]
+
+    broker = Queued()
+    broker.held = {"AAA": 10}
+    night = dt.datetime(2026, 10, 26, 20, 30, tzinfo=daytrade.NY)
+    assert daytrade.safety_net(broker, night, log=lambda *_: None) is None and not broker.closed_all
+    broker.held["BBB"] = 5                                                  # one not queued yet: acts again
+    assert daytrade.safety_net(broker, night, log=lambda *_: None) and broker.closed_all
