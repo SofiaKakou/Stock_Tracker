@@ -255,6 +255,11 @@ order at most 0.3% above the asking price), with a **safety stop 15% below** at 
 collapsed, like LUNA in 2022, aren't in the test data), and sold **24 hours later**. Expect about one
 trade every 2-3 days: big hourly drops are rare. Every trade goes to Discord ("🪙"), and the nightly
 run adds a summary. Its keys are the secrets `ALPACA_SMALL_KEY_ID` and `ALPACA_SMALL_SECRET_KEY`.
+**Fast experiment (on request, expected to lose):** for more trades a day, the account also buys coins
+that fell **2%+** (but less than 5%) in an hour for **$10**, up to 4 at once, and sells them **an hour
+later**. The study says this loses about 0.2% a trade to the fees; it runs small and separate so we can
+see that live. Its trades aren't posted one by one (several a day); the evening summary shows both kinds
+apart. Big dips get up to 2 trades of $25, so the two never need more than the $100.
 (It used to hold the monthly portfolio at $100; those stocks were sold when it switched to crypto.)
 
 ## The demo accounts week by week
