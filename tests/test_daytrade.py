@@ -747,3 +747,34 @@ def test_yesterdays_big_loser_is_shorted_at_the_open_with_a_wide_stop():
 def test_no_market_scan_means_the_pattern_just_sits_out():
     s = daytrade.Session(FakeBroker(), LoserData(), [], DAY, log=lambda *_: None)    # no list_assets() to call
     assert s.find_losers() == [] and s.losers([]) == 0
+
+
+def test_a_day_without_gap_ups_doesnt_ask_for_prices_of_nothing(monkeypatch):
+    from trend_bot import intraday
+
+    class Strict(GapData):
+        def bars(self, symbols, start, end, timeframe="30Min"):
+            if not symbols:                                  # what Alpaca does: 400 Bad Request
+                raise RuntimeError("400 Client Error: Bad Request (symbols=)")
+            return super().bars(symbols, start, end, timeframe)
+
+    monkeypatch.setattr(intraday, "movers", lambda data, top=50: ["CALM"])
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 31, 30, tzinfo=daytrade.NY))
+    s = daytrade.Session(FakeBroker(), Strict(), ["AAPL"], DAY, log=lambda *_: None, sleep=clock.sleep, now=clock.now)
+    monkeypatch.setattr(daytrade, "gapup_signals", lambda *a: [])
+    assert s.gapups() == 0 and s.enter("gap", [], {}, 3) == 0
+
+
+def test_one_patterns_error_doesnt_stop_the_morning(monkeypatch):
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker, out = FakeBroker(), []
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=out.append,
+                         sleep=clock.sleep, now=clock.now)
+
+    def boom():
+        raise RuntimeError("screener down")
+
+    monkeypatch.setattr(s, "gapups", boom)
+    s.morning()
+    assert any("gapup: stopped with an error" in m for m in out)
+    assert "td-20261026-breakout-BREAKY" in [o["client_order_id"] for o in broker.orders]   # the morning went on

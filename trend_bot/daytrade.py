@@ -333,6 +333,8 @@ class Session:
         if pattern in self.paused:
             self.log(f"[day] {pattern}: paused (worse live than its history); no trades")
             return 0
+        if not signals:
+            return 0
         if self.guard():
             return 0
         self.cancel_stale_entries()
@@ -395,6 +397,8 @@ class Session:
         return sent
 
     def _bars(self, symbols: list[str], timeframe: str, start: dt.datetime) -> dict[str, list[dict]]:
+        if not symbols:     # Alpaca refuses a request for no symbols
+            return {}
         df = self.data.bars(symbols, start.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                             self.now().astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                             timeframe=timeframe)
@@ -473,8 +477,11 @@ class Session:
             last = {s: b[-1]["c"] for s, b in first.items() if b}
             self.enter("gap", gap_signals(opens, prev), last, STOCK_SLOTS,
                        {s: opens[s] / prev[s] - 1 for s in opens if prev.get(s)})
-            self.gapups()
-            self.losers(found)
+            for name, part in (("gapup", self.gapups), ("loser", lambda: self.losers(found))):
+                try:        # one pattern's problem mustn't stop the others (or the rest of the day)
+                    part()
+                except Exception as e:  # noqa: BLE001
+                    self.log(f"[day] ⚠️ {name}: stopped with an error, the other patterns carry on ({str(e)[:120]})")
         else:
             self.log("[day] started too late for the gap fade today")
         self.breakouts(MORNING_CHECKS)
