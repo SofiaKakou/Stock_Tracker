@@ -239,7 +239,7 @@ def test_forecast_vs_actual():
 def test_money_shifts_slowly_within_limits_and_a_broken_pattern_pauses():
     few = rows("gap", [0.05] * 5)                                   # a lucky few days: nothing changes
     share, paused = daytrade.allocate(daytrade.compare(few, TESTED), None)
-    assert share == pytest.approx({p: 1 / 4 for p in daytrade.PATTERN_TEST}) and not paused
+    assert share == pytest.approx({p: 1 / len(daytrade.PATTERN_TEST) for p in daytrade.PATTERN_TEST}) and not paused
 
     log = rows("gap", [0.004] * 30) + rows("breakout", [0.0] * 30) + rows("momentum", [0.0002] * 30)
     share, paused = daytrade.allocate(daytrade.compare(log, TESTED), None)
@@ -546,7 +546,7 @@ def test_one_busy_day_cant_shift_the_money_or_pause_a_pattern():
     cmp = daytrade.compare(one_day, TESTED)
     assert cmp["breakout"]["n"] == 60 and cmp["breakout"]["days"] == 1
     share, paused = daytrade.allocate(cmp, None)
-    assert not paused and share == pytest.approx({p: 1 / 4 for p in daytrade.PATTERN_TEST})
+    assert not paused and share == pytest.approx({p: 1 / len(daytrade.PATTERN_TEST) for p in daytrade.PATTERN_TEST})
     spread = rows("breakout", [-0.01] * 60, per_day=6) + rows("gap", [0.004] * 60, per_day=6)
     share, paused = daytrade.allocate(daytrade.compare(spread, TESTED), None)    # the same over 10 days
     assert paused == {"breakout"}
@@ -691,3 +691,59 @@ def test_the_safety_net_warns_once_when_the_closes_are_already_queued_for_the_op
     assert daytrade.safety_net(broker, night, log=lambda *_: None) is None and not broker.closed_all
     broker.held["BBB"] = 5                                                  # one not queued yet: acts again
     assert daytrade.safety_net(broker, night, log=lambda *_: None) and broker.closed_all
+
+
+# --- Short yesterday's big losers (tested only) ------------------------------------------------------
+
+def daily(closes, vols):
+    days = pd.bdate_range(end="2026-10-23", periods=len(closes))
+    return [{"t": f"{d.date()}T04:00:00Z", "c": c, "v": v} for d, c, v in zip(days, closes, vols)]
+
+
+def test_only_big_falls_on_big_volume_in_tradable_stocks_count_as_losers():
+    normal = [20.0] * 24
+    days = {"CRASH": daily(normal + [16.0], [1e6] * 24 + [5e6]),        # -20% on 5x volume
+            "QUIET": daily(normal + [16.0], [1e6] * 25),                # -20% on normal volume: a price error?
+            "SMALL": daily(normal + [17.5], [1e6] * 24 + [5e6]),        # -12.5%: not big enough
+            "PENNY": daily([4.0] * 24 + [3.0], [1e7] * 24 + [5e7]),     # under $5
+            "GONE": daily(normal + [6.0], [1e6] * 24 + [5e6]),          # -70%: data error or delisting
+            "WORSE": daily(normal + [14.0], [1e6] * 24 + [4e6])}        # -30%: first
+    got = daytrade.loser_signals(days, DAY)
+    assert [s for s, _, _ in got] == ["WORSE", "CRASH"] and all(side == -1 for _, side, _ in got)
+
+
+class LoserData:
+    def bars(self, symbols, start, end, timeframe="30Min"):
+        rows = []
+        for s in symbols:
+            if timeframe == "1Day":
+                for b in daily([20.0] * 24 + [16.0 if s == "CRASH" else 20.0], [1e6] * 24 + [5e6]):
+                    rows.append((s, b["t"], b["c"], b["c"], b["c"], b["c"], b["v"]))
+            elif timeframe == "1Min":
+                rows.append((s, "2026-10-26T13:30:00Z", 15.8, 15.9, 15.7, 15.8, 1e5))
+        return pd.DataFrame(rows, columns=["symbol", "t", "open", "high", "low", "close", "volume"])
+
+
+def test_yesterdays_big_loser_is_shorted_at_the_open_with_a_wide_stop():
+    class Listed(FakeBroker):
+        def list_assets(self):
+            ok = {"tradable": True, "shortable": True, "easy_to_borrow": True, "exchange": "NASDAQ"}
+            return [{"symbol": "CRASH", **ok}, {"symbol": "FINE", **ok}, {"symbol": "SPY", **ok},
+                    {"symbol": "HARD", **ok, "easy_to_borrow": False}, {"symbol": "OTC", **ok, "exchange": "OTC"}]
+
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 20, tzinfo=daytrade.NY))
+    broker = Listed()
+    s = daytrade.Session(broker, LoserData(), ["AAPL"], DAY, log=lambda *_: None, sleep=clock.sleep, now=clock.now)
+    found = s.find_losers()
+    assert [x[0] for x in found] == ["CRASH"]
+    clock.t = dt.datetime(2026, 10, 26, 9, 31, 30, tzinfo=daytrade.NY)
+    assert s.losers(found) == 1
+    o = broker.orders[-1]
+    assert o["client_order_id"] == "td-20261026-loser-CRASH" and o["side"] == "sell"
+    assert o["stop"] == pytest.approx(15.8 * (1 + daytrade.LOSER_STOP))
+    assert s.losers(found) == 0                                                    # not twice
+
+
+def test_no_market_scan_means_the_pattern_just_sits_out():
+    s = daytrade.Session(FakeBroker(), LoserData(), [], DAY, log=lambda *_: None)    # no list_assets() to call
+    assert s.find_losers() == [] and s.losers([]) == 0
