@@ -676,9 +676,14 @@ def safety_net(broker: DayBroker, now: dt.datetime, log=print) -> dict | None:
         return None
     t = now.time()
     in_session = dt.time(9, 30) <= t < dt.time(16, 0)
-    closing = {o["symbol"] for o in broker.open_orders() if o.get("time_in_force") == "cls"}
+    orders = broker.open_orders()
+    closing = {o["symbol"] for o in orders if o.get("time_in_force") == "cls"}
     loose = [p for p in positions if not (in_session and p["symbol"] in closing)]
     if not loose:
+        return None
+    queued = {o["symbol"] for o in orders if o.get("type") == "market"}
+    if not in_session and all(p["symbol"] in queued for p in loose):   # an earlier run already queued them
+        log(f"[day] safety net: {len(loose)} position(s) already queued to close at the next open; nothing new")
         return None
     broker.cancel_all()
     broker.close_all()
