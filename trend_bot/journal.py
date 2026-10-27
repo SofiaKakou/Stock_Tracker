@@ -61,6 +61,8 @@ TABLES = {
         error NVARCHAR(400), seconds FLOAT, code VARCHAR(64), data VARCHAR(64), PRIMARY KEY (started, command)""",
     "forecast_outcomes": """snapshot_date DATE NOT NULL, ticker VARCHAR(12) NOT NULL, days INT, ret FLOAT,
         market_ret FLOAT, final BIT, PRIMARY KEY (snapshot_date, ticker)""",
+    "crypto_trades": """in_time VARCHAR(32) NOT NULL, symbol VARCHAR(16) NOT NULL, kind VARCHAR(10), out_time VARCHAR(32),
+        entry FLOAT, exit_price FLOAT, ret FLOAT, cost FLOAT, how VARCHAR(10), PRIMARY KEY (in_time, symbol)""",
     "stocks": """ticker VARCHAR(12) NOT NULL PRIMARY KEY, name NVARCHAR(300), exchange VARCHAR(40), sector NVARCHAR(100),
         cik INT, is_fund BIT, first_date DATE, last_date DATE, last_close FLOAT, dollar_vol FLOAT, in_portfolio BIT""",
 }
@@ -131,10 +133,10 @@ def replace(conn, table: str, rows: list[dict]) -> int:
             cur.execute(f"DELETE FROM dbo.{table} WHERE {key} IN ({','.join(['%s'] * len(part))})", tuple(part))
     elif table == "study_results":
         cur.execute("DELETE FROM dbo.study_results")
-    sql = f"INSERT INTO dbo.{table} ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})"
-    values = [tuple(r[c] for c in cols) for r in rows]
-    for i in range(0, len(values), 1000):
-        cur.executemany(sql, values[i:i + 1000])
+    # Many rows per statement: one statement per row took ~50 minutes the night 16,553 measures went in.
+    from trend_bot.mirror import insert
+
+    insert(cur, table, ", ".join(cols), [tuple(r[c] for c in cols) for r in rows])
     conn.commit()
     return len(rows)
 
@@ -216,6 +218,13 @@ def news_rows(con: sqlite3.Connection, days: int = 5) -> list[dict]:
     return [{"id": i, "created": c, "news_date": c[:10], "symbols": (s or "")[:400], "headline": (h or "")[:1000],
              "summary": su, "source": (so or "")[:100], "url": (u or "")[:1000], "tone": t}
             for i, c, s, h, su, so, u, t in con.execute("SELECT * FROM news WHERE created >= ?", (since,))]
+
+
+def crypto_rows(state: dict) -> list[dict]:
+    """The $100 crypto account's finished trades (its state file keeps them all)."""
+    return [{"in_time": r["in"], "symbol": r["symbol"], "kind": r.get("kind", "big"), "out_time": r.get("out"),
+             "entry": r.get("entry"), "exit_price": r.get("exit"), "ret": r.get("ret"), "cost": r.get("cost"),
+             "how": r.get("how")} for r in state.get("log", [])]
 
 
 def macro_rows(con: sqlite3.Connection, since: str | None) -> list[dict]:
@@ -322,7 +331,7 @@ def load_dw(conn, log=print) -> dict[str, int]:
 
 
 def sync(conn, market: sqlite3.Connection, day_state: dict, intraday_results: dict | None,
-         today: dt.date | None = None, log=print) -> dict[str, int]:
+         today: dt.date | None = None, log=print, crypto_state: dict | None = None) -> dict[str, int]:
     """Write everything into the journal. Returns rows written per table."""
     from trend_bot import accounts
     from trend_bot.db import get_meta
@@ -354,5 +363,7 @@ def sync(conn, market: sqlite3.Connection, day_state: dict, intraday_results: di
     written["forecast_outcomes"] = replace(conn, "forecast_outcomes", outcome_rows(
         market, [d for d in snaps if d not in done or d >= recent], today))
     written["stocks"] = replace_all(conn, "stocks", stock_rows(market))
+    if crypto_state is not None:
+        written["crypto_trades"] = replace_all(conn, "crypto_trades", crypto_rows(crypto_state))
     log("[journal] " + ", ".join(f"{t} {n:,}" for t, n in written.items()))
     return written

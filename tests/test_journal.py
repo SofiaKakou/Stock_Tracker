@@ -17,6 +17,10 @@ class FakeConn:
 
     def execute(self, sql, params=()):
         self.sql.append((sql, params))
+        if sql.startswith("INSERT INTO dbo."):          # many rows per statement: split them back up
+            table = sql.split("dbo.")[1].split(" ")[0]
+            width = len(sql.split("(")[1].split(")")[0].split(","))
+            self.rows.setdefault(table, []).extend(tuple(params[i:i + width]) for i in range(0, len(params), width))
 
     def executemany(self, sql, rows):
         table = sql.split("dbo.")[1].split(" ")[0]
@@ -51,10 +55,16 @@ def test_the_journal_writes_every_table_once_per_day(tmp_path):
     results = {"gap_fade": {"trades": 10, "days": 9, "per_trade": -0.0002, "yearly": -0.1, "early": -0.1,
                             "late": -0.1, "hit": 0.5, "t": -2.1, "luck": 0.9}}
     conn = FakeConn()
-    written = journal.sync(conn, con, state, results, log=lambda *_: None)
+    crypto = {"log": [{"symbol": "SOL/USD", "in": "2026-10-27T15:02:00+00:00", "out": "2026-10-28T15:02:00+00:00",
+                       "entry": 95.0, "exit": 99.0, "how": "day", "cost": 24.7, "ret": 0.042, "kind": "big"}]}
+    written = journal.sync(conn, con, state, results, log=lambda *_: None, crypto_state=crypto)
     assert written == {"day_trades": 1, "day_summary": 1, "account_values": 2, "monthly_holdings": 2,
                        "safety_events": 1, "study_results": 1, "runs": 1, "news": 1, "macro": 2,
-                       "ranking_snapshots": 1, "measure_snapshots": 2, "forecast_outcomes": 0, "stocks": 0}
+                       "ranking_snapshots": 1, "measure_snapshots": 2, "forecast_outcomes": 0, "stocks": 0,
+                       "crypto_trades": 1}
+    assert conn.rows["crypto_trades"][0][:3] == ("2026-10-27T15:02:00+00:00", "SOL/USD", "big")
+    inserts = [s for s, _ in conn.sql if s.startswith("INSERT INTO dbo.measure_snapshots")]
+    assert len(inserts) == 1                             # both measures in one statement, not one each
     alters = [s for s, _ in conn.sql if "ALTER TABLE" in s]
     assert len(alters) == 3                              # bid, ask, spread added to an older day_trades
     creates = [s for s, _ in conn.sql if s.startswith("IF OBJECT_ID")]
