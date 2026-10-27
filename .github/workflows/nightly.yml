@@ -196,6 +196,14 @@ jobs:
           python -m trend_bot health --discord --problems reports/problems.txt --job-status "${{ job.status }}" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
 
+      # The bot's village: every part of the bot as a building with a status flag (reports/base.html,
+      # kept with the report below and published next to it as base.html when the web page is on).
+      - name: Village
+        if: always()
+        run: |
+          python -m trend_bot base --problems reports/problems.txt --job-status "${{ job.status }}" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
+
       # Optional: the report by email too. Does nothing until the EMAIL_USER and
       # EMAIL_APP_PASSWORD secrets exist (see trend_bot/email_report.py for the 2-minute setup).
       - name: Email the report
@@ -245,7 +253,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: report-${{ github.run_id }}
-          path: reports/latest.html
+          path: |
+            reports/latest.html
+            reports/base.html
           if-no-files-found: ignore
           retention-days: 30
 
@@ -301,7 +311,8 @@ jobs:
   # because the page is public (anyone with the link can see it, like this public repository):
   #   Settings -> Pages -> Source: "GitHub Actions", then
   #   Settings -> Secrets and variables -> Actions -> Variables -> New variable PUBLISH_DASHBOARD = true
-  # The page is then at https://<your-user>.github.io/<repository>/ and updates after every nightly run.
+  # The page is then at https://<your-user>.github.io/<repository>/ and updates after every nightly run;
+  # the bot's village is at .../<repository>/base.html.
   publish:
     needs: run
     if: always() && vars.PUBLISH_DASHBOARD == 'true'

@@ -20,6 +20,7 @@ New to the market? Start with **[GUIDE.md](GUIDE.md)**: what every message means
 - 🚩 **Warning signs**: restatements, auditor changes, defaults, late reports and more from SEC 8-K filings
 - 🔔 **Insider buying**, 🌎 **market screen**, 👀 **watchlist trends**, 📊 **pick scorecard**
 - ⚠️ **Bot health**: tells you when something breaks (old prices, SEC limits) and when it's fixed
+- 🏰 **The bot's village** (`python -m trend_bot base`): a game-style page where every part of the bot is a building with a flag (green working, yellow needs a look, red broken with smoke, scaffolding not set up); made every night next to the report
 - 🛡️ **Safety**: nightly emergency exits (bankruptcy, delisting notice, unreliable accounts), warnings, drawdown alarm; for day trading broker-side stops, a 3% daily loss limit, an independent safety net and pre-trade checks
 - 🔎 **"Why isn't this stock ranked?"**: a one-click lookup that explains any ticker
 - 📒 **Logbook**: every run logged; every result stamped with the code and data that made it
