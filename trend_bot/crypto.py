@@ -35,13 +35,15 @@ DRAWS = 200
 
 def fetch(data, symbols: list[str] = SYMBOLS, start: str = START, end: str | None = None,
           timeframe: str = TIMEFRAME, pause: float = 0.3) -> pd.DataFrame:
-    """[symbol, t, open, high, low, close, volume] from Alpaca's crypto bars, following every page."""
+    """[symbol, t, open, high, low, close, volume] from Alpaca's crypto bars, following every page.
+    start: a date (YYYY-MM-DD) or a moment (YYYY-MM-DDTHH:MM:SSZ)."""
     import time
 
     end = end or pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
     rows, token = [], None
     while True:
-        params = {"symbols": ",".join(symbols), "timeframe": timeframe, "start": f"{start}T00:00:00Z",
+        params = {"symbols": ",".join(symbols), "timeframe": timeframe,
+                  "start": start if "T" in start else f"{start}T00:00:00Z",
                   "end": end, "limit": 10_000}
         if token:
             params["page_token"] = token

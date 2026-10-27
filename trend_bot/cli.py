@@ -29,6 +29,7 @@ from trend_bot.commands.data import cmd_db, cmd_monthly_due, cmd_screen, cmd_sec
 from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
+    cmd_crypto,
     cmd_daytrade,
     cmd_lookahead_combine,
     cmd_accounts,
@@ -300,6 +301,12 @@ def make_parser() -> argparse.ArgumentParser:
     dtp.add_argument("--log-csv", default="daytrade_log.csv", help="the trade log as a spreadsheet file")
     dtp.add_argument("--discord", action="store_true", help="post the evening report")
     dtp.set_defaults(func=cmd_daytrade)
+
+    cx = sub.add_parser("crypto", help="the $100 crypto account (fake money): buys big dips, sells a day later")
+    cx.add_argument("--state", default="crypto.json", help="open trades and the trade log")
+    cx.add_argument("--summary", action="store_true", help="the evening summary instead of a check")
+    cx.add_argument("--discord", action="store_true", help="post trades (and the summary) to Discord")
+    cx.set_defaults(func=cmd_crypto)
 
     lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")
     lc.add_argument("files", nargs="+", help="JSON files from study lookahead --json")

@@ -336,6 +336,33 @@ MORNING_WINDOW = (_dt.time(9, 0), _dt.time(11, 40))       # New York time a part
 AFTERNOON_WINDOW = (_dt.time(12, 0), _dt.time(15, 40))    # (a later start would miss its own trades)
 
 
+def cmd_crypto(args: argparse.Namespace) -> int:
+    """The $100 crypto account (fake money): one 15-minute check, or the evening summary."""
+    import json
+
+    from trend_bot import alerts, cryptotrade, intraday
+    from trend_bot.paper import SMALL_KEY_ENV, SMALL_SECRET_ENV
+
+    broker = cryptotrade.CryptoBroker.from_env()
+    data = intraday.Data.from_env(SMALL_KEY_ENV, SMALL_SECRET_ENV)
+    if broker is None or data is None:
+        print(f"The $100 crypto account isn't set up ({SMALL_KEY_ENV} / {SMALL_SECRET_ENV}); skipped.")
+        return 0
+    state = cryptotrade.load_state(args.state)
+    if args.summary:
+        embeds = [cryptotrade.summary(broker, state)]
+    else:
+        try:
+            embeds = cryptotrade.run(broker, data, state)
+        finally:   # what's open is kept even if the check stops halfway
+            Path(args.state).write_text(json.dumps(state, indent=1))
+    for e in embeds:
+        print(f"{e['title']}: {e['description']}".replace("**", ""))
+    if embeds and args.discord and alerts.load_webhook():
+        alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": embeds[:10]})
+    return 0
+
+
 def cmd_daytrade(args: argparse.Namespace) -> int:
     """Day-trading demo account (fake money, its own paper account): one part of today's session."""
     import datetime as dt

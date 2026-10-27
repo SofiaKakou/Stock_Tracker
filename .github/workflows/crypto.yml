@@ -1,0 +1,56 @@
+# The $100 crypto account (fake money, Alpaca paper account): every 15 minutes it sells the coins held a
+# day and buys big coins that fell 5%+ in the last hour (trend_bot/cryptotrade.py). Crypto trades day and
+# night, every day. GitHub's schedule is best effort, so an outside timer (GUIDE.md, cron-job.org) starts
+# it too; a second start in the same minutes finds nothing new to do.
+# Nothing happens until the ALPACA_SMALL_KEY_ID and ALPACA_SMALL_SECRET_KEY secrets exist.
+
+name: Crypto account
+
+on:
+  schedule:
+    - cron: "2,17,32,47 * * * *"   # every 15 minutes, just after each 15-minute bar closes
+  workflow_dispatch: {}
+
+concurrency:
+  group: crypto-account
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ALPACA_SMALL_KEY_ID: ${{ secrets.ALPACA_SMALL_KEY_ID }}
+      ALPACA_SMALL_SECRET_KEY: ${{ secrets.ALPACA_SMALL_SECRET_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore open trades
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: crypto.json
+          key: crypto-state-${{ github.run_id }}
+          restore-keys: crypto-state-
+
+      - name: Check for big dips
+        run: python -m trend_bot crypto --discord
+
+      - name: Save open trades
+        if: always() && hashFiles('crypto.json') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: crypto.json
+          key: crypto-state-${{ github.run_id }}

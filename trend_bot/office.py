@@ -56,7 +56,7 @@ LABEL = {OK: "Working", WARN: "Needs a look", BAD: "Broken", OFF: "Not set up"}
 
 # Words in reports/problems.txt (steps of tonight's run that didn't finish) -> the worker they belong to.
 STEP_WORDS = {"prices": ("data update", "price retry", "saved database"),
-              "demo": ("demo account", "$100 account", "demo accounts"),
+              "demo": ("demo account", "crypto account", "demo accounts"),
               "news": ("collecting news",), "ideas": ("ranking snapshot", "study", "audit", "ideas"),
               "safety": ("safety",), "journal": ("trading journal",)}
 
@@ -195,9 +195,9 @@ def survey(con: sqlite3.Connection, today: dt.date | None = None, failed_steps: 
                        f"Top ideas from {ranking['date']}" if ranking else "No top-ideas list yet",
                        details + [f"Tonight: {s}" for s in steps]))
 
-    # Demo trader: the demo accounts (fake money), off until the Alpaca keys exist.
-    accounts = [(n, json.loads(get_meta(con, f"{p}_status") or "{}")) for n, p in
-                (("Demo account", "paper"), ("$100 account", "small"))]
+    # Demo trader: the demo account following the portfolio (fake money), off until the Alpaca keys exist.
+    # (The $100 account trades crypto now, every 15 minutes: crypto.yml, shown live at the day trader's desk.)
+    accounts = [(n, json.loads(get_meta(con, f"{p}_status") or "{}")) for n, p in (("Demo account", "paper"),)]
     accounts = [(n, s) for n, s in accounts if s.get("date") and s.get("equity") is not None]
     steps = _failed(failed_steps, "demo")
     if not accounts and not steps:
@@ -302,7 +302,7 @@ DESKS = ["prices", "sec", "finra", "news", "ideas", "demo", "daytrade", "safety"
 PLATE = {"boss": "BOSS", "prices": "PRICES", "sec": "SEC", "finra": "FINRA", "news": "NEWS", "ideas": "IDEAS",
          "demo": "DEMO", "daytrade": "DAY TRADE", "safety": "SAFETY", "journal": "JOURNAL", "logbook": "LOGBOOK"}
 # Live: which worker a GitHub Actions workflow belongs to ("steps": the nightly run, read step by step).
-LIVE_WORKFLOWS = {"nightly.yml": "steps", "daytrade.yml": "daytrade", "daytrade-safety.yml": "safety",
+LIVE_WORKFLOWS = {"nightly.yml": "steps", "daytrade.yml": "daytrade", "daytrade-safety.yml": "safety", "crypto.yml": "daytrade",
                   "demo.yml": "demo", "demo-morning.yml": "demo", "research.yml": "ideas", "research-parallel.yml": "ideas",
                   "why.yml": "ideas", "ai.yml": "ideas", "journal.yml": "journal", "market-mirror.yml": "journal",
                   "import-db.yml": "logbook", "tests.yml": "logbook"}
