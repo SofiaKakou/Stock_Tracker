@@ -56,10 +56,12 @@ GAPUP_TEST = {"trades": 2662, "days": 2662, "per_trade": 0.0035, "sd_trade": 0.0
               "late": 0.0024, "yearly": 0.0035 * 2662 / 20, "t": 3.1, "luck": 0.0}
 # Short yesterday's big losers (tested only; passed the 20-year swing study, "big news days"): a stock
 # that closed 15%+ down yesterday on 3x+ its usual volume (big bad news) tends to keep falling. Sold
-# short at the open (if the broker can lend it), a 15% stop above, bought back by the close.
-LOSER_MIN, LOSER_MAX, LOSER_VOLUME_X, LOSER_STOP, LOSER_SLOTS = 0.15, 0.60, 3.0, 0.15, 3
-LOSER_TEST = {"trades": 6787, "days": 6787, "per_trade": 0.0044, "sd_trade": 0.06, "early": 0.0023,
-              "late": 0.0049, "yearly": 0.0044 * 6787 / 20, "t": 3.3, "luck": 0.0}
+# short at the open (if the broker can lend it), a 25% stop above, bought back by the close.
+LOSER_MIN, LOSER_MAX, LOSER_VOLUME_X, LOSER_STOP, LOSER_SLOTS = 0.15, 0.60, 3.0, 0.25, 3
+# With its stop (the swing study's "as real trades" lines): a 15% stop is hit by the jumps crashed stocks
+# make on the way down (+0.31% a trade, could be luck); 25% passes (+0.39%, t = 2.2).
+LOSER_TEST = {"trades": 6787, "days": 6787, "per_trade": 0.0039, "sd_trade": 0.06, "early": 0.0016,
+              "late": 0.0045, "yearly": 0.0039 * 6787 / 20, "t": 2.2, "luck": 0.0}
 LOSER_EXCHANGES = {"NYSE", "NASDAQ", "ARCA", "AMEX", "BATS"}
 DAILY_LOSS_LIMIT = 0.03  # the account down 3% on the day: close everything, no more trades today
 GUARD_EVERY = 300        # seconds between loss-limit checks while waiting
