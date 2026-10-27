@@ -118,3 +118,22 @@ def test_after_a_big_news_day_it_buys_the_next_open_and_measures_vs_the_market()
     assert tr["ret"].iloc[0] == pytest.approx(120 / 111 - 1 - 0.01)
     df.loc[3, "vol_x"] = 1.0                                                          # no extra volume: no news
     assert swing.news_trades(df, spy, hold=2).empty
+
+
+def test_a_short_after_good_news_pays_fees_and_counts_the_market():
+    rows = [("X", pd.Timestamp("2020-01-01") + pd.Timedelta(days=i), 100.0, 100.0, 100.0, None, True, 50e6, 1.0)
+            for i in range(3)]
+    rows += [("X", pd.Timestamp("2020-01-04"), 101.0, 121.0, 120.0, None, True, 50e6, 4.0),   # +20% on 4x volume
+             ("X", pd.Timestamp("2020-01-05"), 119.0, 119.5, 115.0, None, True, 50e6, 2.0),   # shorted at 119
+             ("X", pd.Timestamp("2020-01-06"), 114.0, 114.0, 110.0, None, True, 50e6, 1.0)]
+    df = pd.DataFrame(rows, columns=["ticker", "date", "o", "h", "c", "prev", "liquid", "dvol", "vol_x"])
+    df["prev"] = df["c"].shift(1)
+    spy = pd.DataFrame({"date": df["date"], "o": 400.0, "c": 400.0})
+    spy.loc[spy["date"] == pd.Timestamp("2020-01-06"), "c"] = 396.0               # the market fell 1% too
+    tr = swing.news_short_trades(df, spy, 1, 0.15, hold=2, stop=0.20, borrow=0.30)
+    assert len(tr) == 1 and tr["date"].iloc[0] == pd.Timestamp("2020-01-05")
+    assert tr["ret"].iloc[0] == pytest.approx(-(110 / 119 - 1) - 0.30 / 252 - 0.01)
+    stopped = swing.news_short_trades(df.assign(h=df["h"].where(df["date"] != pd.Timestamp("2020-01-06"), 150.0)),
+                                      spy, 1, 0.15, hold=2, stop=0.20, borrow=0.30)
+    assert stopped["ret"].iloc[0] == pytest.approx(-0.20 - swing.SHORT_SLIPPAGE - 0.30 / 252 - 0.01)
+    assert swing.news_short_trades(df, spy, -1, 0.15, hold=2, stop=0.20, borrow=0.30).empty   # it was good news

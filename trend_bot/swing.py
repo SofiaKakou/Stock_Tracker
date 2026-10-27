@@ -86,10 +86,20 @@ def fade_trades(df: pd.DataFrame, min_gap: float, hold: int, stop: float, min_dv
     up (busy volume, enough $ traded), bought back at the close `hold` trading days later, or at the
     stop (`stop` above the entry; at the open if a later day opens past it). ret includes the borrow
     fee for the nights held, and slippage when stopped out."""
-    g = df.groupby("ticker", sort=False)
     gap = df["o"] / df["prev"] - 1
     m = (df["liquid"] & (df["dvol"] >= min_dvol) & (df["vol_x"] >= min_volume_x)
          & (gap >= min_gap) & (gap < GAPS[-1][1]))
+    ret = _short_from_open(df, hold, stop, borrow)
+    keep = m & ret.notna()
+    return pd.DataFrame({"date": df.loc[keep, "date"], "ticker": df.loc[keep, "ticker"],
+                         "gap": gap[keep], "ret": ret[keep]}).reset_index(drop=True)
+
+
+def _short_from_open(df: pd.DataFrame, hold: int, stop: float, borrow: float) -> pd.Series:
+    """For every row: sold short at that day's open, bought back at the close `hold` trading days later,
+    or at the stop (`stop` above the entry; at the open if a later day opens past it); with the borrow
+    fee for the nights held and slippage when stopped out."""
+    g = df.groupby("ticker", sort=False)
     entry = df["o"]
     level = entry * (1 + stop)
     ret = pd.Series(np.nan, index=df.index)
@@ -106,10 +116,46 @@ def fade_trades(df: pd.DataFrame, min_gap: float, hold: int, stop: float, min_dv
             last = ~out_ & c_k.notna()
             ret[last] = -(c_k[last] / entry[last] - 1)
             out_ |= last
-    ret -= borrow / 252 * (hold - 1)                            # a short held overnight pays a fee
-    keep = m & ret.notna()
-    return pd.DataFrame({"date": df.loc[keep, "date"], "ticker": df.loc[keep, "ticker"],
-                         "gap": gap[keep], "ret": ret[keep]}).reset_index(drop=True)
+    return ret - borrow / 252 * (hold - 1)                     # a short held overnight pays a fee
+
+
+NEWS_SHORTS = [   # (trading days held, stop above the entry, borrow fee a year): realistic short trades
+    (1, 0.15, 0.0), (5, 0.20, 0.30), (20, 0.25, 0.30)]
+
+
+def news_short_trades(df: pd.DataFrame, spy: pd.DataFrame, sign: int, move: float, hold: int, stop: float,
+                      borrow: float) -> pd.DataFrame:
+    """[date, ticker, move, ret]: sold short at the open the morning after a big news day (`sign` +1:
+    closed `move`+ up, -1: down, on NEWS_VOLUME_X+ its usual volume), as a real short trade: a stop,
+    borrow fees, slippage. ret is the short's result minus the S&P 500's fall over the same days (a
+    short gains when the stock falls, so a market fall isn't counted as skill)."""
+    g = df.groupby("ticker", sort=False)
+    day_move = df["c"] / df["prev"] - 1
+    news = (df["liquid"] & (sign * day_move >= move) & (day_move.abs() < GAPS[-1][1])
+            & (df["vol_x"] >= NEWS_VOLUME_X))
+    m = news.groupby(df["ticker"]).shift(1).fillna(False).astype(bool)    # yesterday was the news day
+    ret = _short_from_open(df, hold, stop, borrow)
+    exit_date = g["date"].shift(1 - hold)
+    keep = m & ret.notna() & exit_date.notna()
+    out = pd.DataFrame({"date": df.loc[keep, "date"], "ticker": df.loc[keep, "ticker"],
+                        "move": day_move.groupby(df["ticker"]).shift(1)[keep], "ret": ret[keep],
+                        "exit_date": exit_date[keep]})
+    s = spy.set_index("date")
+    market = s["c"].reindex(out["exit_date"]).to_numpy() / s["o"].reindex(out["date"]).to_numpy() - 1
+    out["ret"] = out["ret"] + market
+    return out.dropna(subset=["ret"])[["date", "ticker", "move", "ret"]].reset_index(drop=True)
+
+
+def news_short_study(df: pd.DataFrame, spy: pd.DataFrame) -> dict[str, dict]:
+    out = {}
+    for sign, word in ((1, "up"), (-1, "down")):
+        for move in NEWS_MOVES:
+            for hold, stop, borrow in NEWS_SHORTS:
+                tr = news_short_trades(df, spy, sign, move, hold, stop, borrow)
+                held = "to the close" if hold == 1 else f"{hold} days (borrow fee {borrow:.0%} a year)"
+                out[f"After a {move:.0%}+ {word} day on big volume: short next morning, held {held}, "
+                    f"stop {stop:.0%} above, vs the S&P 500"] = evaluate(tr["ret"], tr["date"], COST["movers"])
+    return out
 
 
 def fade_study(df: pd.DataFrame) -> dict[str, dict]:
@@ -299,6 +345,13 @@ def run(con: sqlite3.Connection, since: str = SINCE, log=print, chunk: int = 300
               "following the move from the next morning's open, vs the S&P 500; a clearly negative result "
               "means the move tends to reverse instead)", ""]
     for name, r in news.items():
+        lines += line(name, r)
+    log("[swing] news shorts with stops and borrow fees...")
+    shorts = news_short_study(df, spy_daily)
+    every.update(shorts)
+    lines += ["SHORTING AFTER BIG NEWS, AS REAL TRADES (a stop above, slippage when it's hit, a borrow fee "
+              "for each night held; vs the S&P 500)", ""]
+    for name, r in shorts.items():
         lines += line(name, r)
     facts = fundamentals.load_facts(con)
     if facts.empty:
