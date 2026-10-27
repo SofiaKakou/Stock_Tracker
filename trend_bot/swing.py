@@ -10,6 +10,10 @@ halves of history, and against luck.
   same quarter a year earlier, for this company), does the stock keep drifting the same way?
   Bought at the close of the first trading day after the filing, held 2, 5, 10 or 20 trading
   days, measured against the S&P 500 over the same days.
+- Big news days: a stock that closes 8%+ (or 15%+) up or down on at least 3 times its usual volume
+  (the price trace of big news). Too late to catch the first move (bots react in seconds); does the
+  move carry on? Bought (after an up day) or sold short (after a down day) at the NEXT morning's open,
+  held 1, 5 or 20 trading days, measured against the S&P 500 over the same days.
 
 Only stocks still listed today have prices, so companies that collapsed and were delisted are
 missing: that flatters the "buy" sides a little (most of all for big movers).
@@ -27,6 +31,9 @@ COST = {"movers": 0.0010, "earnings": 0.0005}   # round trip; jumpy stocks have 
 GAPS = [(0.05, 0.10), (0.10, 0.20), (0.20, 0.60)]   # opening gaps checked (a bigger one is a data error)
 HOLDS = (2, 5, 10, 20)                  # trading days, earnings drift
 SURPRISE = 2.0                          # |sue| at least this: a big beat or miss
+NEWS_MOVES = (0.08, 0.15)               # the day's close vs the day before: a big news day
+NEWS_VOLUME_X = 3.0                     # ... on at least 3x the usual volume
+NEWS_HOLDS = (1, 5, 20)
 SPLIT = "2016-01-01"                    # the two halves of history, judged separately
 SINCE = "2006-01-01"
 
@@ -118,6 +125,40 @@ def fade_study(df: pd.DataFrame) -> dict[str, dict]:
         if not tr.empty:
             out[name]["stopped"] = float((tr["ret"] <= -stop - SHORT_SLIPPAGE + 1e-9).mean())
             out[name]["worst"] = float(tr["ret"].min())
+    return out
+
+
+def news_trades(df: pd.DataFrame, spy: pd.DataFrame, hold: int, move: float = NEWS_MOVES[0],
+                volume_x: float = NEWS_VOLUME_X) -> pd.DataFrame:
+    """[date, ticker, move, ret]: after a liquid stock's big news day (closed `move`+ up or down on
+    `volume_x`+ its usual volume), in at the next day's open, out at the close `hold` trading days
+    later. ret is the stock minus the S&P 500 over the same span (spy: [date, o, c])."""
+    g = df.groupby("ticker", sort=False)
+    day_move = df["c"] / df["prev"] - 1
+    entry, entry_date = g["o"].shift(-1), g["date"].shift(-1)
+    exit_, exit_date = g["c"].shift(-hold), g["date"].shift(-hold)
+    m = (df["liquid"] & (day_move.abs() >= move) & (day_move.abs() < GAPS[-1][1]) & (df["vol_x"] >= volume_x)
+         & entry.notna() & exit_.notna())
+    out = pd.DataFrame({"date": entry_date[m], "ticker": df.loc[m, "ticker"], "move": day_move[m],
+                        "ret": exit_[m] / entry[m] - 1, "exit_date": exit_date[m]})
+    s = spy.set_index("date")
+    market = s["c"].reindex(out["exit_date"]).to_numpy() / s["o"].reindex(out["date"]).to_numpy() - 1
+    out["ret"] = out["ret"] - market
+    return out.dropna(subset=["ret"])[["date", "ticker", "move", "ret"]].reset_index(drop=True)
+
+
+def news_study(df: pd.DataFrame, spy: pd.DataFrame) -> dict[str, dict]:
+    """Each size of news day, up and down, each holding time: following the move (bought after an up
+    day, sold short after a down day). A clearly negative result means the move tends to reverse."""
+    out = {}
+    for hold in NEWS_HOLDS:
+        tr = news_trades(df, spy, hold)
+        for move in NEWS_MOVES:
+            for sign, word, act in ((1, "up", "bought"), (-1, "down", "sold short")):
+                part = tr[sign * tr["move"] >= move]
+                out[f"Closed {move:.0%}+ {word} on big volume, {act} next morning, held {hold} day"
+                    f"{'s' if hold > 1 else ''}, vs the S&P 500"] = evaluate(sign * part["ret"], part["date"],
+                                                                         COST["movers"])
     return out
 
 
@@ -249,6 +290,16 @@ def run(con: sqlite3.Connection, since: str = SINCE, log=print, chunk: int = 300
         lines += line(name, r)
         if r.get("trades"):
             lines.insert(-1, f"  stopped out {r['stopped']:.0%} of the time; worst trade {r['worst']:+.1%}")
+    spy_daily = _daily(con, ["SPY"], since)
+    spy_daily = spy_daily.assign(date=pd.to_datetime(spy_daily["date"]))[["date", "o", "c"]]
+    log("[swing] big news days...")
+    news = news_study(df, spy_daily)
+    every.update(news)
+    lines += [f"BIG NEWS DAYS (a close {NEWS_MOVES[0]:.0%}+ up or down on {NEWS_VOLUME_X:g}x+ the usual volume; "
+              "following the move from the next morning's open, vs the S&P 500; a clearly negative result "
+              "means the move tends to reverse instead)", ""]
+    for name, r in news.items():
+        lines += line(name, r)
     facts = fundamentals.load_facts(con)
     if facts.empty:
         lines.append("EARNINGS DRIFT: no company financials yet (run the fundamentals refresh).")
