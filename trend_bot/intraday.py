@@ -395,10 +395,7 @@ def earnings_days(con: sqlite3.Connection, symbols: list[str], fetch=None, log=p
         for s in todo:
             try:
                 for ts in fetch(s):
-                    t = pd.Timestamp(ts)
-                    t = t.tz_convert(NY) if t.tzinfo else t
-                    day = t.normalize() + (pd.offsets.BDay(1) if t.hour >= 16 else pd.Timedelta(0))
-                    rows.append((s, f"{day:%Y-%m-%d}"))
+                    rows.append((s, report_day(ts)))
             except Exception as e:  # noqa: BLE001 - one symbol missing just leaves it out of the filter
                 log(f"[intraday] no earnings dates for {s} ({str(e)[:60]})")
         con.executemany("INSERT OR IGNORE INTO earnings VALUES (?, ?)", rows)
@@ -406,10 +403,33 @@ def earnings_days(con: sqlite3.Connection, symbols: list[str], fetch=None, log=p
     return {(s, d) for s, d in con.execute("SELECT symbol, date FROM earnings")}
 
 
-def _yahoo_earnings(symbol: str) -> list:
+def report_day(ts) -> str:
+    """The trading day an earnings report hits the price: after the close counts for the next one."""
+    t = pd.Timestamp(ts)
+    t = t.tz_convert(NY) if t.tzinfo else t
+    return f"{t.normalize() + (pd.offsets.BDay(1) if t.hour >= 16 else pd.Timedelta(0)):%Y-%m-%d}"
+
+
+def reporting_today(symbols: list[str], today: dt.date, fetch=None, log=print) -> set[str]:
+    """The symbols whose earnings report hits today's price (reported after yesterday's close or before
+    today's open), asked fresh from Yahoo. A symbol Yahoo doesn't answer for is left out (not skipped)."""
+    fetch = fetch or (lambda s: _yahoo_earnings(s, limit=4))
+    out = set()
+    for s in symbols:
+        if s in ETFS:
+            continue
+        try:
+            if any(report_day(ts) == f"{today}" for ts in fetch(s)):
+                out.add(s)
+        except Exception as e:  # noqa: BLE001 - unknown: traded as usual
+            log(f"[day] no earnings date for {s} ({str(e)[:60]})")
+    return out
+
+
+def _yahoo_earnings(symbol: str, limit: int = 60) -> list:
     import yfinance as yf
 
-    df = yf.Ticker(symbol).get_earnings_dates(limit=60)
+    df = yf.Ticker(symbol).get_earnings_dates(limit=limit)
     return list(df.index) if df is not None else []
 
 

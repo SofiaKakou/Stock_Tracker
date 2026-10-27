@@ -461,6 +461,17 @@ class Session:
                  + (f": {', '.join(s for s, _, _ in found[:10])}" if found else ""))
         return found
 
+    def earnings_today(self) -> set[str]:
+        """The watched stocks reporting earnings into today's open (asked before the open)."""
+        try:
+            got = intraday.reporting_today(self.stocks, self.today, log=self.log)
+        except Exception as e:  # noqa: BLE001 - no calendar: nothing skipped
+            self.log(f"[day] couldn't get today's earnings dates ({str(e)[:80]})")
+            return set()
+        if got:
+            self.log(f"[day] reporting earnings into today's open: {', '.join(sorted(got))}")
+        return got
+
     def losers(self, found: list[tuple[str, int, float]]) -> int:
         """Short yesterday's big losers at the open."""
         if not found:
@@ -478,14 +489,20 @@ class Session:
     def morning(self) -> None:
         if not self.guard():
             self.protect()
-        found = self.find_losers() if self.now().time() <= GAP_LATEST else []   # scanned before the open
+        early = self.now().time() <= GAP_LATEST
+        found = self.find_losers() if early else []                  # scanned before the open
+        reporting = self.earnings_today() if early else set()
         self.wait_until(dt.time(9, 31))
         if self.now().time() <= GAP_LATEST:
             prev = self.prev_closes(self.stocks)
             first = self._bars(self.stocks, "1Min", self.at(dt.time(9, 30)))
             opens = {s: b[0]["o"] for s, b in first.items() if b}
             last = {s: b[-1]["c"] for s, b in first.items() if b}
-            self.enter("gap", gap_signals(opens, prev), last, STOCK_SLOTS,
+            gaps = gap_signals(opens, prev)
+            skipped = [s for s, _ in gaps if s in reporting]
+            if skipped:    # 10 years: fading an earnings gap lost -0.14% a trade, other gaps -0.01%
+                self.log(f"[day] gap: skipped (earnings today, the gap is news): {', '.join(skipped)}")
+            self.enter("gap", [(s, side) for s, side in gaps if s not in reporting], last, STOCK_SLOTS,
                        {s: opens[s] / prev[s] - 1 for s in opens if prev.get(s)})
             for name, part in (("gapup", self.gapups), ("loser", lambda: self.losers(found))):
                 try:        # one pattern's problem mustn't stop the others (or the rest of the day)
