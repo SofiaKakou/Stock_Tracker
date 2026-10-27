@@ -9,7 +9,7 @@ Tables (dbo.):
 - day_trades       every day trade: pattern, side, shares, signal strength, price expected vs got
                    (slippage), exit, return, $ result
 - day_summary      each day's result per pattern
-- account_values   both demo accounts' value at each day's close (and the S&P 500 for comparison)
+- account_values   the demo accounts' value at each day's close (and the S&P 500 for comparison)
 - monthly_holdings what the portfolio to follow held from each monthly update (bought = new that month)
 - safety_events    emergency exits and warnings for the portfolio's stocks
 - study_results    the latest 10-year test of each day-trading pattern

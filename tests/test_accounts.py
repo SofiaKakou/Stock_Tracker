@@ -47,3 +47,12 @@ def test_one_account_failing_doesnt_stop_the_other(tmp_path):
     hist = accounts.collect(con, Broken(), FakeAccount([100_000, 100_100]), start="2026-10-19")
     assert "monthly" not in hist and "day" in hist
     assert accounts.chart_svg({}) == "" and accounts.chart_png({}) is None
+
+
+def test_the_100_dollar_account_is_in_the_history_and_the_week(tmp_path):
+    con = db.connect(tmp_path / "m.db")
+    small = FakeAccount([0, 0, 0, 0, 100.0, 101.5], start="2026-10-20")      # funded on the Monday
+    hist = accounts.collect(con, None, None, start="2026-10-19", small=small)
+    assert hist["small"]["values"] == [100.0, 101.5]
+    assert "$100 account (demo): +1.5%" in accounts.chart_svg(hist)
+    assert "$100 account (demo)**: this week **+1.50%**" in accounts.weekly(hist, {}, dt.date(2026, 10, 27))["description"]
