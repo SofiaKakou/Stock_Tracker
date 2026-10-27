@@ -831,32 +831,61 @@ def safety_net(broker: DayBroker, now: dt.datetime, log=print) -> dict | None:
                            + " Fake money; the trading job's log on the Actions tab shows what went wrong."}
 
 
-def settle_carried(state: dict, orders: list[dict], today: dt.date) -> tuple[list[dict], list[str], float]:
+def settle_carried(state: dict, orders: list[dict], today: dt.date,
+                   earlier: list[dict] | None = None) -> tuple[list[dict], list[str], float]:
     """Trades from earlier days still open (held overnight, e.g. closed by the safety net at the next open):
-    today's closing fill completes their row in the log and their day's totals. Returns (today's other
-    orders, what was settled, its $ total)."""
+    their closing fill completes their row in the log and their day's totals. Returns (today's orders,
+    what was settled, its $ total).
+
+    The closing order is one submitted BEFORE today (`earlier`: the safety net queues it the evening before;
+    it fills at the open), never one of today's own trades. Until Oct 27 the closes were looked for among
+    today's orders, which matched old rows to today's exits (a report $2,400 off): rows settled that way are
+    put back first, and so are rows settled by an earlier run of today's report (a redo starts clean)."""
+    used = set(state.setdefault("settled_orders", []))
+    fills = {(o["symbol"], o.get("side"), str(o.get("filled_avg_price"))) for o in orders
+             if o.get("status") == "filled" and o.get("filled_avg_price")}
+    for r in state.get("log", []):
+        if r["date"] >= today.isoformat() or r.get("exit") is None:
+            continue
+        want = "sell" if r["side"] > 0 else "buy"
+        redo = r.get("settled_on") == today.isoformat()
+        wrong = not r.get("settled_on") and (r["symbol"], want, str(r["exit"])) in fills
+        if redo or wrong:
+            d = state.get("days", {}).get(r["date"], {}).get(r["pattern"])
+            if d and r.get("pnl") is not None:
+                d["pnl"] -= r["pnl"]
+                d["trades"] -= 1
+            used.discard(r.pop("settled_by", None))
+            r.update(exit=None, ret=None, pnl=None)
+            r.pop("settled_on", None)
+    end = (dt.datetime.combine(today, dt.time(23, 59), NY)).astimezone(dt.timezone.utc).isoformat()
+    candidates = sorted((o for o in (earlier or []) if o.get("status") == "filled" and o.get("filled_avg_price")
+                         and o.get("id") not in used and str(o.get("filled_at") or "") <= end),
+                        key=lambda o: str(o.get("filled_at") or ""))
     open_rows = [r for r in state.get("log", []) if r["date"] < today.isoformat() and r.get("exit") is None
                  and r.get("entry")]
-    rest, done, total = list(orders), [], 0.0
+    done, total = [], 0.0
     for r in open_rows:
         want = "sell" if r["side"] > 0 else "buy"
-        o = next((o for o in rest if o["symbol"] == r["symbol"] and o.get("side") == want
-                  and o.get("status") == "filled" and o.get("filled_avg_price")), None)
+        o = next((o for o in candidates if o["symbol"] == r["symbol"] and o.get("side") == want
+                  and str(o.get("filled_at") or "")[:10] >= r["date"] and o.get("id") not in used), None)
         if o is None:
             continue
-        rest.remove(o)
+        used.add(o.get("id"))
         exit_ = float(o["filled_avg_price"])
-        r.update(exit=exit_, ret=r["side"] * (exit_ / r["entry"] - 1), pnl=r["side"] * r["qty"] * (exit_ - r["entry"]))
+        r.update(exit=exit_, ret=r["side"] * (exit_ / r["entry"] - 1), pnl=r["side"] * r["qty"] * (exit_ - r["entry"]),
+                 settled_on=today.isoformat(), settled_by=o.get("id"))
         d = state.setdefault("days", {}).setdefault(r["date"], {}).setdefault(r["pattern"], {"pnl": 0.0, "trades": 0})
         d["pnl"] += r["pnl"]
         d["trades"] += 1
         done.append(f"{r['symbol']} {r['pnl']:+,.0f} (from {r['date']})")
         total += r["pnl"]
-    return rest, done, total
+    state["settled_orders"] = sorted(x for x in used if x)
+    return list(orders), done, total
 
 
 def report(orders: list[dict], equity: float, state: dict, today: dt.date, tested: dict | None = None,
-           last_equity: float | None = None) -> tuple[dict, dict]:
+           last_equity: float | None = None, earlier: list[dict] | None = None) -> tuple[dict, dict]:
     """Add today's results to the running state (and the trade log); returns (state, Discord embed).
 
     last_equity: the account's value at the previous close (the broker's own number). The day's change
@@ -864,7 +893,7 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     from trend_bot.alerts import GOLD, GREEN, RED, lead
 
     tested = {**(tested or {}), "short_gap_ups": GAPUP_TEST, "short_losers": LOSER_TEST}
-    orders, carried, carried_pnl = settle_carried(state, orders, today)
+    orders, carried, carried_pnl = settle_carried(state, orders, today, earlier)
     rows = trade_log(orders, state.pop("pending", []), today)
     state["log"] = [r for r in state.get("log", []) if r["date"] != today.isoformat()] + rows
     day = pnl(orders)

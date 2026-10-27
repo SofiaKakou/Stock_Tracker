@@ -503,9 +503,10 @@ def test_positions_held_over_the_weekend_are_settled_into_their_own_day():
              "log": [{"date": "2026-10-23", "symbol": "PFE", "pattern": "breakout", "side": 1, "qty": 100,
                       "entry": 25.0, "exit": None, "ret": None, "pnl": None}],
              "days": {"2026-10-23": {"breakout": {"pnl": 311.0, "trades": 11}}}}
-    orders = [{"symbol": "PFE", "side": "sell", "status": "filled", "filled_qty": "100", "filled_avg_price": "25.5",
-               "client_order_id": "safety-close"}]
-    state, e = daytrade.report(orders, 100_361.0, state, DAY, last_equity=100_311.0)
+    earlier = [{"id": "s1", "symbol": "PFE", "side": "sell", "status": "filled", "filled_qty": "100",
+                "filled_avg_price": "25.5", "client_order_id": "safety-close",
+                "submitted_at": "2026-10-23T20:15:00Z", "filled_at": "2026-10-26T13:30:01Z"}]   # queued Friday night
+    state, e = daytrade.report([], 100_361.0, state, DAY, last_equity=100_311.0, earlier=earlier)
     row = state["log"][0]
     assert row["exit"] == 25.5 and row["pnl"] == pytest.approx(50) and row["ret"] == pytest.approx(0.02)
     assert state["days"]["2026-10-23"]["breakout"] == {"pnl": pytest.approx(361.0), "trades": 12}
@@ -840,3 +841,43 @@ def test_no_more_than_about_three_positions_one_way_in_one_sector():
     assert sides == {"CCC": "sell", "EEE": "buy", "FIN": "sell"}       # DDD would be a 4th tech short: skipped
     assert any("too much in Technology" in m and "DDD" in m for m in out)
     assert sectors["AAA"] == "Technology"                               # remembered, not looked up again
+
+
+
+def test_a_held_over_trade_takes_its_queued_close_not_todays_trade_in_the_same_stock():
+    """Oct 27: WDC was left open Monday (closed by the safety net's order at Tuesday's open) and traded
+    again Tuesday. The old row must take the safety net's fill; Tuesday's trade keeps its own exit."""
+    today = dt.date(2026, 10, 27)
+    state = {"start_equity": 100_000.0,
+             "log": [{"date": "2026-10-26", "symbol": "WDC", "pattern": "breakout", "side": 1, "qty": 12,
+                      "entry": 380.0, "exit": None, "ret": None, "pnl": None}],
+             "days": {"2026-10-26": {"breakout": {"pnl": 0.0, "trades": 0}}}}
+    earlier = [{"id": "s1", "symbol": "WDC", "side": "sell", "status": "filled", "filled_qty": "12",
+                "filled_avg_price": "382", "submitted_at": "2026-10-26T20:15:00Z", "filled_at": "2026-10-27T13:30:01Z"}]
+    orders = [{"symbol": "WDC", "side": "buy", "status": "filled", "filled_qty": "12", "filled_avg_price": "384.32",
+               "client_order_id": "td-20261027-breakout-WDC", "submitted_at": "2026-10-27T15:00:58Z"},
+              {"symbol": "WDC", "side": "sell", "status": "filled", "filled_qty": "12", "filled_avg_price": "386.0",
+               "submitted_at": "2026-10-27T19:50:01Z"}]
+    state, e = daytrade.report(orders, 100_044.0, state, today, last_equity=100_000.0, earlier=earlier)
+    old = [r for r in state["log"] if r["date"] == "2026-10-26"][0]
+    new = [r for r in state["log"] if r["date"] == "2026-10-27"][0]
+    assert old["exit"] == 382.0 and old["pnl"] == pytest.approx(24)
+    assert new["exit"] == 386.0 and new["pnl"] == pytest.approx(12 * (386 - 384.32))
+    assert "Not closed yet" not in e["description"]
+    again, _ = daytrade.report(orders, 100_044.0, state, today, last_equity=100_000.0, earlier=earlier)   # a redo
+    assert again["days"]["2026-10-26"]["breakout"] == {"pnl": pytest.approx(24), "trades": 1}        # not doubled
+
+
+def test_rows_settled_from_todays_own_orders_before_the_fix_are_put_back():
+    today = dt.date(2026, 10, 27)
+    state = {"start_equity": 100_000.0,
+             "log": [{"date": "2026-10-26", "symbol": "WDC", "pattern": "breakout", "side": 1, "qty": 12,
+                      "entry": 380.0, "exit": 386.0, "ret": 386 / 380 - 1, "pnl": 72.0}],   # took today's exit
+             "days": {"2026-10-26": {"breakout": {"pnl": 72.0, "trades": 1}}}}
+    orders = [{"symbol": "WDC", "side": "sell", "status": "filled", "filled_qty": "12", "filled_avg_price": "386.0",
+               "submitted_at": "2026-10-27T19:50:01Z"}]
+    earlier = [{"id": "s1", "symbol": "WDC", "side": "sell", "status": "filled", "filled_qty": "12",
+                "filled_avg_price": "382", "submitted_at": "2026-10-26T20:15:00Z", "filled_at": "2026-10-27T13:30:01Z"}]
+    state, _ = daytrade.report(orders, 100_000.0, state, today, earlier=earlier)
+    old = [r for r in state["log"] if r["date"] == "2026-10-26"][0]
+    assert old["exit"] == 382.0 and state["days"]["2026-10-26"]["breakout"] == {"pnl": pytest.approx(24), "trades": 1}
