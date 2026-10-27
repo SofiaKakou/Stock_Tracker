@@ -439,6 +439,10 @@ later as its own step.)
   (or gets at least 0.2% less than the bid for a short). The first live trades paid about 0.17% a side
   more than expected with market orders; a limit caps that. An entry that hasn't filled in 5 minutes
   is cancelled (the moment has passed).
+- **Not one bet on an industry**: within one sector (Yahoo's: Technology, Financial Services, ...) longs
+  minus shorts at most **15% of the account**, about 3 positions one way. On Oct 27 the gap fade shorted six
+  AI-chip and data-centre stocks at once, and the whole group rallied; now a 4th short in one sector is
+  skipped (a trade that balances the sector still goes in).
 - **No fading an earnings gap**: before the open the bot asks Yahoo which watched stocks reported
   earnings after yesterday's close or before today's open, and doesn't trade against their gap (10 years:
   fading an earnings gap lost -0.14% a trade, other gaps -0.01%; the news usually keeps moving it).

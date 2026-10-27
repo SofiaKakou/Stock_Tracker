@@ -414,7 +414,7 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
         today_key = now.date().isoformat()
         state["ran"] = {today_key: sorted(set(state.get("ran", {}).get(today_key, [])) | {phase})}
     session = daytrade.Session(broker, data, symbols, now.date(), share=state.get("share"),
-                               paused=state.get("paused"))
+                               paused=state.get("paused"), sectors=state.setdefault("sectors", {}))
     try:
         if phase == "morning":
             session.morning()
