@@ -54,6 +54,13 @@ GAPUP_MIN_PRICE, GAPUP_MIN_DOLLAR_VOL = 5.0, 5e6
 # shape of the day-trading study's results so the scorecard and the learning loop treat it the same.
 GAPUP_TEST = {"trades": 2662, "days": 2662, "per_trade": 0.0035, "sd_trade": 0.06, "early": 0.0145,
               "late": 0.0024, "yearly": 0.0035 * 2662 / 20, "t": 3.1, "luck": 0.0}
+# Short yesterday's big losers (tested only; passed the 20-year swing study, "big news days"): a stock
+# that closed 15%+ down yesterday on 3x+ its usual volume (big bad news) tends to keep falling. Sold
+# short at the open (if the broker can lend it), a 15% stop above, bought back by the close.
+LOSER_MIN, LOSER_MAX, LOSER_VOLUME_X, LOSER_STOP, LOSER_SLOTS = 0.15, 0.60, 3.0, 0.15, 3
+LOSER_TEST = {"trades": 6787, "days": 6787, "per_trade": 0.0044, "sd_trade": 0.06, "early": 0.0023,
+              "late": 0.0049, "yearly": 0.0044 * 6787 / 20, "t": 3.3, "luck": 0.0}
+LOSER_EXCHANGES = {"NYSE", "NASDAQ", "ARCA", "AMEX", "BATS"}
 DAILY_LOSS_LIMIT = 0.03  # the account down 3% on the day: close everything, no more trades today
 GUARD_EVERY = 300        # seconds between loss-limit checks while waiting
 STALE_MINUTES = 15       # no trade in a stock for this long (halted?): don't enter it
@@ -88,6 +95,10 @@ class DayBroker(Paper):
     def asset(self, symbol: str) -> dict:
         return self._call("GET", f"/assets/{symbol}")
 
+    def list_assets(self) -> list[dict]:
+        """Every active US stock the broker lists."""
+        return self._call("GET", "/assets", params={"status": "active", "asset_class": "us_equity"}) or []
+
     def cancel_all(self) -> None:
         self._call("DELETE", "/orders")
 
@@ -114,6 +125,25 @@ def gapup_signals(opens: dict[str, float], prev: dict[str, float], dollar_vol: d
     ok = [s for s, x in g.items() if GAPUP_MIN <= x < GAPUP_MAX and prev[s] >= GAPUP_MIN_PRICE
           and dollar_vol.get(s, 0) >= GAPUP_MIN_DOLLAR_VOL]
     return [(s, -1) for s in sorted(ok, key=lambda s: -g[s])]
+
+
+def loser_signals(days: dict[str, list[dict]], today: dt.date) -> list[tuple[str, int, float]]:
+    """From daily bars ({symbol: [{"t", "c", "v"}...]}): stocks whose last day before `today` closed
+    LOSER_MIN-LOSER_MAX down on LOSER_VOLUME_X+ their usual volume, priced $5+ and trading $5M+ a day
+    before it: [(symbol, -1, the day's move)], biggest fall first."""
+    out = []
+    for s, bars in days.items():
+        b = [x for x in bars if x["t"][:10] < f"{today}"]
+        if len(b) < 22:
+            continue
+        news, before = b[-1], b[-21:-1]
+        move = news["c"] / before[-1]["c"] - 1
+        usual_vol = float(np.mean([x["v"] for x in before]))
+        dvol = float(np.mean([x["c"] * x["v"] for x in before]))
+        if (-LOSER_MAX < move <= -LOSER_MIN and usual_vol > 0 and news["v"] >= LOSER_VOLUME_X * usual_vol
+                and before[-1]["c"] >= GAPUP_MIN_PRICE and dvol >= GAPUP_MIN_DOLLAR_VOL):
+            out.append((s, -1, move))
+    return sorted(out, key=lambda x: x[2])
 
 
 def breakout_signals(high0: dict[str, float], low0: dict[str, float], last_close: dict[str, float],
@@ -305,9 +335,9 @@ class Session:
             return 0
         self.cancel_stale_entries()
         done = self.traded()
-        if pattern == "gapup":    # any stock in the market: count this pattern's own trades
+        if pattern in ("gapup", "loser"):    # any stock in the market: count this pattern's own trades
             used = sum(1 for o in self.today_orders()
-                       if str(o.get("client_order_id", "")).startswith(f"td-{self.today:%Y%m%d}-gapup-"))
+                       if str(o.get("client_order_id", "")).startswith(f"td-{self.today:%Y%m%d}-{pattern}-"))
         else:
             used = len(done & set(self.stocks if pattern != "momentum" else self.etfs))
         each, sent = self.budget() * size_factor(self.share, pattern), 0
@@ -345,7 +375,7 @@ class Session:
             # The price at the moment of the order: the quote's middle (the half-hour bar can be a minute old).
             expected = (bid + ask) / 2 if quoted else prices[sym]
             limit = (ask * (1 + LIMIT_SLACK) if side > 0 else bid * (1 - LIMIT_SLACK)) if quoted else None
-            loss = GAPUP_STOP if pattern == "gapup" else STOP_LOSS
+            loss = {"gapup": GAPUP_STOP, "loser": LOSER_STOP}.get(pattern, STOP_LOSS)
             stop = expected * (1 - loss) if side > 0 else expected * (1 + loss)
             try:
                 self.b.order(sym, qty, "buy" if side > 0 else "sell", f"td-{self.today:%Y%m%d}-{pattern}-{sym}",
@@ -396,6 +426,35 @@ class Session:
         sig = gapup_signals(opens, prev, dvol)
         return self.enter("gapup", sig, last, GAPUP_SLOTS, {s: opens[s] / prev[s] - 1 for s, _ in sig})
 
+    def find_losers(self, chunk: int = 300) -> list[tuple[str, int, float]]:
+        """Yesterday's big losers in the whole market (see LOSER_*), from 35 days of daily bars."""
+        try:
+            names = sorted(a["symbol"] for a in self.b.list_assets()
+                           if a.get("tradable") and a.get("shortable") and a.get("easy_to_borrow")
+                           and a.get("exchange") in LOSER_EXCHANGES and a["symbol"].isalpha()
+                           and a["symbol"] not in intraday.ETFS)
+            start = self.at(dt.time(0, 0)) - dt.timedelta(days=35)
+            days: dict[str, list[dict]] = {}
+            for i in range(0, len(names), chunk):
+                days.update(self._bars(names[i:i + chunk], "1Day", start))
+        except Exception as e:  # noqa: BLE001 - no list today: the pattern sits out
+            self.log(f"[day] loser: couldn't scan the market ({str(e)[:80]})")
+            return []
+        found = loser_signals(days, self.today)
+        self.log(f"[day] loser: {len(names):,} stocks scanned, {len(found)} closed {LOSER_MIN:.0%}+ down on big volume"
+                 + (f": {', '.join(s for s, _, _ in found[:10])}" if found else ""))
+        return found
+
+    def losers(self, found: list[tuple[str, int, float]]) -> int:
+        """Short yesterday's big losers at the open."""
+        if not found:
+            return 0
+        syms = [s for s, _, _ in found][:20]
+        first = self._bars(syms, "1Min", self.at(dt.time(9, 30)))
+        last = {s: b[-1]["c"] for s, b in first.items() if b}
+        return self.enter("loser", [(s, side) for s, side, _ in found if s in syms], last, LOSER_SLOTS,
+                          {s: m for s, _, m in found})
+
     def first_half_hour(self, symbols: list[str]) -> dict[str, dict]:
         bars = self._bars(symbols, "30Min", self.at(dt.time(9, 30)))
         return {s: b[0] for s, b in bars.items() if b and b[0]["t"].endswith(("13:30:00Z", "14:30:00Z"))}
@@ -403,6 +462,7 @@ class Session:
     def morning(self) -> None:
         if not self.guard():
             self.protect()
+        found = self.find_losers() if self.now().time() <= GAP_LATEST else []   # scanned before the open
         self.wait_until(dt.time(9, 31))
         if self.now().time() <= GAP_LATEST:
             prev = self.prev_closes(self.stocks)
@@ -412,6 +472,7 @@ class Session:
             self.enter("gap", gap_signals(opens, prev), last, STOCK_SLOTS,
                        {s: opens[s] / prev[s] - 1 for s in opens if prev.get(s)})
             self.gapups()
+            self.losers(found)
         else:
             self.log("[day] started too late for the gap fade today")
         self.breakouts(MORNING_CHECKS)
@@ -497,11 +558,13 @@ class Session:
 # --- Learning from the live trades ----------------------------------------------------------------
 
 PATTERN_TEST = {"gap": "gap_fade", "breakout": "opening_range", "momentum": "intraday_momentum",
-                "gapup": "short_gap_ups"}
-SHORT_NAME = {"gap": "gap fade", "breakout": "breakouts", "momentum": "last half hour", "gapup": "gap-up shorts"}
+                "gapup": "short_gap_ups", "loser": "short_losers"}
+SHORT_NAME = {"gap": "gap fade", "breakout": "breakouts", "momentum": "last half hour", "gapup": "gap-up shorts",
+              "loser": "loser shorts"}
 PATTERN_NAME = {"gap": "Fade big opening gaps", "breakout": "Breakout from the first half hour",
                 "momentum": "Market's last half hour follows its first",
-                "gapup": "Short the big gap-ups (tested only)"}
+                "gapup": "Short the big gap-ups (tested only)",
+                "loser": "Short yesterday's big losers (tested only)"}
 MIN_SHARE, MAX_SHARE = 0.15, 0.60     # each pattern's share of the money stays between these
 PRIOR_TRADES = 100                    # the 10-year test counts like this many live trades
 SHIFT_AFTER, PAUSE_AFTER, COST_AFTER = 20, 40, 50   # live trades needed before each kind of change
@@ -730,7 +793,7 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     in the account is the truth the trade-by-trade results must add up to; a gap is flagged."""
     from trend_bot.alerts import GOLD, GREEN, RED, lead
 
-    tested = {**(tested or {}), "short_gap_ups": GAPUP_TEST}
+    tested = {**(tested or {}), "short_gap_ups": GAPUP_TEST, "short_losers": LOSER_TEST}
     orders, carried, carried_pnl = settle_carried(state, orders, today)
     rows = trade_log(orders, state.pop("pending", []), today)
     state["log"] = [r for r in state.get("log", []) if r["date"] != today.isoformat()] + rows
@@ -749,7 +812,8 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
             t["trades"] += r["trades"]
     names = {"gap": ("gap_fade", "Fade big opening gaps"), "breakout": ("opening_range", "Breakout from the first half hour"),
              "momentum": ("intraday_momentum", "Market's last half hour follows its first"),
-             "gapup": ("short_gap_ups", PATTERN_NAME["gapup"]), "other": ("", "Other")}
+             "gapup": ("short_gap_ups", PATTERN_NAME["gapup"]), "loser": ("short_losers", PATTERN_NAME["loser"]),
+             "other": ("", "Other")}
     today_total = sum(r["pnl"] for r in day.values()) + carried_pnl
     lines = [lead("the bot's day-trading practice account (fake money) traded today and closed everything by the "
                   "close. A test of whether intraday patterns make money; nothing real was bought or sold."), ""]
