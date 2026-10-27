@@ -195,6 +195,7 @@ def make_parser() -> argparse.ArgumentParser:
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
     st.add_argument("--months", help="lookahead: month-ends to check, e.g. 2012-06-30,2021-06-30, or 'yearly' (one per year)")
     st.add_argument("--intraday-db", default="intraday.db", help="intraday: the half-hour bars database")
+    st.add_argument("--all-coins", action="store_true", help="crypto: every coin Alpaca trades, not just the 8 big ones")
     st.add_argument("--json", help="lookahead: also save the results as JSON (to combine parallel runs)")
     st.add_argument("--trees", type=int, default=300, help="ml: boosting rounds (default 300)")
     st.add_argument("--first-year", type=int, default=2011,

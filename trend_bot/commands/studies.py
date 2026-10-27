@@ -648,7 +648,13 @@ def cmd_study(args: argparse.Namespace) -> int:
             if data is None:
                 print("Needs Alpaca's market data: the ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY secrets.")
                 return 1
-            print(crypto.run(data))
+            coins = None
+            if args.all_coins:
+                from trend_bot.paper import Paper
+
+                broker = Paper.from_env()
+                coins = crypto.all_coins(broker) if broker else None
+            print(crypto.run(data, symbols=coins))
             return 0
         if args.signal == "session":
             from trend_bot import intraday, session_momentum

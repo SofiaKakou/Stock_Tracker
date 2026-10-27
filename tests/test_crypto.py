@@ -48,3 +48,20 @@ def test_a_planted_bounce_passes_and_the_report_reads_like_the_others():
     assert crypto.passes(res["dip, held 15 minutes"]) and not crypto.passes(res["momentum, held 1 day"])
     txt = crypto.text(res, hold, "2022-01-01", "2023-02-21")
     assert "Fell 2%+ in the last hour" in txt and "Passed:" in txt and "Buy and hold" in txt
+
+
+def test_each_coin_gets_its_own_line_and_all_coins_come_from_the_broker():
+    rng = np.random.default_rng(1)
+    r = rng.normal(0, 0.004, 20_000)
+    r[300::200] = -0.06
+    res, hold = crypto.study(coin("ZZZ/USD", 100 * np.exp(np.cumsum(r)), start="2022-12-01T00:00:00Z"))
+    assert "coin ZZZ/USD: big dip" in res and "coin ZZZ/USD: dip 3%" in res and "dip 4%, held 1 hour" in res
+    assert "ZZZ/USD: big dip" in crypto.text(res, hold, "a", "b")
+
+    class Broker:
+        def _call(self, method, path, params=None):
+            assert path == "/assets" and params["asset_class"] == "crypto"
+            return [{"symbol": "BTC/USD", "tradable": True}, {"symbol": "ETH/BTC", "tradable": True},
+                    {"symbol": "OLD/USD", "tradable": False}, {"symbol": "AAVE/USD", "tradable": True}]
+
+    assert crypto.all_coins(Broker()) == ["AAVE/USD", "BTC/USD"]
