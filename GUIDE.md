@@ -429,6 +429,9 @@ later as its own step.)
   (or gets at least 0.2% less than the bid for a short). The first live trades paid about 0.17% a side
   more than expected with market orders; a limit caps that. An entry that hasn't filled in 5 minutes
   is cancelled (the moment has passed).
+- **No fading an earnings gap**: before the open the bot asks Yahoo which watched stocks reported
+  earnings after yesterday's close or before today's open, and doesn't trade against their gap (10 years:
+  fading an earnings gap lost -0.14% a trade, other gaps -0.01%; the news usually keeps moving it).
 - **Not one big bet on the market**: longs minus shorts at most **50% of the account**. A trade that
   would tilt it further one way is skipped and logged ("too one-sided"); one that evens it out is fine.
 

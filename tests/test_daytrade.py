@@ -9,6 +9,12 @@ from trend_bot.paper import PaperError
 DAY = dt.date(2026, 10, 26)   # a Monday, New York winter time not yet (EDT)
 
 
+@pytest.fixture(autouse=True)
+def no_earnings_calendar(monkeypatch):
+    """No Yahoo in tests: no stock reports earnings unless a test says so."""
+    monkeypatch.setattr(daytrade.intraday, "_yahoo_earnings", lambda symbol, limit=60: [])
+
+
 def test_signals():
     assert daytrade.gap_signals({"A": 103.0, "B": 99.0, "C": 95.0}, {"A": 100.0, "B": 100.0, "C": 100.0}) == \
         [("C", 1), ("A", -1)]                                     # biggest gap first; fade it
@@ -785,3 +791,28 @@ def test_funds_are_told_apart_from_companies_by_name():
     assert daytrade.is_fund("iShares MSCI Brazil ETF") and daytrade.is_fund("Direxion Daily Semiconductor Bull 3X Shares")
     assert daytrade.is_fund("Invesco QQQ Trust, Series 1") and daytrade.is_fund("ProShares UltraPro QQQ")
     assert not daytrade.is_fund("Northern Trust Corporation") and not daytrade.is_fund("XP Inc. Class A Common Stock")
+
+
+
+def test_a_gap_made_by_an_earnings_report_isnt_faded(monkeypatch):
+    reports = {"GAPPY": [pd.Timestamp("2026-10-23 16:05", tz="America/New_York"),    # Friday after the close
+                         pd.Timestamp("2026-07-24 16:05", tz="America/New_York")],
+               "BREAKY": [pd.Timestamp("2026-10-27 07:00", tz="America/New_York")]}  # tomorrow: not today
+    monkeypatch.setattr(daytrade.intraday, "_yahoo_earnings", lambda symbol, limit=60: reports.get(symbol, []))
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker, out = FakeBroker(), []
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=out.append,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    tags = [o["client_order_id"] for o in broker.orders]
+    assert "td-20261026-gap-GAPPY" not in tags and any("earnings today" in m and "GAPPY" in m for m in out)
+    assert "td-20261026-breakout-BREAKY" in tags                      # other patterns unaffected
+
+
+def test_report_days_count_after_the_close_for_the_next_trading_day():
+    from trend_bot import intraday
+
+    assert intraday.report_day(pd.Timestamp("2026-10-23 16:05", tz="America/New_York")) == "2026-10-26"   # Fri -> Mon
+    assert intraday.report_day(pd.Timestamp("2026-10-26 07:00", tz="America/New_York")) == "2026-10-26"
+    assert intraday.reporting_today(["A", "SPY"], DAY, fetch=lambda s: (_ for _ in ()).throw(RuntimeError("down")),
+                                    log=lambda *_: None) == set()     # Yahoo down: nothing skipped
