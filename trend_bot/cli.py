@@ -264,6 +264,7 @@ def make_parser() -> argparse.ArgumentParser:
     bs.add_argument("--job-status", help="the cloud run's status so far (success/failure)")
     bs.add_argument("--daytrade", default="daytrade.json", help="the day-trading running totals (default: daytrade.json)")
     bs.add_argument("--run-url", help="link to the cloud run, shown at the bottom")
+    bs.add_argument("--repo", help="GitHub repository to follow live, owner/name (default: this checkout's)")
     bs.add_argument("--open", action="store_true", help="open the page when done")
     bs.set_defaults(func=cmd_office)
 

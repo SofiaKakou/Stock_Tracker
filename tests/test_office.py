@@ -61,7 +61,7 @@ def test_the_page_is_one_self_contained_file(tmp_path):
     assert page.count('<button class="row"') == len(workers) == len(office.DESKS) + 1
     assert set(office.LOOKS) == set(office.PLATE) == {w["key"] for w in workers}
     assert "</script><b>x" not in page and "https://example.invalid/run" in page
-    assert "http" not in page.replace("https://example.invalid/run", "").replace("http://www.w3.org", "")
+    assert "<script src" not in page and "<link" not in page   # nothing loaded from elsewhere
 
 
 def test_office_command_writes_the_page(tmp_path, capsys):
@@ -71,3 +71,31 @@ def test_office_command_writes_the_page(tmp_path, capsys):
     out = tmp_path / "office.html"
     assert main(["office", "--db", str(tmp_path / "m.db"), "--out", str(out), "--daytrade", str(tmp_path / "x")]) == 0
     assert out.exists() and "Price collector" in capsys.readouterr().out
+
+
+def test_every_workflow_and_nightly_step_has_a_worker_to_show_it_live():
+    from pathlib import Path
+
+    import yaml
+
+    flows = Path(__file__).resolve().parents[1] / ".github/workflows"
+    assert {f.name for f in flows.glob("*.yml")} == set(office.LIVE_WORKFLOWS)
+    assert set(office.LIVE_WORKFLOWS.values()) - {"steps"} <= set(office.LOOKS)
+    nightly = yaml.safe_load((flows / "nightly.yml").read_text())["jobs"]
+    names = [s["name"] for job in nightly.values() for s in job["steps"] if "name" in s]
+    assert all(set(office.step_workers(n)) <= set(office.LOOKS) for n in names)
+    expect = {"Update data": ["prices", "sec", "finra"], "Retry prices later": ["prices"], "Did the SEC refuse?": ["sec"],
+              "Try the SEC again from this machine": ["sec"], "Monthly honesty check": ["ideas"],
+              "Portfolio safety": ["safety"], "Demo account": ["demo"], "$100 account": ["demo"],
+              "Demo accounts over time": ["demo"], "Collect news, the economy and the ranking": ["news"],
+              "Trading journal": ["journal"], "Report": ["boss"], "Bot health": ["boss"], "Office": ["logbook"],
+              "Restore day-trading results": ["logbook"], "Keep the report": ["logbook"], "Save database": ["logbook"]}
+    assert {n: office.step_workers(n) for n in expect} == expect
+    assert set(expect) <= set(names)
+
+
+def test_the_page_follows_the_repository_live_only_when_it_knows_it(tmp_path):
+    workers = office.survey(healthy(tmp_path), today=TODAY, daytrade_path=None)
+    page = office.build_office(workers, repo="someone/Stock_Tracker")
+    assert '"repo": "someone/Stock_Tracker"' in page and "api.github.com/repos/" in page
+    assert '"repo": null' in office.build_office(workers)

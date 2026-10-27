@@ -241,7 +241,8 @@ def cmd_office(args: argparse.Namespace) -> int:
                                 job_status=args.job_status, daytrade_path=args.daytrade)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(office.build_office(workers, run_url=args.run_url), encoding="utf-8")
+    out.write_text(office.build_office(workers, run_url=args.run_url, repo=args.repo or office.repo_name()),
+                   encoding="utf-8")
     for w in workers:
         print(f"  {office.LABEL[w['status']]:<13} {w['name']:<22} {w['headline']}")
     print(f"Office saved to {out.resolve()}")

@@ -2,7 +2,7 @@
 what works (in the style of Pixel Agents).
 
 A self-contained web page (like the report), read from the same database the bot uses every night.
-What a worker is doing shows how that part of the bot is:
+What a worker is doing shows how that part of the bot is (from the nightly health check):
 
   typing at the desk, green screen            working
   "!" bubble, yellow screen                   needs a look
@@ -22,8 +22,16 @@ What a worker is doing shows how that part of the bot is:
   Journal clerk          the trading journal in SQL Server
   Logbook keeper         the logbook: every command run and whether it finished
 
-Workers who are fine take the odd coffee break. Click a worker for the details. Nothing here changes
-anything; it only reads.
+Live, like Pixel Agents: the page asks GitHub every minute or two what the bot is running right now (the
+public Actions API: no key, no server, works on the published page and from a downloaded file). The worker
+whose step is running types fast (in the nightly run, step by step: 'Collect news' is the news crawler);
+a worker whose desk was empty walks in through the door when their job starts; a run that just failed
+puts its worker up next to a smoking screen; a run waiting to start shows a "…" bubble; the boss walks
+round to whoever is busy or has a problem. A strip above the office says what's running, and the recent
+runs are listed below it. Between runs the workers rest, and those who are fine take the odd coffee break.
+GitHub allows ~60 such requests an hour per network, so the page paces itself and pauses while hidden.
+
+Click a worker for the details. Nothing here changes anything; it only reads.
 """
 
 from __future__ import annotations
@@ -31,7 +39,10 @@ from __future__ import annotations
 import datetime as dt
 import html
 import json
+import os
+import re
 import sqlite3
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -290,6 +301,39 @@ def survey(con: sqlite3.Connection, today: dt.date | None = None, failed_steps: 
 DESKS = ["prices", "sec", "finra", "news", "ideas", "demo", "daytrade", "safety", "journal", "logbook"]
 PLATE = {"boss": "BOSS", "prices": "PRICES", "sec": "SEC", "finra": "FINRA", "news": "NEWS", "ideas": "IDEAS",
          "demo": "DEMO", "daytrade": "DAY TRADE", "safety": "SAFETY", "journal": "JOURNAL", "logbook": "LOGBOOK"}
+# Live: which worker a GitHub Actions workflow belongs to ("steps": the nightly run, read step by step).
+LIVE_WORKFLOWS = {"nightly.yml": "steps", "daytrade.yml": "daytrade", "daytrade-safety.yml": "safety",
+                  "demo.yml": "demo", "demo-morning.yml": "demo", "research.yml": "ideas", "research-parallel.yml": "ideas",
+                  "why.yml": "ideas", "ai.yml": "ideas", "journal.yml": "journal", "market-mirror.yml": "journal",
+                  "import-db.yml": "logbook", "tests.yml": "logbook"}
+# Steps of the nightly run -> the workers doing them (the first match wins; anything else: the logbook keeper).
+LIVE_STEPS = [("restore", ["logbook"]), ("save database", ["logbook"]), ("backup", ["logbook"]), ("keep the report", ["logbook"]),
+              ("office", ["logbook"]), ("update data", ["prices", "sec", "finra"]), ("retry prices", ["prices"]),
+              ("sec", ["sec"]), ("monthly honesty", ["ideas"]), ("discord alerts", ["boss"]), ("portfolio safety", ["safety"]),
+              ("account", ["demo"]), ("collect news", ["news"]), ("trading journal", ["journal"]), ("report", ["boss"]),
+              ("bot health", ["boss"]), ("make it the home page", ["logbook"]), ("publish", ["logbook"])]
+LIVE_WAIT_STEPS = ["retry prices later"]   # a step that mostly waits (an hour's pause before trying again)
+
+
+def step_workers(name: str) -> list[str]:
+    """The workers doing a step of the nightly run (the page does the same in JavaScript)."""
+    n = name.lower()
+    return next((keys for words, keys in LIVE_STEPS if words in n), ["logbook"])
+
+
+def repo_name() -> str | None:
+    """owner/name of the GitHub repository (GitHub provides it; else from the local checkout's remote)."""
+    if os.environ.get("GITHUB_REPOSITORY"):
+        return os.environ["GITHUB_REPOSITORY"]
+    try:
+        url = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "config", "--get", "remote.origin.url"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"[/:]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
 # Hair, skin, shirt, pants for each worker.
 LOOKS = {"boss": ("#3b2a1a", "#f1c7a0", "#e8e8ef", "#2d3446"), "prices": ("#e0a030", "#f5d0b0", "#3f7fd0", "#33415c"),
          "sec": ("#2b1d14", "#c98e62", "#8a5cc2", "#2f2f3f"), "finra": ("#b03a2e", "#f1c7a0", "#2f9e6a", "#3a3a4a"),
@@ -347,6 +391,22 @@ dialog::backdrop { background: rgba(10,10,20,.5); }
 .dlg ul { margin: 0; padding-left: 18px; } .dlg li { margin: 3px 0; overflow-wrap: anywhere; }
 .dlg .close { float: right; border: 2px solid var(--line); background: var(--bg); color: var(--ink); font: inherit;
               font-weight: 800; padding: 1px 9px; cursor: pointer; }
+.live { background: var(--card); border: 2px solid var(--line); border-bottom: 0; padding: 6px 10px; font-size: 13px;
+        min-height: 34px; overflow-wrap: anywhere; }
+.live a { color: inherit; } .live b { margin-right: 6px; }
+.beat { display: inline-block; width: 9px; height: 9px; background: var(--off); margin-right: 6px; }
+.beat.on { background: var(--ok); }
+@media (prefers-reduced-motion: no-preference) { .beat.on { animation: beat 1s steps(2) infinite; } }
+@keyframes beat { 50% { opacity: .25; } }
+.runs { margin-top: 18px; } .runs h2 { font-size: 15px; margin: 0 0 6px; }
+#feed { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px; }
+#feed a { display: flex; gap: 8px; align-items: baseline; background: var(--card); border: 2px solid var(--line);
+          padding: 4px 8px; color: inherit; text-decoration: none; font-size: 13px; }
+#feed a:hover { border-color: var(--ink-2); }
+#feed .i { width: 12px; font-weight: 800; } #feed .t { margin-left: auto; color: var(--ink-2); white-space: nowrap; font-size: 12px; }
+#feed .run .i { color: var(--ok); } #feed .bad .i { color: var(--bad); } #feed .wait .i { color: var(--warn); }
+.dlg .now { margin: 6px 0; font-weight: 700; } .dlg .now.run { color: var(--ok); } .dlg .now.bad { color: var(--bad); }
+.dlg .now a { color: inherit; }
 footer { margin-top: 14px; color: var(--ink-2); font-size: 12px; text-align: center; }
 footer a { color: inherit; }
 @media (max-width: 640px) {
@@ -426,6 +486,7 @@ function drawRoom() {
   rect(323, 62, 12, 2, '#3a3d44'); rect(330, 46, 2, 2, '#ff5a3c');
   rect(296, 52, 14, 16, '#c9d8e6'); rect(298, 40, 10, 12, '#9fd3f5'); rect(296, 66, 14, 2, '#7f8c99');    // water cooler
   plant(6, 196); plant(338, 196); plant(108, 56); plant(236, 56);
+  rect(0, 138, 4, 28, '#5a3a22'); rect(1, 140, 2, 24, '#7a5232'); rect(4, 142, 8, 20, '#6a4a6a');   // the door
   rect(126, 36, 100, 30, '#8f3b3b'); rect(128, 38, 96, 26, '#a54646');                // rug under the boss
   g = keep;
 }
@@ -436,84 +497,128 @@ function plant(x, y) {
 
 // --- desks and people
 const STATUS = {ok: '#2fa84f', warn: '#e7a91d', bad: '#e0453a', off: '#8a857b'};
+const LIVE = DATA.live || {};
+const live = {busy: {}, wait: {}, failed: {}, state: LIVE.repo ? 'starting' : 'off', runs: [], nextAt: 0};
+const statusOf = k => live.failed[k] ? 'bad' : DATA.workers[k].status;
+const busy = k => !!live.busy[k];
 const people = {};
 const desks = DATA.desks.map((key, i) => ({key, cx: 40 + (i % 5) * 68, top: i < 5 ? 104 : 170, row: i < 5 ? 0 : 1}));
 desks.unshift({key: 'boss', cx: 176, top: 54, row: -1});
-const AISLE = [86, 152], COFFEE = {x: 326, y: 80};
-desks.forEach(d => {
-  const w = DATA.workers[d.key]; d.w = w;
-  if (w.status === 'off') return;
-  const broken = w.status === 'bad' && d.key !== 'boss';   // the boss stays on its feet to go and help
-  const p = people[d.key] = {d, look: w.look, x: d.cx - 4, y: d.top - 1, mode: broken ? 'stand' : 'sit',
-                             path: [], wait: 0, next: rnd(6, 30), phase: rnd(0, 1000), steps: 0};
-  if (broken) { p.x = d.cx - 28; p.y = d.top + 10; }
-});
+const AISLE = [86, 152], COFFEE = {x: 326, y: 80}, DOOR = {x: -10, y: AISLE[1]};
+const seat = d => ({x: d.cx - 4, y: d.top - 1}), side = d => ({x: d.cx - 28, y: d.top + 10});
 
-function exitPath(d) {   // from a desk to the walkway above it, then (row 2) up a lane to the top walkway
-  const pts = [{x: d.cx - 4, y: d.top - 1}, {x: d.cx - 4, y: d.row === 1 ? AISLE[1] : AISLE[0]}];
+function want(p) {        // where a worker belongs right now: at the desk, up next to it (broken), or out
+  const k = p.d.key, st = statusOf(k);
+  if (k === 'boss' || busy(k) || live.wait[k]) return 'seat';
+  return st === 'off' ? 'away' : st === 'bad' ? 'side' : 'seat';
+}
+function place(p) { const q = p.at === 'side' ? side(p.d) : p.at === 'away' ? DOOR : seat(p.d); p.x = q.x; p.y = q.y; }
+desks.forEach(d => {
+  d.w = DATA.workers[d.key];
+  const p = people[d.key] = {d, look: d.w.look, at: 'seat', mode: 'rest', path: [], wait: 0, next: rnd(6, 30),
+                             phase: rnd(0, 1000), steps: 0, out: false};
+  p.at = want(p); place(p);
+});
+const boss = people.boss;
+boss.next = 2;
+
+function doorPath(d) {    // from the door (left wall) to a desk
+  const pts = [{x: DOOR.x, y: AISLE[1]}, {x: 8, y: AISLE[1]}];
+  if (d.row === 1) pts.push({x: d.cx - 4, y: AISLE[1]});
+  else pts.push({x: 8, y: AISLE[0]}, {x: d.cx - 4, y: AISLE[0]});
+  return pts.concat([seat(d)]);
+}
+function route(from, to, d) {
+  if (from === to) return [];
+  if (from === 'seat' && to === 'side') return [{x: d.cx - 28, y: d.top - 1}, side(d)];
+  if (from === 'side' && to === 'seat') return [{x: d.cx - 28, y: d.top - 1}, seat(d)];
+  if (from === 'away' && to === 'seat') return doorPath(d);
+  if (from === 'seat' && to === 'away') return doorPath(d).reverse().slice(1);
+  return route(from, 'seat', d).concat(route('seat', to, d));
+}
+function exitPath(d) {    // from a desk to the top walkway (second row: up the lane on its right)
+  const pts = [seat(d), {x: d.cx - 4, y: d.row === 1 ? AISLE[1] : AISLE[0]}];
   if (d.row === 1) pts.push({x: d.cx + 34, y: AISLE[1]}, {x: d.cx + 34, y: AISLE[0]});
   if (d.row === -1) { pts.length = 1; pts.push({x: d.cx - 30, y: d.top - 1}, {x: d.cx - 30, y: AISLE[0]}); }
   return pts;
 }
-function visitPath(d) {  // from the top walkway to the right side of a worker's desk
+function visitPath(d) {   // from the top walkway to the right side of a worker's desk
   if (d.row === 0) return [{x: d.cx + 26, y: AISLE[0]}, {x: d.cx + 26, y: d.top + 10}];
   return [{x: d.cx + 34, y: AISLE[0]}, {x: d.cx + 34, y: AISLE[1]}, {x: d.cx + 26, y: AISLE[1]}, {x: d.cx + 26, y: d.top + 10}];
 }
-const boss = people.boss;
-const visits = desks.filter(d => d.key !== 'boss' && ['bad', 'warn'].includes(d.w.status))
-                    .sort((a, b) => (b.w.status === 'bad') - (a.w.status === 'bad'));
-let visitIdx = 0, onBreak = null;
-if (boss) boss.next = 2;
 
+let visitIdx = 0, onBreak = null;
 function go(p, pts, then) { p.mode = 'walk'; p.path = pts.slice(); p.then = then; }
+function trip(p, there, stay, after) {   // walk somewhere from the desk, stay a while, come back
+  const out = exitPath(p.d), path = out.concat(there);
+  p.out = true;
+  go(p, path, () => {
+    p.wait = stay; p.after = () => {
+      after && after();
+      go(p, path.slice().reverse(), () => {
+        p.out = false; p.visiting = null; p.next = p === boss ? 4 : rnd(20, 50);
+        if (onBreak === p) onBreak = null;
+      });
+    };
+  });
+}
 function update(p, dt) {
   if (p.mode === 'walk') {
     const t = p.path[0];
-    if (!t) { p.then && p.then(); return; }
+    if (!t) { p.mode = 'rest'; const f = p.then; p.then = null; f && f(); return; }
     const dx = t.x - p.x, dy = t.y - p.y, dist = Math.hypot(dx, dy), step = 34 * dt;
     if (dist <= step) { p.x = t.x; p.y = t.y; p.path.shift(); } else { p.x += dx / dist * step; p.y += dy / dist * step; }
     p.steps += step;
     return;
   }
-  if (p.wait > 0) { p.wait -= dt; if (p.wait <= 0 && p.after) { const f = p.after; p.after = null; f(); } return; }
-  if (p.mode !== 'sit') return;
-  p.next -= dt;
-  if (p.next > 0) return;
-  if (p === boss) {
-    if (!visits.length) { p.next = 1e9; return; }
-    const d = visits[visitIdx++ % visits.length], out = exitPath(p.d);
-    go(p, out.concat(visitPath(d)), () => {
-      p.mode = 'stand'; p.visiting = d; p.wait = 4; p.after = () => {
-        p.visiting = null;
-        go(p, visitPath(d).reverse().concat(out.reverse()), () => { p.mode = 'sit'; p.x = p.d.cx - 4; p.y = p.d.top - 1; p.next = 5; });
-      };
-    });
+  if (p.wait > 0) {
+    p.wait = p.coffee && busy(p.d.key) ? 0 : p.wait - dt;   // work came in: cut the coffee break short
+    if (p.wait <= 0 && p.after) { const f = p.after; p.after = null; f(); }
     return;
   }
-  if (onBreak || p.d.w.status !== 'ok') { p.next = rnd(5, 20); return; }
+  if (p.out) return;
+  const w = want(p);
+  if (w !== p.at) {
+    if (p.at === 'away') { p.x = DOOR.x; p.y = DOOR.y; }
+    go(p, route(p.at, w, p.d), () => { p.at = w; });
+    return;
+  }
+  p.next -= dt;
+  if (p.next > 0) return;
+  if (p === boss) {       // the boss checks on whoever has a problem, then whoever is busy
+    const problems = desks.filter(d => d.key !== 'boss' && ['bad', 'warn'].includes(statusOf(d.key)));
+    const working = desks.filter(d => d.key !== 'boss' && busy(d.key) && !problems.includes(d));
+    const todo = problems.concat(working);
+    if (!todo.length) { p.next = 3; return; }
+    const d = todo[visitIdx++ % todo.length];
+    trip(p, visitPath(d), 4, null);
+    p.visiting = d;
+    return;
+  }
+  if (onBreak || p.at !== 'seat' || busy(p.d.key) || statusOf(p.d.key) !== 'ok') { p.next = rnd(5, 20); return; }
   onBreak = p;
-  const out = exitPath(p.d), there = [{x: COFFEE.x, y: AISLE[0]}, COFFEE];
-  go(p, out.concat(there), () => {
-    p.mode = 'stand'; p.coffee = true; p.wait = 3; p.after = () => {
-      go(p, there.reverse().slice(1).concat(out.reverse()), () => {
-        p.mode = 'sit'; p.coffee = false; onBreak = null; p.next = rnd(20, 50); });
-    };
-  });
+  p.coffee = true;
+  trip(p, [{x: COFFEE.x, y: AISLE[0]}, COFFEE], 3, () => { p.coffee = false; });
 }
+const seated = p => p.at === 'seat' && !p.out && p.mode !== 'walk';
+const visible = p => !(p.at === 'away' && p.mode !== 'walk');
 
 function drawDesk(d, t) {
-  const {cx, top} = d, st = d.w.status, big = d.key === 'boss';
+  const {cx, top} = d, st = statusOf(d.key), big = d.key === 'boss', b = busy(d.key);
   const half = big ? 26 : 20;
   rect(cx - half, top, half * 2, 6, big ? '#7a4a2a' : '#c8945a'); rect(cx - half, top + 6, half * 2, 8, big ? '#5a341c' : '#8a5a32');
   rect(cx - half, top + 14, 2, 3, '#4a2f1a'); rect(cx + half - 2, top + 14, 2, 3, '#4a2f1a');
   rect(cx - 9, top + 1, 10, 3, '#5c6470'); rect(cx - 8, top + 2, 8, 1, '#8b95a3');          // keyboard
   rect(cx - half + 3, top + 1, 3, 3, '#e8e1d4');                                        // mug
-  // monitor
-  rect(cx + 3, top - 12, 14, 11, '#24242e'); rect(cx + 9, top - 1, 2, 2, '#24242e');
+  rect(cx + 3, top - 12, 14, 11, '#24242e'); rect(cx + 9, top - 1, 2, 2, '#24242e');     // monitor
   const sx = cx + 4, sy = top - 11, blink = Math.floor(t * 2 + d.cx) % 2;
-  if (st === 'ok') {
+  if (b) {                // working right now: code scrolling fast
     rect(sx, sy, 12, 8, '#0e3b22');
-    for (let k = 0; k < 4; k++) { const len = 3 + ((k * 7 + Math.floor(t * 3) + d.cx) % 8); rect(sx + 1, sy + 1 + k * 2, Math.min(len, 10), 1, '#5fe08a'); }
+    for (let k = 0; k < 4; k++) { const len = 2 + ((k * 5 + Math.floor(t * 9) + d.cx) % 9); rect(sx + 1, sy + 1 + k * 2, Math.min(len, 10), 1, '#8affb0'); }
+  } else if (st === 'ok') {   // fine and idle: a screensaver
+    rect(sx, sy, 12, 8, '#0b2618');
+    const k = Math.floor(t * 3 + d.cx) % 20, x = k < 10 ? k : 19 - k;
+    rect(sx + 1 + x, sy + 3 + (Math.floor(t + d.cx) % 3), 2, 1, '#3fae66');
   } else if (st === 'warn') {
     rect(sx, sy, 12, 8, '#4a3a0a'); if (blink) text('!', sx + 4, sy + 1, '#f5c451');
   } else if (st === 'bad') {
@@ -525,71 +630,75 @@ function drawDesk(d, t) {
   } else {
     rect(sx, sy, 12, 8, '#111116'); rect(cx + 12, top - 13, 6, 5, '#f7e37a');               // sticky note
   }
-  // nameplate
   const label = DATA.plates[d.key], w = label.length * 4 + 7, px = cx - Math.round(w / 2);
-  rect(px, top + 18, w, 9, '#2a211b'); rect(px + 2, top + 21, 3, 3, STATUS[st]);
-  text(label, px + 7, top + 20, st === 'off' ? '#9b9387' : '#f3e7cf');
+  rect(px, top + 18, w, 9, '#2a211b'); rect(px + 2, top + 21, 3, 3, b && blink ? '#8affb0' : STATUS[st]);
+  text(label, px + 7, top + 20, st === 'off' && !b ? '#9b9387' : '#f3e7cf');
 }
 function drawChair(d) {
   rect(d.cx - 12, d.top - 8, 16, 8, '#3b3f4a'); rect(d.cx - 11, d.top - 7, 14, 6, '#4b505d');
 }
 function drawSeated(p, t) {
-  const x = p.d.cx - 10, y = p.d.top - 11;
-  const bob = p.d.w.status === 'warn' ? 0 : (Math.floor((t * 1000 + p.phase) / 600) % 4 === 0 ? 1 : 0);
-  sprite(SEAT, x, y + bob, p.look, p.d.key === 'boss');
+  const idle = !busy(p.d.key) && statusOf(p.d.key) !== 'warn';
+  const bob = idle && Math.floor((t * 1000 + p.phase) / 900) % 5 === 0 ? 1 : 0;
+  sprite(SEAT, p.d.cx - 10, p.d.top - 11 + bob, p.look, p.d.key === 'boss');
 }
 function drawHands(p, t) {
-  if (p.mode !== 'sit') return;
-  const typing = p.d.w.status === 'ok' && !still, f = typing ? Math.floor((t * 1000 + p.phase) / 140) % 2 : 0;
   const skin = p.look[1], y = p.d.top + 1;
-  if (p.d.w.status === 'warn') { rect(p.d.cx - 7, y, 2, 2, skin); rect(p.d.cx - 1, y, 2, 2, skin); return; }
-  rect(p.d.cx - 9 + f, y - f, 2, 2, skin); rect(p.d.cx - 3 - f, y - (1 - f), 2, 2, skin);
+  if (busy(p.d.key) && !still) {
+    const f = Math.floor((t * 1000 + p.phase) / 110) % 2;
+    rect(p.d.cx - 9 + f, y - f, 2, 2, skin); rect(p.d.cx - 3 - f, y - (1 - f), 2, 2, skin);
+  } else { rect(p.d.cx - 8, y + 1, 2, 2, skin); rect(p.d.cx - 2, y + 1, 2, 2, skin); }
 }
 function drawStanding(p, t) {
   const moving = p.mode === 'walk', f = moving ? 1 + Math.floor(p.steps / 5) % 2 : 0;
   const x = Math.round(p.x) - 6, y = Math.round(p.y) - 19 - (moving && f === 1 ? 1 : 0);
   rect(x + 2, Math.round(p.y) - 1, 9, 2, 'rgba(0,0,0,.18)');
   sprite(STAND.concat(LEGS[f]), x, y, p.look, p.d.key === 'boss');
-  if (p.coffee) { rect(x + 10, y + 11, 3, 3, '#ffffff'); if (!still && Math.floor(t * 3) % 2) rect(x + 11, y + 8, 1, 2, '#cfcfcf'); }
+  if (p.coffee && !moving) { rect(x + 10, y + 11, 3, 3, '#ffffff'); if (!still && Math.floor(t * 3) % 2) rect(x + 11, y + 8, 1, 2, '#cfcfcf'); }
 }
 const BUBBLE = {warn: ['#f5c451', '!', '#3a2a00'], bad: ['#e0453a', '!', '#ffffff'], visit: ['#ffffff', '?', '#2a211b'],
-                fine: ['#2fa84f', '+', '#ffffff']};
+                fine: ['#2fa84f', '+', '#ffffff'], wait: ['#ffffff', '', '#2a211b']};
 function bubble(x, y, kind, t) {
   const [bg, ch, fg] = BUBBLE[kind], b = still ? 0 : Math.round(Math.sin(t * 4) * 1);
   x = Math.round(x); y = Math.round(y) + b;
   rect(x - 1, y - 1, 11, 11, '#1b1b24'); rect(x, y, 9, 9, bg); rect(x + 3, y + 10, 3, 2, '#1b1b24'); rect(x + 4, y + 10, 1, 1, bg);
-  text(ch, x + 3, y + 2, fg);
+  if (ch) text(ch, x + 3, y + 2, fg);
+  else for (let k = 0; k < 3; k++) rect(x + 2 + k * 2, y + 4 - (!still && Math.floor(t * 3) % 3 === k ? 1 : 0), 1, 1, fg);
 }
 
 function frame(t) {
   g.drawImage(room, 0, 0);
-  const blink = Math.floor(t * 2) % 2;
-  ['prices', 'sec', 'finra', 'news'].forEach((k, i) => {
-    const st = DATA.workers[k].status;
-    rect(34, 43 + i * 6, 2, 2, st === 'ok' ? (blink || i % 2 ? '#5fe08a' : '#1f5f35') : st === 'off' ? '#444' : blink ? STATUS[st] : '#333');
+  const blink = Math.floor(t * 2) % 2, fast = Math.floor(t * 8) % 2;
+  ['prices', 'sec', 'finra', 'news'].forEach((k, i) => {   // the server rack: one light per data source
+    const st = statusOf(k);
+    rect(34, 43 + i * 6, 2, 2, busy(k) ? (fast ? '#8affb0' : '#1f5f35') : st === 'ok' ? '#3fae66' : st === 'off' ? '#444' : blink ? STATUS[st] : '#333');
   });
   const items = [];
   desks.forEach(d => {
     const p = people[d.key];
     items.push({y: d.top - 1.5, f: () => drawChair(d)});
-    if (p && p.mode === 'sit') items.push({y: d.top - 0.5, f: () => drawSeated(p, t)});
-    items.push({y: d.top, f: () => { drawDesk(d, t); p && drawHands(p, t); }});
+    if (seated(p)) items.push({y: d.top - 0.5, f: () => drawSeated(p, t)});
+    items.push({y: d.top, f: () => { drawDesk(d, t); seated(p) && drawHands(p, t); }});
   });
-  Object.values(people).forEach(p => { if (p.mode !== 'sit') items.push({y: p.y, f: () => drawStanding(p, t)}); });
+  Object.values(people).forEach(p => { if (visible(p) && !seated(p)) items.push({y: p.y, f: () => drawStanding(p, t)}); });
   items.sort((a, b) => a.y - b.y).forEach(i => i.f());
   Object.values(people).forEach(p => {
-    const st = p.d.w.status, sit = p.mode === 'sit', hx = sit ? p.d.cx - 4 : p.x, hy = sit ? p.d.top - 24 : p.y - 32;
-    if (p === boss) { if (p.visiting) bubble(hx - 4, hy, 'visit', t); else if (sit && st === 'ok') bubble(hx - 4, hy, 'fine', t); return; }
-    if (st === 'warn' || st === 'bad') bubble(hx - 4, hy, st, t);
-  });
-  if (DATA.clock) {   // the wall clock shows the time the page was made
-    const [hh, mm] = DATA.clock, cx = 108, cy = 17;
-    rect(cx - 6, cy - 6, 13, 13, '#2a211b'); rect(cx - 5, cy - 5, 11, 11, '#fbf6e9');
-    for (let k = 0; k <= 4; k++) {
-      const a = (mm / 60) * 2 * Math.PI, b = ((hh % 12) / 12 + mm / 720) * 2 * Math.PI;
-      rect(cx + Math.sin(a) * k, cy - Math.cos(a) * k, 1, 1, '#2a211b');
-      if (k <= 3) rect(cx + Math.sin(b) * k, cy - Math.cos(b) * k, 1, 1, '#c0392b');
+    if (!visible(p)) return;
+    const k = p.d.key, st = statusOf(k), s = seated(p), hx = s ? p.d.cx - 4 : p.x, hy = s ? p.d.top - 24 : p.y - 32;
+    if (p === boss) {
+      if (p.out && p.mode !== 'walk' && p.visiting && ['bad', 'warn'].includes(statusOf(p.visiting.key))) bubble(hx - 4, hy, 'visit', t);
+      else if (s && st === 'ok' && !Object.keys(live.busy).length) bubble(hx - 4, hy, 'fine', t);
+      return;
     }
+    if (live.wait[k] && !busy(k)) bubble(hx - 4, hy, 'wait', t);
+    else if (st === 'warn' || st === 'bad') bubble(hx - 4, hy, st, t);
+  });
+  const now = new Date(), hh = now.getHours(), mm = now.getMinutes(), cx = 108, cy = 17;   // the wall clock
+  rect(cx - 6, cy - 6, 13, 13, '#2a211b'); rect(cx - 5, cy - 5, 11, 11, '#fbf6e9');
+  for (let k = 0; k <= 4; k++) {
+    const a = (mm / 60) * 2 * Math.PI, b = ((hh % 12) / 12 + mm / 720) * 2 * Math.PI;
+    rect(cx + Math.sin(a) * k, cy - Math.cos(a) * k, 1, 1, '#2a211b');
+    if (k <= 3) rect(cx + Math.sin(b) * k, cy - Math.cos(b) * k, 1, 1, '#c0392b');
   }
 }
 
@@ -601,19 +710,127 @@ function loop(now) {
   frame(now / 1000);
   requestAnimationFrame(loop);
 }
-if (still) frame(0); else requestAnimationFrame(loop);
+if (still) { const tick = () => { Object.values(people).forEach(p => { p.at = want(p); place(p); }); frame(0); };
+             tick(); setInterval(tick, 5000); }
+else requestAnimationFrame(loop);
+
+// --- live: what's running on GitHub Actions right now (the public API: no key needed, ~60 requests an hour)
+const API = 'https://api.github.com/repos/' + LIVE.repo;
+const WAITING = ['queued', 'waiting', 'requested', 'pending'], FAILED = ['failure', 'timed_out', 'startup_failure'];
+let quota = null, timer = null, nightlyRunning = false;
+function stepWorkers(name) {
+  const n = name.toLowerCase();
+  for (const [words, keys] of LIVE.steps) if (n.includes(words)) return keys;
+  return ['logbook'];
+}
+async function get(url) {
+  const r = await fetch(API + url, {headers: {Accept: 'application/vnd.github+json'}});
+  const left = r.headers.get('x-ratelimit-remaining'), reset = r.headers.get('x-ratelimit-reset');
+  if (left !== null) quota = {left: +left, reset: +reset};
+  if (!r.ok) { const e = new Error('GitHub ' + r.status); e.status = r.status; throw e; }
+  return r.json();
+}
+async function poll() {
+  if (document.hidden) { live.nextAt = 0; return; }   // paused while the page isn't visible
+  let calls = 0, next = 120;
+  try {
+    const runs = (await get('/actions/runs?per_page=30')).workflow_runs; calls++;
+    const nowBusy = {}, nowWait = {}, nowFailed = {}, seen = new Set();
+    let nightly = false;
+    for (const r of runs) {
+      const wf = r.path.split('/').pop(), who = LIVE.workflows[wf];
+      if (!who) continue;
+      const since = new Date(r.run_started_at || r.created_at), keys = who === 'steps' ? null : [who];
+      if (r.status === 'in_progress') {
+        if (keys) { keys.forEach(k => nowBusy[k] = {text: r.name, since, url: r.html_url}); continue; }
+        nightly = true;
+        const jobs = (await get(`/actions/runs/${r.id}/jobs`)).jobs; calls++;
+        for (const j of jobs.filter(j => j.status === 'in_progress')) {
+          const s = j.steps.find(s => s.status === 'in_progress') || [...j.steps].reverse().find(s => s.status === 'completed');
+          const name = s ? s.name : j.name, into = LIVE.wait_steps.some(w => name.toLowerCase().includes(w)) ? nowWait : nowBusy;
+          const total = j.steps.filter(s => !/^(Post |Complete job)/.test(s.name)).length;
+          stepWorkers(name).forEach(k => into[k] = {text: `${r.name}: ${name}` + (s ? ` (step ${s.number} of ${total})` : ''),
+                                                     since: new Date((s && s.started_at) || since), url: r.html_url});
+        }
+      } else if (WAITING.includes(r.status)) {
+        (keys || ['boss']).forEach(k => nowWait[k] = nowWait[k] || {text: `${r.name}: waiting to start`, since, url: r.html_url});
+      } else if (r.status === 'completed' && !seen.has(wf)) {
+        seen.add(wf);   // only the newest finished run of each workflow counts: a later success clears a failure
+        if (FAILED.includes(r.conclusion) && Date.now() - new Date(r.updated_at) < 3 * 864e5)
+          (keys || ['boss']).forEach(k => nowFailed[k] = {text: `${r.name} failed`, since: new Date(r.updated_at), url: r.html_url});
+      }
+    }
+    Object.assign(live, {busy: nowBusy, wait: nowWait, failed: nowFailed, runs, state: 'live'});
+    if (nightlyRunning && !nightly && location.protocol.startsWith('http'))
+      setTimeout(() => location.reload(), 6 * 60e3);   // the nightly run publishes a fresh page: pick it up
+    nightlyRunning = nightly;
+    const active = Object.keys(nowBusy).length + Object.keys(nowWait).length;
+    next = active ? 60 : 120;
+    if (quota) {          // spread what's left of the hourly allowance until it resets
+      const secs = Math.max(1, quota.reset - Date.now() / 1000), polls = quota.left / calls - 1;
+      next = Math.max(next, polls > 0 ? secs / polls : secs + 5);
+    }
+  } catch (e) {
+    live.state = e.status === 403 || e.status === 429 ? 'limited' : e.status === 404 ? 'missing' : 'offline';
+    next = live.state === 'limited' && quota ? Math.max(60, quota.reset - Date.now() / 1000 + 5) : live.state === 'missing' ? 900 : 120;
+  }
+  live.nextAt = Date.now() + next * 1000;
+  renderLive();
+  clearTimeout(timer); timer = setTimeout(poll, next * 1000);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && LIVE.repo && Date.now() >= live.nextAt) { clearTimeout(timer); poll(); }
+});
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+function ago(d) {
+  const s = (Date.now() - d) / 1000;
+  return s < 90 ? 'just now' : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`;
+}
+const forHow = d => ago(d).replace(' ago', '').replace('just now', 'a moment');
+function renderLive() {
+  const bar = document.getElementById('live'), feed = document.getElementById('feed');
+  const doing = [...new Map(Object.entries(live.busy).map(([k, v]) => [v.text, {...v, who: DATA.workers[k].name}])).values()];
+  let html;
+  if (live.state === 'live') {
+    const latest = live.runs.find(r => r.status === 'completed');
+    html = doing.length
+      ? `<span class="beat on"></span><b>LIVE</b> ${doing.map(v => `<a href="${esc(v.url)}">${esc(v.text)}</a> · ${forHow(v.since)}`).join(' &nbsp;|&nbsp; ')}`
+      : `<span class="beat"></span><b>LIVE</b> Nothing running right now` + (latest ? ` · last: ${esc(latest.name)} ${latest.conclusion === 'success' ? '✓' : '✗'} ${ago(new Date(latest.updated_at))}` : '');
+  } else html = {
+    starting: 'Connecting to GitHub…',
+    off: 'Live view off: the page doesn\'t know which repository to watch.',
+    missing: 'Live view off: GitHub didn\'t find the repository (it has to be public).',
+    offline: 'Can\'t reach GitHub right now; trying again in a couple of minutes.',
+    limited: `Live view paused: GitHub's hourly limit for this network is used up` +
+             (quota ? ` (back at ${new Date(quota.reset * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})})` : '') + '.',
+  }[live.state];
+  bar.innerHTML = html;
+  feed.innerHTML = live.runs.filter(r => LIVE.workflows[r.path.split('/').pop()]).slice(0, 8).map(r => {
+    const icon = r.status === 'in_progress' ? '●' : WAITING.includes(r.status) ? '…' : r.conclusion === 'success' ? '✓' : FAILED.includes(r.conclusion) ? '✗' : '–';
+    const cls = r.status === 'in_progress' ? 'run' : WAITING.includes(r.status) ? 'wait' : FAILED.includes(r.conclusion) ? 'bad' : 'done';
+    const when = r.status === 'in_progress' ? `running for ${forHow(new Date(r.run_started_at))}` : ago(new Date(r.updated_at));
+    return `<li class="${cls}"><a href="${esc(r.html_url)}"><span class="i">${icon}</span>${esc(r.name)}<span class="t">${when}</span></a></li>`;
+  }).join('');
+}
+if (LIVE.repo) poll();
+renderLive();
+setInterval(renderLive, 20000);
 
 // --- details
 const dlg = document.getElementById('dlg');
-const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 function show(key) {
-  const d = DATA.workers[key];
+  const d = DATA.workers[key], st = statusOf(key);
+  const now = live.busy[key] ? `<p class="now run">● Working right now: <a href="${esc(live.busy[key].url)}">${esc(live.busy[key].text)}</a>, for ${forHow(live.busy[key].since)}</p>`
+            : live.wait[key] ? `<p class="now wait">… ${esc(live.wait[key].text)} <a href="${esc(live.wait[key].url)}">open the run</a></p>`
+            : live.failed[key] ? `<p class="now bad">✗ <a href="${esc(live.failed[key].url)}">${esc(live.failed[key].text)}</a> ${ago(live.failed[key].since)}</p>` : '';
   dlg.querySelector('.dlg').innerHTML =
     `<button class="close" aria-label="Close">✕</button>
-     <h2><span class="dot ${d.status}"></span>${esc(d.name)}</h2>
-     <div class="role">${esc(d.role)} · <b>${esc(d.label)}</b></div>
+     <h2><span class="dot ${st}"></span>${esc(d.name)}</h2>
+     <div class="role">${esc(d.role)} · <b>${esc(DATA.labels[st])}</b></div>${now}
      <div class="head">${esc(d.headline)}</div>
-     <ul>${d.details.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`;
+     <ul>${d.details.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+     <div class="role">Last nightly check: ${esc(DATA.made)}</div>`;
   dlg.querySelector('.close').onclick = () => dlg.close();
   dlg.showModal();
 }
@@ -621,21 +838,23 @@ dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
 document.querySelectorAll('button.row').forEach(b => b.addEventListener('click', () => show(b.dataset.key)));
 function hit(e) {
   const r = cv.getBoundingClientRect(), x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
+  const p = Object.values(people).find(p => visible(p) && !seated(p) && Math.abs(x - p.x) <= 8 && y >= p.y - 22 && y <= p.y + 2);
+  if (p) return p.d.key;
   const d = desks.find(d => Math.abs(x - d.cx) <= (d.key === 'boss' ? 40 : 34) && y >= d.top - 30 && y <= d.top + 30);
-  if (d) return d.key;
-  const p = Object.values(people).find(p => p.mode !== 'sit' && Math.abs(x - p.x) <= 8 && y >= p.y - 22 && y <= p.y + 2);
-  return p && p.d.key;
+  return d && d.key;
 }
 cv.addEventListener('click', e => { const k = hit(e); if (k) show(k); });
 cv.addEventListener('mousemove', e => { cv.style.cursor = hit(e) ? 'pointer' : 'default'; });
 """
 
 
-def build_office(workers: list[dict], made: dt.datetime | None = None, run_url: str | None = None) -> str:
-    """The office page (one self-contained HTML file)."""
+def build_office(workers: list[dict], made: dt.datetime | None = None, run_url: str | None = None,
+                 repo: str | None = None) -> str:
+    """The office page (one self-contained HTML file); with repo (owner/name), it also shows GitHub Actions live."""
     made = made or dt.datetime.now()
     data = {"desks": [k for k in DESKS if any(w["key"] == k for w in workers)], "plates": PLATE,
-            "clock": [made.hour, made.minute],
+            "made": f"{made:%Y-%m-%d %H:%M}", "labels": LABEL,
+            "live": {"repo": repo, "workflows": LIVE_WORKFLOWS, "steps": LIVE_STEPS, "wait_steps": LIVE_WAIT_STEPS},
             "workers": {w["key"]: {**w, "label": LABEL[w["status"]], "look": LOOKS[w["key"]]} for w in workers}}
     counts = {s: sum(w["status"] == s for w in workers[1:]) for s in (OK, WARN, BAD, OFF)}
     tally = "".join(f'<span class="pill"><span class="dot {s}"></span>{counts[s]} {LABEL[s].lower()}</span>'
@@ -653,18 +872,21 @@ def build_office(workers: list[dict], made: dt.datetime | None = None, run_url: 
 <body><main>
 <header>
   <div><h1>Trend Bot Office</h1>
-  <div class="sub">Every part of the bot is a worker at a desk. Click one to see how it's doing.</div></div>
+  <div class="sub">Every part of the bot is a worker at a desk, working live as the bot runs. Click one to see how it's doing.</div></div>
   <div class="tally">{tally}</div>
 </header>
+<div class="live" id="live" role="status" aria-live="polite"></div>
 <div class="screen"><canvas id="office" width="352" height="240" role="img" aria-label="{html.escape(alt)}"></canvas></div>
 <div class="legend">
-  <span><span class="dot ok"></span>Working: typing, green screen</span>
+  <span><span class="dot ok"></span>Working: typing fast while its part of the bot runs, resting in between</span>
   <span><span class="dot warn"></span>Needs a look: "!" bubble</span>
   <span><span class="dot bad"></span>Broken: up from the desk, red smoking screen</span>
   <span><span class="dot off"></span>Not set up: empty desk</span>
 </div>
+<section class="runs"><h2>Recent runs on GitHub</h2><ol id="feed"></ol></section>
 <section class="list"><h2>{html.escape(boss['headline'])}</h2>{rows}</section>
-<footer>Made {made:%Y-%m-%d %H:%M}{link}. It only reads the bot's database; nothing here changes anything.</footer>
+<footer>Health checked {made:%Y-%m-%d %H:%M}{link}; the workers follow GitHub Actions live.
+It only reads; nothing here changes anything.</footer>
 <dialog id="dlg"><div class="dlg"></div></dialog>
 </main>
 <script id="office-data" type="application/json">{json.dumps(data).replace("</", "<\\/")}</script>
