@@ -1,0 +1,89 @@
+# Put the bot's office (and the latest report) on the web page now, without waiting for the nightly run.
+# Needs the web page turned on once (see "publish" in nightly.yml): Settings -> Pages -> Source:
+# "GitHub Actions", and the variable PUBLISH_DASHBOARD = true. The nightly run keeps it up to date after that.
+# Reads the saved database only (never saves it), so it can't disturb the nightly run.
+
+name: Publish the office
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: publish-office
+  cancel-in-progress: false
+
+# Least privilege: the workflow's token can only read the code (jobs that need more say so).
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read        # to find the latest nightly report
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            market.db
+            alert_state.json
+          key: market-db-${{ github.run_id }}
+          restore-keys: market-db-
+
+      - name: Restore day-trading results
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: daytrade.json
+          key: daytrade-state-${{ github.run_id }}
+          restore-keys: daytrade-state-
+
+      - name: Office
+        run: |
+          mkdir -p site
+          python -m trend_bot office --out site/office.html
+
+      # The home page stays the latest nightly report (if one is still kept).
+      - name: Latest report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/${{ github.repository }}/actions/artifacts?per_page=50" \
+            --jq '[.artifacts[] | select(.name | startswith("report-")) | select(.expired | not)][0].id // empty' || true)
+          if [ -n "$id" ]; then
+            gh api "repos/${{ github.repository }}/actions/artifacts/$id/zip" > report.zip
+            unzip -o report.zip latest.html -d site && mv site/latest.html site/index.html
+          fi
+          [ -f site/index.html ] || cp site/office.html site/index.html
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: site
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}office.html
+    steps:
+      - name: Publish
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

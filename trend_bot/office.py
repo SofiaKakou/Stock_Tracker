@@ -305,7 +305,7 @@ PLATE = {"boss": "BOSS", "prices": "PRICES", "sec": "SEC", "finra": "FINRA", "ne
 LIVE_WORKFLOWS = {"nightly.yml": "steps", "daytrade.yml": "daytrade", "daytrade-safety.yml": "safety",
                   "demo.yml": "demo", "demo-morning.yml": "demo", "research.yml": "ideas", "research-parallel.yml": "ideas",
                   "why.yml": "ideas", "ai.yml": "ideas", "journal.yml": "journal", "market-mirror.yml": "journal",
-                  "import-db.yml": "logbook", "tests.yml": "logbook"}
+                  "import-db.yml": "logbook", "tests.yml": "logbook", "office.yml": "logbook"}
 # Steps of the nightly run -> the workers doing them (the first match wins; anything else: the logbook keeper).
 LIVE_STEPS = [("restore", ["logbook"]), ("save database", ["logbook"]), ("backup", ["logbook"]), ("keep the report", ["logbook"]),
               ("office", ["logbook"]), ("update data", ["prices", "sec", "finra"]), ("retry prices", ["prices"]),
