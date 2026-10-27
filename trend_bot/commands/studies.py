@@ -641,6 +641,15 @@ def cmd_study(args: argparse.Namespace) -> int:
             return 0
         if args.signal == "intraday":
             return _study_intraday(con, args)
+        if args.signal == "crypto":
+            from trend_bot import crypto, intraday
+
+            data = intraday.Data.from_env()
+            if data is None:
+                print("Needs Alpaca's market data: the ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY secrets.")
+                return 1
+            print(crypto.run(data))
+            return 0
         if args.signal == "session":
             from trend_bot import intraday, session_momentum
 
