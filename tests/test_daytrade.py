@@ -717,7 +717,7 @@ class LoserData:
         rows = []
         for s in symbols:
             if timeframe == "1Day":
-                for b in daily([20.0] * 24 + [16.0 if s == "CRASH" else 20.0], [1e6] * 24 + [5e6]):
+                for b in daily([20.0] * 24 + [16.0 if s in ("CRASH", "EWZ") else 20.0], [1e6] * 24 + [5e6]):
                     rows.append((s, b["t"], b["c"], b["c"], b["c"], b["c"], b["v"]))
             elif timeframe == "1Min":
                 rows.append((s, "2026-10-26T13:30:00Z", 15.8, 15.9, 15.7, 15.8, 1e5))
@@ -729,6 +729,7 @@ def test_yesterdays_big_loser_is_shorted_at_the_open_with_a_wide_stop():
         def list_assets(self):
             ok = {"tradable": True, "shortable": True, "easy_to_borrow": True, "exchange": "NASDAQ"}
             return [{"symbol": "CRASH", **ok}, {"symbol": "FINE", **ok}, {"symbol": "SPY", **ok},
+                    {"symbol": "EWZ", "name": "iShares MSCI Brazil ETF", **ok},          # a fund: not one company
                     {"symbol": "HARD", **ok, "easy_to_borrow": False}, {"symbol": "OTC", **ok, "exchange": "OTC"}]
 
     clock = Clock(dt.datetime(2026, 10, 26, 9, 20, tzinfo=daytrade.NY))
@@ -778,3 +779,9 @@ def test_one_patterns_error_doesnt_stop_the_morning(monkeypatch):
     s.morning()
     assert any("gapup: stopped with an error" in m for m in out)
     assert "td-20261026-breakout-BREAKY" in [o["client_order_id"] for o in broker.orders]   # the morning went on
+
+
+def test_funds_are_told_apart_from_companies_by_name():
+    assert daytrade.is_fund("iShares MSCI Brazil ETF") and daytrade.is_fund("Direxion Daily Semiconductor Bull 3X Shares")
+    assert daytrade.is_fund("Invesco QQQ Trust, Series 1") and daytrade.is_fund("ProShares UltraPro QQQ")
+    assert not daytrade.is_fund("Northern Trust Corporation") and not daytrade.is_fund("XP Inc. Class A Common Stock")
