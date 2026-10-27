@@ -54,5 +54,5 @@ def test_the_100_dollar_account_is_in_the_history_and_the_week(tmp_path):
     small = FakeAccount([0, 0, 0, 0, 100.0, 101.5], start="2026-10-20")      # funded on the Monday
     hist = accounts.collect(con, None, None, start="2026-10-19", small=small)
     assert hist["small"]["values"] == [100.0, 101.5]
-    assert "$100 account (demo): +1.5%" in accounts.chart_svg(hist)
-    assert "$100 account (demo)**: this week **+1.50%**" in accounts.weekly(hist, {}, dt.date(2026, 10, 27))["description"]
+    assert "$100 crypto account (demo): +1.5%" in accounts.chart_svg(hist)
+    assert "$100 crypto account (demo)**: this week **+1.50%**" in accounts.weekly(hist, {}, dt.date(2026, 10, 27))["description"]

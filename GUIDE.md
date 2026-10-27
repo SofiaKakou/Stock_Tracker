@@ -240,17 +240,22 @@ biggest such losers, with a **stop 25% above**, bought back by the close. About 
 days none. The scorecard (`dw.vPatternScorecard`, pattern `loser`) shows whether live trading matches.
 Our real costs (about 0.17% a side so far) are higher than the study's, so the live results decide.
 
-## The $100 account
+## The $100 crypto account
 
-A third practice account (fake money) holds **the same 20-stock monthly portfolio at $100**, the size
-a first real-money account would start at. It buys in **dollar amounts** (fractional shares: about $4.90
-of each stock, even a $400 one), so it shows exactly what your first $100 would hold and how it does.
-Stocks the broker can't split into fractions are left out (named in its Discord message). It trades on
-the same nights as the monthly account and gets the same emergency exits.
+The third practice account (fake money, $100) trades **crypto**: no day-trading limit, it trades day and
+night, and tiny amounts are normal. It runs the only crypto idea that beat Alpaca's fees in our test
+(`study crypto`, 15-minute prices of 8 big coins since 2021): **a coin that fell 5%+ in the last hour
+usually bounces**. Bought right after and sold a day later, that made about **+2.3% a trade after fees**,
+in both halves of the data, far better than buying at random times. Buying rising coins, small dips,
+new highs, or anything held only 15 minutes lost to the fees.
 
-Setup: an Alpaca paper account with its balance set to $100, and its keys as the secrets
-`ALPACA_SMALL_KEY_ID` and `ALPACA_SMALL_SECRET_KEY`. It starts at the next nightly run (or right away:
-Actions → Demo account → Run workflow with "follow now").
+Every 15 minutes it checks Bitcoin, Ethereum, Solana, XRP, Dogecoin, Litecoin, Chainlink and Avalanche:
+a coin down 5%+ in the last hour is bought for about $25 (up to 4 at once, one per coin, with a limit
+order at most 0.3% above the asking price), with a **safety stop 15% below** at the broker (coins that
+collapsed, like LUNA in 2022, aren't in the test data), and sold **24 hours later**. Expect about one
+trade every 2-3 days: big hourly drops are rare. Every trade goes to Discord ("🪙"), and the nightly
+run adds a summary. Its keys are the secrets `ALPACA_SMALL_KEY_ID` and `ALPACA_SMALL_SECRET_KEY`.
+(It used to hold the monthly portfolio at $100; those stocks were sold when it switched to crypto.)
 
 ## The demo accounts week by week
 
@@ -468,6 +473,7 @@ nothing the second time, so double starts are harmless.
    | Day trading, morning | `daytrade.yml` | 9:20 | `{"ref":"main","inputs":{"phase":"auto"}}` |
    | Day trading, afternoon (backup) | `daytrade.yml` | 12:05 | `{"ref":"main","inputs":{"phase":"auto"}}` |
    | Safety net | `daytrade-safety.yml` | 9:20, 15:57, 16:06 | `{"ref":"main"}` |
+   | Crypto account | `crypto.yml` | every 15 minutes, every day (minutes 2, 17, 32, 47) | `{"ref":"main"}` |
 
 3. **Test it**: cron-job.org → the job → **Test run**. It should answer **204** (started), and a new run
    appears in GitHub → Actions. 401 or 403 means the token or its permission is wrong; 404 means the URL.

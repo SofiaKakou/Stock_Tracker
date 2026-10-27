@@ -16,7 +16,7 @@ import pandas as pd
 
 from trend_bot.db import get_meta, set_meta
 
-NAMES = {"monthly": "Monthly portfolio (demo)", "day": "Day trading (demo)", "small": "$100 account (demo)",
+NAMES = {"monthly": "Monthly portfolio (demo)", "day": "Day trading (demo)", "small": "$100 crypto account (demo)",
          "spy": "S&P 500"}
 COLORS = {"monthly": "#2a78d6", "day": "#d97706", "small": "#16a34a", "spy": "#8d8c86"}
 
