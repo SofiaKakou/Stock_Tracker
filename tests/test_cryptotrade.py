@@ -118,17 +118,35 @@ def test_leftover_stocks_are_sold_once_announced(market):
     assert sorted(broker.closed) == ["AAPL", "MSFT"] and state["stocks_sold"] and "now a crypto account" in out[0]["title"]
 
 
-def test_no_more_than_four_at_once_and_a_stale_signal_is_ignored(market):
-    market({f"C{i}/USD": -0.06 for i in range(6)})
+def test_slots_per_kind_and_a_stale_signal_is_ignored(market):
+    market({**{f"C{i}/USD": -0.06 for i in range(4)}, **{f"F{i}/USD": -0.03 for i in range(6)}})
     broker, state = Broker(cash=1000.0), {}
-    ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
-    assert len(state["open"]) == ct.SLOTS
+    out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
+    kinds = [t["kind"] for t in state["open"].values()]
+    assert kinds.count("big") == ct.KINDS["big"]["slots"] and kinds.count("fast") == ct.KINDS["fast"]["slots"]
+    fast = [o for o in broker.orders if o[0] == "buy" and "cx-fast" in o[4]]
+    assert fast[0][2] * 95.0 == pytest.approx(10.0)                  # $10 each
+    assert len(out) == ct.KINDS["big"]["slots"]                      # only the big dips are announced
     late = NOW + dt.timedelta(minutes=40)                       # GitHub started the check 40 minutes late
     assert ct.dips(bars({"X/USD": -0.06}), late) == {}
 
 
+def test_a_fast_trade_is_sold_after_an_hour_quietly(market):
+    market({})
+    broker = Broker([{"symbol": "ETHUSD", "qty": "0.004", "asset_class": "crypto", "current_price": "2480"}])
+    state = {"open": {"ETHUSD": {"symbol": "ETH/USD", "time": (NOW - dt.timedelta(minutes=61)).isoformat(),
+                                 "price": 2500.0, "qty": "0.004", "cost": 10.0, "kind": "fast"}}}
+    out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
+    assert broker.closed == ["ETHUSD"] and out == [] and state["log"][0]["kind"] == "fast"
+
+
 def test_the_evening_summary_reads_well():
     state = {"open": {}, "log": [{"symbol": "SOL/USD", "in": "2026-10-26T15:02:00+00:00", "out": NOW.isoformat(),
-                                  "entry": 95.0, "exit": 99.0, "how": "day", "cost": 24.7, "ret": 99 / 95 - 1}]}
-    e = ct.summary(Broker(), state, now=NOW)
-    assert "$100.50" in e["description"] and "SOL +4.2%" in e["description"] and "All trades: 1" in e["description"]
+                                  "entry": 95.0, "exit": 99.0, "how": "day", "cost": 24.7, "ret": 99 / 95 - 1,
+                                  "kind": "big"},
+                                 {"symbol": "ETH/USD", "in": "2026-10-27T13:02:00+00:00", "out": NOW.isoformat(),
+                                  "entry": 2500.0, "exit": 2490.0, "how": "hour", "cost": 10.0, "ret": -0.004,
+                                  "kind": "fast"}]}
+    d = ct.summary(Broker(), state, now=NOW)["description"]
+    assert "$100.50" in d and "SOL +4.2%" in d and "big dip (tested: passes)**: 1 trades" in d
+    assert "fast experiment" in d and "-0.40%" in d

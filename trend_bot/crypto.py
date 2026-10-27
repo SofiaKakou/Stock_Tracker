@@ -69,8 +69,8 @@ def signals(g: pd.DataFrame) -> dict[str, np.ndarray]:
     hour[BARS_PER_HOUR:] = c[BARS_PER_HOUR:] / c[:-BARS_PER_HOUR] - 1
     day_high = pd.Series(h).rolling(24 * BARS_PER_HOUR).max().shift(1).to_numpy()
     with np.errstate(invalid="ignore"):
-        return {"momentum": hour >= 0.02, "dip": hour <= -0.02, "big dip": hour <= -0.05,
-                "breakout": c > day_high}
+        return {"momentum": hour >= 0.02, "dip": hour <= -0.02, "dip 3%": hour <= -0.03, "dip 4%": hour <= -0.04,
+                "big dip": hour <= -0.05, "breakout": c > day_high}
 
 
 def trades(g: pd.DataFrame, sig: np.ndarray, hold: int) -> pd.DataFrame:
@@ -130,7 +130,7 @@ def study(df: pd.DataFrame, seed: int = 0) -> tuple[dict[str, dict], dict[str, f
     coins = {s: g.reset_index(drop=True) for s, g in df.groupby("symbol", sort=True)}
     sigs = {s: signals(g) for s, g in coins.items()}
     out = {}
-    for pattern in ("momentum", "dip", "big dip", "breakout"):
+    for pattern in ("momentum", "dip", "dip 3%", "dip 4%", "big dip", "breakout"):
         for label, hold in HOLDS.items():
             parts, rand = [], np.zeros(DRAWS)
             for s, g in coins.items():
@@ -140,10 +140,16 @@ def study(df: pd.DataFrame, seed: int = 0) -> tuple[dict[str, dict], dict[str, f
             tr = pd.concat(parts, ignore_index=True)
             out[f"{pattern}, held {label}"] = evaluate(tr, rand / max(len(tr), 1), max(span, 1.0))
     hold = {s: float(g["close"].iloc[-1] / g["open"].iloc[0] - 1) for s, g in coins.items()}
+    # Each coin on its own, for the dips held a day: which coins bounce (and which keep falling)?
+    for pattern in ("dip 3%", "big dip"):
+        for s, g in coins.items():
+            tr = trades(g, sigs[s][pattern], HOLDS["1 day"])
+            out[f"coin {s}: {pattern}"] = evaluate(tr, random_mean(g, len(tr), HOLDS["1 day"], rng), max(span, 1.0))
     return out, hold
 
 
 NAMES = {"momentum": "Rose 2%+ in the last hour: buy", "dip": "Fell 2%+ in the last hour: buy the dip",
+         "dip 3%": "Fell 3%+ in the last hour: buy the dip", "dip 4%": "Fell 4%+ in the last hour: buy the dip",
          "big dip": "Fell 5%+ in the last hour: buy the dip", "breakout": "Above its 24-hour high: buy"}
 
 
@@ -155,6 +161,8 @@ def text(results: dict[str, dict], hold: dict[str, float], first: str, last: str
              "Buy and hold over the whole period: " + ", ".join(f"{s.split('/')[0]} {r:+.0%}" for s, r in sorted(hold.items())),
              ""]
     for name, r in results.items():
+        if name.startswith("coin "):
+            continue
         pattern, held = name.split(", held ")
         lines.append(f"== {NAMES[pattern]}, sold {held} later ==")
         if not r.get("trades"):
@@ -168,15 +176,31 @@ def text(results: dict[str, dict], hold: dict[str, float], first: str, last: str
                   f"  luck check: random times did as well {r['luck']:.0%} of the time",
                   f"  → {'PASSES with limit orders' if passes(r) else 'does not pass'}"
                   + (" and with market orders" if passes(r, 'market') else ""), ""]
-    passed = [n for n, r in results.items() if passes(r)]
+    coins = {n: r for n, r in results.items() if n.startswith("coin ")}
+    if coins:
+        lines += ["Each coin on its own (dip bought, sold a day later, after limit-order fees; few trades per coin, "
+                  "so a single coin's line is a hint, not proof):"]
+        for n, r in sorted(coins.items()):
+            if r.get("trades"):
+                lines.append(f"  {n[5:]:<22} {r['trades']:>4} trades, {r['limit']['net']:+.2%} a trade, right "
+                             f"{r['hit']:.0%}, both halves {'+' if r['limit']['early'] > 0 and r['limit']['late'] > 0 else '–'}")
+        lines.append("")
+    passed = [n for n, r in results.items() if not n.startswith("coin ") and passes(r)]
     lines.append("Passed: " + ("; ".join(passed) if passed else
                                "none: no buy-only crypto pattern here beats the fees reliably") + ".")
     return "\n".join(lines)
 
 
-def run(data, log=print) -> str:
-    log(f"[crypto] 15-minute bars for {len(SYMBOLS)} coins since {START}...")
-    df = fetch(data)
+def all_coins(broker) -> list[str]:
+    """Every coin Alpaca trades against the dollar (needs a trading account's keys)."""
+    return sorted(a["symbol"] for a in broker._call("GET", "/assets", params={"asset_class": "crypto", "status": "active"})
+                  if a.get("tradable") and str(a.get("symbol", "")).endswith("/USD"))
+
+
+def run(data, log=print, symbols: list[str] | None = None) -> str:
+    symbols = symbols or SYMBOLS
+    log(f"[crypto] 15-minute bars for {len(symbols)} coins since {START}...")
+    df = fetch(data, symbols)
     if df.empty:
         return "No crypto bars came back from Alpaca."
     res, hold = study(df)
