@@ -46,6 +46,7 @@ STOP_LOSS = 0.05        # every position has a stop at the broker: out if it mov
 LIMIT_SLACK = 0.002     # entries are limit orders at most 0.2% past the quote (a market order can fill far worse)
 STALE_ENTRY_MINUTES = 5  # an entry that hasn't filled in 5 minutes is cancelled (the moment has passed)
 NET_LIMIT = 0.5          # longs minus shorts at most 50% of the account: not one big bet on the market's direction
+SECTOR_NET = 0.15        # ... and within one sector at most 15% (about 3 positions) one way: not one bet on an industry
 # Short the big gap-ups (tested only; the only idea that passed the 20-year swing study after costs):
 # any stock in the market that opens 20%+ above yesterday's close (price $5+, $5M+ traded a day),
 # sold short at the open if the broker can lend it, a 15% stop above, bought back by the close.
@@ -139,6 +140,12 @@ def is_fund(name: str) -> bool:
     return bool(FUND_WORDS.search(name or ""))
 
 
+def _yahoo_sector(symbol: str) -> str | None:
+    import yfinance as yf
+
+    return (yf.Ticker(symbol).get_info() or {}).get("sector") or None
+
+
 def loser_signals(days: dict[str, list[dict]], today: dt.date) -> list[tuple[str, int, float]]:
     """From daily bars ({symbol: [{"t", "c", "v"}...]}): stocks whose last day before `today` closed
     LOSER_MIN-LOSER_MAX down on LOSER_VOLUME_X+ their usual volume, priced $5+ and trading $5M+ a day
@@ -218,8 +225,9 @@ def pnl(orders: list[dict]) -> dict[str, dict]:
 class Session:
     def __init__(self, broker: DayBroker, data: intraday.Data, symbols: list[str], today: dt.date,
                  log=print, sleep=time.sleep, now=lambda: dt.datetime.now(NY), share: dict | None = None,
-                 paused: set | None = None):
+                 paused: set | None = None, sectors: dict | None = None):
         self.b, self.data, self.log, self.sleep, self.now = broker, data, log, sleep, now
+        self.sectors = sectors if sectors is not None else {}   # symbol -> sector (Yahoo), kept between days
         self.share, self.paused = share or {}, set(paused or ())
         self.today = today
         self.etfs = [s for s in symbols if s in intraday.ETFS]
@@ -302,6 +310,15 @@ class Session:
             return "no recent trades (halted?)"
         return ""
 
+    def sector(self, sym: str) -> str | None:
+        """The stock's sector (Yahoo), remembered; None if unknown (then only the account-wide cap applies)."""
+        if sym not in self.sectors:
+            try:
+                self.sectors[sym] = _yahoo_sector(sym)
+            except Exception:  # noqa: BLE001 - unknown sector: not limited by it
+                self.sectors[sym] = None
+        return self.sectors[sym]
+
     def cancel_stale_entries(self) -> int:
         """Entry orders still unfilled after STALE_ENTRY_MINUTES (a limit the price ran away from): cancelled."""
         tag, n = f"td-{self.today:%Y%m%d}-", 0
@@ -361,6 +378,12 @@ class Session:
             abs(float(p.get("market_value") or 0)) for p in positions)
         net = sum(float(p.get("market_value") or 0) for p in positions)      # shorts count negative
         net_cap = float(account["equity"]) * NET_LIMIT
+        by_sector: dict[str, float] = {}
+        for p in positions:
+            sec = self.sector(p["symbol"])
+            if sec:
+                by_sector[sec] = by_sector.get(sec, 0.0) + float(p.get("market_value") or 0)
+        sector_cap = float(account["equity"]) * SECTOR_NET
         if account.get("daytrading_buying_power"):        # never more than the broker allows
             room = min(room, float(account["daytrading_buying_power"]) * INVESTED)
         fresh = self.last_trades([s for s, _ in signals if s not in done])
@@ -383,6 +406,13 @@ class Session:
                 self.log(f"[day] {pattern}: {sym} skipped (the account would be too one-sided: "
                          f"{'long' if net > 0 else 'short'} ${abs(net):,.0f})")
                 continue
+            sec = self.sector(sym)
+            now_in = by_sector.get(sec, 0.0) if sec else 0.0
+            after = now_in + side * qty * prices[sym]
+            if sec and abs(after) > sector_cap and abs(after) > abs(now_in):
+                self.log(f"[day] {pattern}: {sym} skipped (too much in {sec}: "
+                         f"{'long' if now_in > 0 else 'short'} ${abs(now_in):,.0f} already)")
+                continue
             q = quotes.get(sym, {})
             bid, ask = q.get("bid"), q.get("ask")
             quoted = bid and ask and ask >= bid
@@ -397,6 +427,8 @@ class Session:
                 sent += 1
                 room -= qty * prices[sym]
                 net += side * qty * prices[sym]
+                if sec:
+                    by_sector[sec] = after
                 self.entries.append({"date": self.today.isoformat(), "time": self.now().strftime("%H:%M"),
                                      "pattern": pattern, "symbol": sym, "side": side, "qty": qty,
                                      "expected": expected, "signal": (strength or {}).get(sym),
@@ -492,6 +524,8 @@ class Session:
         early = self.now().time() <= GAP_LATEST
         found = self.find_losers() if early else []                  # scanned before the open
         reporting = self.earnings_today() if early else set()
+        for sym in self.stocks:      # sectors looked up before the open (once; remembered between days)
+            self.sector(sym)
         self.wait_until(dt.time(9, 31))
         if self.now().time() <= GAP_LATEST:
             prev = self.prev_closes(self.stocks)

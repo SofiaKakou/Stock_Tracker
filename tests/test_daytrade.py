@@ -13,6 +13,7 @@ DAY = dt.date(2026, 10, 26)   # a Monday, New York winter time not yet (EDT)
 def no_earnings_calendar(monkeypatch):
     """No Yahoo in tests: no stock reports earnings unless a test says so."""
     monkeypatch.setattr(daytrade.intraday, "_yahoo_earnings", lambda symbol, limit=60: [])
+    monkeypatch.setattr(daytrade, "_yahoo_sector", lambda symbol: None)
 
 
 def test_signals():
@@ -816,3 +817,26 @@ def test_report_days_count_after_the_close_for_the_next_trading_day():
     assert intraday.report_day(pd.Timestamp("2026-10-26 07:00", tz="America/New_York")) == "2026-10-26"
     assert intraday.reporting_today(["A", "SPY"], DAY, fetch=lambda s: (_ for _ in ()).throw(RuntimeError("down")),
                                     log=lambda *_: None) == set()     # Yahoo down: nothing skipped
+
+
+
+def test_no_more_than_about_three_positions_one_way_in_one_sector():
+    clock = Clock(dt.datetime(2026, 10, 26, 10, 0, tzinfo=daytrade.NY))
+
+    class Held(FakeBroker):     # already short two chip stocks (~$9,800)
+        def positions(self):
+            return [{"symbol": "AAA", "qty": "-49", "market_value": "-4900"},
+                    {"symbol": "BBB", "qty": "-49", "market_value": "-4900"}]
+
+    broker, out = Held(), []
+    sectors = {"AAA": "Technology", "BBB": "Technology", "CCC": "Technology", "DDD": "Technology",
+               "EEE": "Technology", "FIN": "Financial Services"}
+    s = daytrade.Session(broker, None, ["CCC", "DDD", "EEE", "FIN"], DAY, log=out.append, now=clock.now,
+                         sectors=sectors)
+    s.last_trades = lambda syms: {x: clock.now() for x in syms}
+    prices = {x: 100.0 for x in ("CCC", "DDD", "EEE", "FIN")}
+    s.enter("gap", [("CCC", -1), ("DDD", -1), ("EEE", 1), ("FIN", -1)], prices, 10)
+    sides = {o["symbol"]: o["side"] for o in broker.orders}
+    assert sides == {"CCC": "sell", "EEE": "buy", "FIN": "sell"}       # DDD would be a 4th tech short: skipped
+    assert any("too much in Technology" in m and "DDD" in m for m in out)
+    assert sectors["AAA"] == "Technology"                               # remembered, not looked up again
