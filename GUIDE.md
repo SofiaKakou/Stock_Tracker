@@ -231,11 +231,12 @@ scorecard (`dw.vPatternScorecard`, pattern `gapup`) shows whether live trading m
 ## Short yesterday's big losers (day trading, tested only)
 
 From the "big news days" swing study: a stock that **closed 15%+ down yesterday on at least 3 times its
-usual volume** (big bad news) tends to keep falling, the next day and for weeks (20 years: about +0.44% a
-trade the next day after costs, measured against the S&P 500; good news does the opposite, it fades).
+usual volume** (big bad news) tends to keep falling, the next day and for weeks (20 years, as real short trades
+with a 25% stop: about +0.39% a trade the next day after costs, measured against the S&P 500; a tighter
+15% stop gets hit by the jumps crashed stocks make on the way down and doesn't pass).
 Each morning before the open the day-trading account scans every stock the broker lists (price $5+,
 $5M+ traded a day, shares the broker can lend), and at the open **sells short** up to 3 of yesterday's
-biggest such losers, with a **stop 15% above**, bought back by the close. About one or two a day; some
+biggest such losers, with a **stop 25% above**, bought back by the close. About one or two a day; some
 days none. The scorecard (`dw.vPatternScorecard`, pattern `loser`) shows whether live trading matches.
 Our real costs (about 0.17% a side so far) are higher than the study's, so the live results decide.
 

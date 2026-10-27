@@ -123,7 +123,9 @@ NEWS_SHORTS = [   # (trading days held, stop above the entry, borrow fee a year)
     (1, 0.15, 0.0), (5, 0.20, 0.30), (20, 0.25, 0.30)]
 
 
-LOSER_STOPS = (0.10, 0.20, 0.25, 0.30, 9.99)   # 9.99: no stop at all
+# "No stop" isn't tested this way: a few bad high prices in the data (10x spikes) would count as huge
+# losses; the plain big-news-days lines above measure it from the closes instead.
+LOSER_STOPS = (0.10, 0.20, 0.25, 0.30)
 
 
 def news_short_trades(df: pd.DataFrame, spy: pd.DataFrame, sign: int, move: float, hold: int, stop: float,
@@ -161,7 +163,7 @@ def news_short_study(df: pd.DataFrame, spy: pd.DataFrame) -> dict[str, dict]:
     for stop in LOSER_STOPS:   # the live 'short yesterday's big losers': how wide should its stop be?
         tr = news_short_trades(df, spy, -1, 0.15, 1, stop, 0.0)
         out[f"After a 15%+ down day on big volume: short next morning, held to the close, "
-            + (f"stop {stop:.0%} above" if stop < 1 else "no stop") + ", vs the S&P 500"] = evaluate(
+            f"stop {stop:.0%} above, vs the S&P 500"] = evaluate(
             tr["ret"], tr["date"], COST["movers"])
     return out
 
