@@ -196,12 +196,12 @@ jobs:
           python -m trend_bot health --discord --problems reports/problems.txt --job-status "${{ job.status }}" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
 
-      # The bot's village: every part of the bot as a building with a status flag (reports/base.html,
-      # kept with the report below and published next to it as base.html when the web page is on).
-      - name: Village
+      # The bot's office: every part of the bot as a pixel-art worker at a desk (reports/office.html,
+      # kept with the report below and published next to it as office.html when the web page is on).
+      - name: Office
         if: always()
         run: |
-          python -m trend_bot base --problems reports/problems.txt --job-status "${{ job.status }}" \
+          python -m trend_bot office --problems reports/problems.txt --job-status "${{ job.status }}" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" || true
 
       # Optional: the report by email too. Does nothing until the EMAIL_USER and
@@ -255,7 +255,7 @@ jobs:
           name: report-${{ github.run_id }}
           path: |
             reports/latest.html
-            reports/base.html
+            reports/office.html
           if-no-files-found: ignore
           retention-days: 30
 
@@ -312,7 +312,7 @@ jobs:
   #   Settings -> Pages -> Source: "GitHub Actions", then
   #   Settings -> Secrets and variables -> Actions -> Variables -> New variable PUBLISH_DASHBOARD = true
   # The page is then at https://<your-user>.github.io/<repository>/ and updates after every nightly run;
-  # the bot's village is at .../<repository>/base.html.
+  # the bot's office is at .../<repository>/office.html.
   publish:
     needs: run
     if: always() && vars.PUBLISH_DASHBOARD == 'true'
