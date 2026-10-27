@@ -160,3 +160,18 @@ def test_the_worst_gap_fades_are_listed_with_their_prices_and_splits_flagged():
     df = pd.DataFrame(rows, columns=["symbol", "date", "slot", "open", "high", "low", "close", "volume"])
     text = intraday.worst_text(df)
     assert "2024-01-03 AAA: -30.0%" in text and "yesterday 200.00, open 100.00" in text and "split" in text
+
+
+def test_the_session_before_a_report_is_bought_and_sold_before_it():
+    rows = []
+    for day, path in (("2024-01-02", [100.0] * 13), ("2024-01-03", [100.0] + [101.0] * 11 + [103.0]),
+                      ("2024-01-04", [110.0] * 13)):
+        for slot, c in enumerate(path):
+            rows.append(("AAA", day, slot, path[slot - 1] if slot else 100.0, c, c, c, 1))
+    df = pd.DataFrame(rows, columns=["symbol", "date", "slot", "open", "high", "low", "close", "volume"])
+    earn = {("AAA", "2024-01-04")}                    # reported after the close on Jan 3: hits Jan 4's price
+    t = intraday.pre_earnings(df, earn).set_index("date")
+    assert list(t.index) == ["2024-01-03"] and t.loc["2024-01-03", "ret"] == pytest.approx(103 / 100 - 1)
+    t10 = intraday.pre_earnings(df, earn, entry_slot=1)
+    assert t10["ret"].iloc[0] == pytest.approx(103 / 100 - 1)      # 10:00's open is 9:30's close (100)
+    assert "Pre-earnings run-up" in intraday.pre_earnings_text(df, earn)

@@ -519,7 +519,8 @@ def cmd_journal(args: argparse.Namespace) -> int:
             results = json.loads(row[0]) if row else None
     try:
         with closing(db.connect(args.db)) as con:
-            journal.sync(conn, con, day_state, results)
+            crypto_state = json.loads(Path(args.crypto_state).read_text()) if Path(args.crypto_state).exists() else None
+            journal.sync(conn, con, day_state, results, crypto_state=crypto_state)
         journal.load_dw(conn)
     finally:
         conn.close()

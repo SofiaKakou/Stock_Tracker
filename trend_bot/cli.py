@@ -327,6 +327,7 @@ def make_parser() -> argparse.ArgumentParser:
     jn.add_argument("--db", default="market.db", help="database file (default: market.db)")
     jn.add_argument("--day-state", default="daytrade.json", help="the day-trading account's log and totals")
     jn.add_argument("--intraday-db", default="intraday.db", help="the day-trading study's results")
+    jn.add_argument("--crypto-state", default="crypto.json", help="the $100 crypto account's trades")
     jn.set_defaults(func=cmd_journal)
 
     ac = sub.add_parser("accounts", help="the demo accounts' history (chart); --weekly: Friday's summary")

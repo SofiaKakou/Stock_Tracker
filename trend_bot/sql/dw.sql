@@ -470,6 +470,23 @@ JOIN dw.DimStock s ON s.StockKey = t.StockKey
 JOIN dw.DimPattern p ON p.PatternKey = t.PatternKey;
 GO
 
+
+-- The $100 crypto account's trades (fake money): big dips (tested, held a day) and the fast experiment
+-- (2% dips, held an hour). e.g. SELECT Kind, COUNT(*), AVG(Ret), SUM(Pnl) FROM dw.vCryptoTrades GROUP BY Kind
+IF OBJECT_ID('dbo.crypto_trades', 'U') IS NULL
+CREATE TABLE dbo.crypto_trades (in_time VARCHAR(32) NOT NULL, symbol VARCHAR(16) NOT NULL, kind VARCHAR(10),
+    out_time VARCHAR(32), entry FLOAT, exit_price FLOAT, ret FLOAT, cost FLOAT, how VARCHAR(10),
+    PRIMARY KEY (in_time, symbol));
+GO
+
+CREATE OR ALTER VIEW dw.vCryptoTrades AS
+SELECT CAST(LEFT(c.in_time, 19) AS DATETIME2) AS BoughtUtc, CAST(LEFT(c.out_time, 19) AS DATETIME2) AS SoldUtc,
+       REPLACE(c.symbol, '/USD', '') AS Coin, CASE c.kind WHEN 'fast' THEN 'fast experiment' ELSE 'big dip' END AS Kind,
+       c.entry AS Entry, c.exit_price AS ExitPrice, c.ret AS Ret, c.cost AS Cost, c.cost * c.ret AS Pnl,
+       CASE c.how WHEN 'stop' THEN 'safety stop' WHEN 'hour' THEN 'an hour later' ELSE 'a day later' END AS SoldBy
+FROM dbo.crypto_trades c;
+GO
+
 -- Did the forecast work? One row per snapshot: the bot's top 20 vs every other ranked stock vs the
 -- S&P 500 over the next month (so far, until IsFinal). Over many snapshots, Top20MinusRest > 0 means
 -- the ranking picks winners. e.g.

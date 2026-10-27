@@ -399,6 +399,10 @@ ORDER BY f.Pct DESC;
 - **`dw.vPatternScorecard`**: each day-trading pattern, the 10-year test's "per trade after costs"
   next to what live trading actually got, with the hit rate, slippage and spread. It says
   "too early to tell" until a pattern has 20 closed trades.
+- **`dw.vCryptoTrades`**: every finished trade of the $100 crypto account: coin, bought and sold
+  (UTC), big dip or fast experiment, entry and exit price, return, $ result, and what sold it (a day
+  later, an hour later, or the safety stop). e.g.
+  `SELECT Kind, COUNT(*), AVG(Ret), SUM(Pnl) FROM dw.vCryptoTrades GROUP BY Kind`
 
 ```sql
 -- Over all finished months: does the top 20 beat the rest and the market, on average?
