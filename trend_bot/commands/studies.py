@@ -657,6 +657,19 @@ def cmd_study(args: argparse.Namespace) -> int:
                 coins = crypto.all_coins(broker) if broker else None
             print(crypto.run(data, symbols=coins))
             return 0
+        if args.signal == "crypto-fast":
+            from trend_bot import crypto, crypto_fast, cryptotrade, intraday
+            from trend_bot.paper import Paper
+
+            data = intraday.Data.from_env()
+            if data is None:
+                print("Needs Alpaca's market data: the ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY secrets.")
+                return 1
+            broker = Paper.from_env()
+            coins = [s for s in (crypto.all_coins(broker) if broker else crypto.SYMBOLS)
+                     if s.split("/")[0] not in cryptotrade.STABLE]
+            print(crypto_fast.run(data, coins))
+            return 0
         if args.signal == "session":
             from trend_bot import intraday, session_momentum
 
