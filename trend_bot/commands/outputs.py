@@ -428,15 +428,18 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
             session.settle()                     # wait until every closing order has filled
         day = dt.date.fromisoformat(args.date) if args.date else now.date()
         account = broker.account()
+        start = dt.datetime.combine(day, dt.time(9, 0), daytrade.NY).astimezone(dt.timezone.utc)
+        # Closing orders queued before the day (the safety net's, filled at the open): for held-over trades.
+        earlier = [o for o in broker.orders_since((start - dt.timedelta(days=7)).isoformat())
+                   if str(o.get("submitted_at", "")) < start.isoformat()]
         if day == now.date():
             orders, last = session.today_orders(), float(account.get("last_equity") or 0) or None
         else:   # redo a past day's report (e.g. after a fix): only that day's orders
-            start = dt.datetime.combine(day, dt.time(9, 0), daytrade.NY).astimezone(dt.timezone.utc)
             end = (start + dt.timedelta(days=1)).isoformat()
             orders = [o for o in broker.orders_since(start.isoformat()) if str(o.get("submitted_at", "")) < end]
             last = None
         state, embed = daytrade.report(orders, float(account["equity"]), state, day, meta.get("results"),
-                                       last_equity=last)
+                                       last_equity=last, earlier=earlier)
         Path(args.state).write_text(json.dumps(state, indent=1))
         daytrade.write_csv(state["log"], args.log_csv)
         print(embed["description"].replace("**", ""))
