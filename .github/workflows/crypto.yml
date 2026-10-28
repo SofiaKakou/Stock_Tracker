@@ -1,5 +1,5 @@
 # The $100 crypto account (fake money, Alpaca paper account): every 15 minutes it sells the coins held a
-# day and buys big coins that fell 5%+ in the last hour (trend_bot/cryptotrade.py). Crypto trades day and
+# day and buys coins that fell 3%+ in the last hour (trend_bot/cryptotrade.py). Crypto trades day and
 # night, every day. GitHub's schedule is best effort, so an outside timer (GUIDE.md, cron-job.org) starts
 # it too; a second start in the same minutes finds nothing new to do.
 # Nothing happens until the ALPACA_SMALL_KEY_ID and ALPACA_SMALL_SECRET_KEY secrets exist.
@@ -9,7 +9,13 @@ name: Crypto account
 on:
   schedule:
     - cron: "2,17,32,47 * * * *"   # every 15 minutes, just after each 15-minute bar closes
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check = the usual 15-minute check; diagnose = nothing traded, the account's record and the recent dips"
+        type: choice
+        default: check
+        options: [check, diagnose]
 
 concurrency:
   group: crypto-account
@@ -46,7 +52,12 @@ jobs:
           restore-keys: crypto-state-
 
       - name: Check for big dips
-        run: python -m trend_bot crypto --discord
+        run: |
+          if [ "${{ inputs.mode }}" = "diagnose" ]; then
+            python -m trend_bot crypto --diagnose
+          else
+            python -m trend_bot crypto --discord
+          fi
 
       - name: Save open trades
         if: always() && hashFiles('crypto.json') != ''

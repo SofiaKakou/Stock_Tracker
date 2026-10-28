@@ -301,3 +301,74 @@ def summary(broker: CryptoBroker, state: dict, now: dt.datetime | None = None) -
 def load_state(path: str | Path) -> dict:
     p = Path(path)
     return json.loads(p.read_text()) if p.exists() else {}
+
+
+def diagnose(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None, days: int = 90,
+             log=print) -> str:
+    """A look under the hood (nothing traded): the account's own record of the last week (every fill,
+    fee and transfer, to explain a change in its value), and how many dips the market actually gave
+    lately: per week over the last `days` days, the dips each rule would have bought and how they did."""
+    import numpy as np
+
+    now = now or dt.datetime.now(dt.timezone.utc)
+    acct = broker.account()
+    lines = [f"Account: equity ${float(acct.get('equity') or 0):,.2f}, at the last close "
+             f"${float(acct.get('last_equity') or 0):,.2f}, cash ${float(acct.get('cash') or 0):,.2f}"]
+    for p in broker.positions():
+        lines.append(f"  holding {p['symbol']} {p.get('qty')} worth ${float(p.get('market_value') or 0):,.2f} "
+                     f"({float(p.get('unrealized_pl') or 0):+,.2f})")
+    since = (now - dt.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    acts = broker._call("GET", "/account/activities", params={"after": since, "direction": "asc", "page_size": 100}) or []
+    lines += ["", f"The account's own record since {since[:10]} ({len(acts)} entries):"]
+    for a in acts:
+        when = str(a.get("transaction_time") or a.get("date") or "")[:16]
+        if a.get("activity_type") == "FILL":
+            lines.append(f"  {when} {a['activity_type']} {a.get('side')} {a.get('qty')} {a.get('symbol')} at "
+                         f"{a.get('price')} ({a.get('order_status')})")
+        else:
+            lines.append(f"  {when} {a.get('activity_type')} {a.get('symbol') or ''} {a.get('net_amount') or a.get('qty') or ''} "
+                         f"{a.get('description') or ''}".rstrip())
+    lines.append("Log: " + (", ".join(f"{r['symbol']} {r.get('ret', 0):+.1%}" for r in state.get("log", [])) or "no trades"))
+
+    symbols = coins(broker, state, now.date())
+    start = (now - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log(f"[crypto] 15-minute bars for {len(symbols)} coins since {start[:10]}...")
+    df = crypto.fetch(data, symbols, start=start)
+    if df.empty:
+        return "\n".join(lines + ["", "No crypto bars came back."])
+    df = df.sort_values(["symbol", "t"]).reset_index(drop=True)
+    recent, rows = [], []
+    for sym, g in df.groupby("symbol", sort=True):
+        g = g.reset_index(drop=True)
+        sig = crypto.signals(g)
+        c, t = g["close"].to_numpy(float), pd.to_datetime(g["t"], utc=True)
+        hour = np.full(len(c), np.nan)
+        hour[4:] = c[4:] / c[:-4] - 1
+        last3 = (t >= pd.Timestamp(now) - pd.Timedelta(days=3)).to_numpy()
+        if last3.any() and np.isfinite(hour[last3]).any():
+            i = int(np.nanargmin(np.where(last3, hour, np.nan)))
+            recent.append((float(hour[i]), sym, t.iloc[i]))
+        for name in ("dip", "dip 3%", "dip 4%", "big dip"):
+            tr = crypto.trades(g, sig[name], crypto.HOLDS["1 day"])
+            rows += [(name, pd.Timestamp(x), r) for x, r in zip(tr["t"], tr["ret"])]
+    lines += ["", f"Biggest one-hour falls in the last 3 days ({len(recent)} coins; the bot buys at -3%):"]
+    lines += [f"  {s.split('/')[0]:<8} {m:+.1%} (at {w:%a %H:%M} UTC)" for m, s, w in sorted(recent)[:12]]
+    tr = pd.DataFrame(rows, columns=["rule", "t", "ret"])
+    if not tr.empty:
+        tr["week"] = pd.to_datetime(tr["t"], utc=True).dt.strftime("%G-W%V")
+        names = {"dip": "2%+", "dip 3%": "3%+", "dip 4%": "4%+", "big dip": "5%+"}
+        lines += ["", f"Dips bought and sold a day later, last {days} days (all coins, one at a time per coin; "
+                      "per trade before fees, fees about 0.3-0.5% a trade):",
+                  "  week      " + "  ".join(f"{names[n]:>15}" for n in names)]
+        for week, w in tr.groupby("week"):
+            cells = []
+            for n in names:
+                r = w.loc[w["rule"] == n, "ret"]
+                cells.append(f"{len(r):>3} {r.mean():+6.2%}" if len(r) else f"{0:>3} {'':>6}")
+            lines.append(f"  {week}  " + "  ".join(f"{x:>15}" for x in cells))
+        for n, label in names.items():
+            r = tr.loc[tr["rule"] == n, "ret"]
+            if len(r):
+                lines.append(f"  all {label}: {len(r)} trades ({len(r) / days:.1f} a day), {r.mean():+.2%} a trade before fees, "
+                             f"right {(r > 0).mean():.0%}")
+    return "\n".join(lines)
