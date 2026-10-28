@@ -486,6 +486,21 @@ later as its own step.)
   GitHub Secrets. The GitHub Actions it uses are locked to exact versions and every workflow can only
   read the code by default. ⚠️ Bot health and a Discord message tell you if a trading job fails.
 
+## Seeing the crypto rule on TradingView
+
+`tradingview/crypto_4pct_dip.pine` is the crypto account's rule as a TradingView strategy, to see where it
+would have bought and sold and how that went. It only draws and replays on the chart: it never trades.
+
+1. tradingview.com → open a chart of a coin (e.g. `SOLUSD`; Alpaca's prices aren't needed, any exchange
+   works) → set the chart to **15 minutes** (the bot looks at 15-minute bars).
+2. Bottom panel → **Pine Editor** → delete what's there → paste the whole file → **Save** → **Add to chart**.
+3. Orange triangles: the 4% dips. Arrows: the buys (only when the price came back to the waiting order) and
+   the sells. **Strategy Tester** (bottom panel): every trade and the total, after 0.15% fees a side.
+4. Settings (the gear on the strategy's name): try another dip size, wait or hold, and see what changes. A
+   number that looks good on a few coins isn't proof: anything worth changing gets tested here first
+   (`study crypto-maker` runs all 32 coins with the bot's stricter fills).
+5. Optional alert (paid plans): Alerts → Create → condition: this strategy, **Any alert() function call**.
+
 ## A reliable timer for the trading jobs (cron-job.org)
 
 GitHub's own schedule is best effort: runs start late or are skipped on busy days (the morning part
