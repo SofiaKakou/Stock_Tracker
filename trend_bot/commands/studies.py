@@ -657,6 +657,15 @@ def cmd_study(args: argparse.Namespace) -> int:
                 coins = crypto.all_coins(broker) if broker else None
             print(crypto.run(data, symbols=coins))
             return 0
+        if args.signal == "scalp":
+            from trend_bot import intraday, scalp
+
+            data = intraday.Data.from_env()
+            if data is None:
+                print("Needs Alpaca's market data: the ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY secrets.")
+                return 1
+            print(scalp.run(con, data))
+            return 0
         if args.signal in ("crypto-fast", "crypto-maker"):
             from trend_bot import crypto, crypto_fast, cryptotrade, intraday
             from trend_bot.paper import Paper
