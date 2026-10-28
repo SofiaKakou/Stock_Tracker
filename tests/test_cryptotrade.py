@@ -169,3 +169,48 @@ def test_all_the_brokers_coins_except_the_stable_ones_read_once_a_day(monkeypatc
 
     monkeypatch.setattr(ct.crypto, "all_coins", broken)
     assert ct.coins(None, {}, NOW.date()) == ct.COINS                  # the big ones if the list can't be read
+
+
+def test_diagnose_lists_the_accounts_record_and_the_recent_dips(monkeypatch):
+    class B(Broker):
+        def _call(self, method, path, **kw):
+            assert method == "GET" and path == "/account/activities"
+            return [{"activity_type": "FILL", "transaction_time": "2026-10-27T13:30:01Z", "side": "sell",
+                     "qty": "1", "symbol": "SPY", "price": "580", "order_status": "filled"},
+                    {"activity_type": "CFEE", "date": "2026-10-27", "symbol": "BTC/USD", "net_amount": "-0.02"}]
+
+    t = pd.date_range(pd.Timestamp("2026-10-20", tz="UTC"), NOW, freq="15min")
+    c = np.full(len(t), 100.0)
+    c[400:] = 96.0                        # one 4% fall in an hour, then flat
+    df = pd.DataFrame({"symbol": "SOL/USD", "t": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "open": c, "high": c,
+                       "low": c, "close": c, "volume": 1.0})
+    monkeypatch.setattr(ct.crypto, "fetch", lambda data, coins, start: df)
+    state = {"coins": {"date": NOW.date().isoformat(), "list": ["SOL/USD"]}}
+    out = ct.diagnose(B(), Data({}), state, now=NOW, days=10, log=lambda *_: None)
+    assert "equity $100.50, at the last close $100.00" in out
+    assert "FILL sell 1 SPY at 580" in out and "CFEE BTC/USD -0.02" in out
+    assert "all 3%+: 1 trades" in out and "all 5%+" not in out
+
+
+def test_prices_of_coins_worth_a_fraction_of_a_cent_are_sent_as_plain_digits():
+    assert ct.number(5.92345e-06) == "0.000005923"                       # was '5.92345e-06': refused
+    assert ct.number(5.92345e-06, up=True) == "0.000005924"
+    assert ct.number(5.92345e-06, "0.0000000001", up=True) == "0.0000059235"
+    assert ct.number(67123.456789, "0.01") == "67123.45" and ct.number(1690000.7, "1") == "1690000"
+
+    class B(ct.CryptoBroker):
+        def __init__(self):
+            self.sent = []
+
+        def _call(self, method, path, **kw):
+            if method == "GET":
+                assert path == "/assets/PEPE%2FUSD"
+                return {"price_increment": "0.000000001", "min_trade_increment": "1"}
+            self.sent.append(kw["json"])
+            return {"id": "x"}
+
+    b = B()
+    b.buy_limit("PEPE/USD", 1_690_000.7, 5.92345e-06, "t")
+    b.stop_sell("PEPE/USD", "1690000", 5.0e-06, 4.7e-06, "t-stop")
+    assert b.sent[0]["qty"] == "1690000" and b.sent[0]["limit_price"] == "0.000005924"
+    assert b.sent[1]["stop_price"] == "0.000005000" and b.sent[1]["limit_price"] == "0.000004700"

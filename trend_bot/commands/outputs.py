@@ -349,6 +349,9 @@ def cmd_crypto(args: argparse.Namespace) -> int:
         print(f"The $100 crypto account isn't set up ({SMALL_KEY_ENV} / {SMALL_SECRET_ENV}); skipped.")
         return 0
     state = cryptotrade.load_state(args.state)
+    if args.diagnose:
+        print(cryptotrade.diagnose(broker, data, state))
+        return 0
     if args.summary:
         embeds = [cryptotrade.summary(broker, state)]
     else:

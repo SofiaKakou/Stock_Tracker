@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import time
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -58,20 +59,48 @@ def key(symbol: str) -> str:
     return symbol.replace("/", "")
 
 
+def number(x: float, step: str | None = None, up: bool = False) -> str:
+    """A price or amount as the broker accepts it: plain digits (never 6e-06), a whole number of the coin's
+    `step` (rounded down; up for a buy's limit), or else 6 significant digits, at most 9 decimals. Coins
+    worth a fraction of a cent (PEPE, SHIB) were refused with '.6g' prices: 'exceeds maximum precision'."""
+    d = Decimal(repr(float(x)))
+    if step and Decimal(step) > 0:
+        q = Decimal(step)
+        n = (d / q).to_integral_value(rounding=ROUND_CEILING if up else ROUND_FLOOR) * q
+        return f"{n.quantize(q.normalize() if q.normalize().as_tuple().exponent < 0 else Decimal(1)):f}"
+    if d == 0:
+        return "0"
+    places = min(9, max(2, 5 - d.adjusted()))
+    return f"{d.quantize(Decimal(1).scaleb(-places), rounding=ROUND_CEILING if up else ROUND_FLOOR):f}"
+
+
 class CryptoBroker(Paper):
     @classmethod
     def from_env(cls, key_env: str = SMALL_KEY_ENV, secret_env: str = SMALL_SECRET_ENV) -> "CryptoBroker | None":
         return super().from_env(key_env, secret_env)
 
+    def steps(self, symbol: str) -> tuple[str | None, str | None]:
+        """(price step, amount step) the broker allows for this coin (None if unknown)."""
+        cache = self.__dict__.setdefault("_steps", {})
+        if symbol not in cache:
+            try:
+                a = self._call("GET", f"/assets/{symbol.replace('/', '%2F')}")
+                cache[symbol] = (a.get("price_increment"), a.get("min_trade_increment"))
+            except PaperError:
+                cache[symbol] = (None, None)
+        return cache[symbol]
+
     def buy_limit(self, symbol: str, qty: float, limit: float, tag: str) -> dict:
-        return self._call("POST", "/orders", json={"symbol": symbol, "qty": f"{qty:.8f}", "side": "buy",
-                                                    "type": "limit", "limit_price": f"{limit:.6g}",
+        price_step, qty_step = self.steps(symbol)
+        return self._call("POST", "/orders", json={"symbol": symbol, "qty": number(qty, qty_step), "side": "buy",
+                                                    "type": "limit", "limit_price": number(limit, price_step, up=True),
                                                     "time_in_force": "ioc", "client_order_id": tag})
 
     def stop_sell(self, symbol: str, qty: str, stop: float, limit: float, tag: str) -> dict:
+        price_step, _ = self.steps(symbol)
         return self._call("POST", "/orders", json={"symbol": symbol, "qty": qty, "side": "sell",
-                                                    "type": "stop_limit", "stop_price": f"{stop:.6g}",
-                                                    "limit_price": f"{limit:.6g}", "time_in_force": "gtc",
+                                                    "type": "stop_limit", "stop_price": number(stop, price_step),
+                                                    "limit_price": number(limit, price_step), "time_in_force": "gtc",
                                                     "client_order_id": tag})
 
 
@@ -301,3 +330,74 @@ def summary(broker: CryptoBroker, state: dict, now: dt.datetime | None = None) -
 def load_state(path: str | Path) -> dict:
     p = Path(path)
     return json.loads(p.read_text()) if p.exists() else {}
+
+
+def diagnose(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None, days: int = 90,
+             log=print) -> str:
+    """A look under the hood (nothing traded): the account's own record of the last week (every fill,
+    fee and transfer, to explain a change in its value), and how many dips the market actually gave
+    lately: per week over the last `days` days, the dips each rule would have bought and how they did."""
+    import numpy as np
+
+    now = now or dt.datetime.now(dt.timezone.utc)
+    acct = broker.account()
+    lines = [f"Account: equity ${float(acct.get('equity') or 0):,.2f}, at the last close "
+             f"${float(acct.get('last_equity') or 0):,.2f}, cash ${float(acct.get('cash') or 0):,.2f}"]
+    for p in broker.positions():
+        lines.append(f"  holding {p['symbol']} {p.get('qty')} worth ${float(p.get('market_value') or 0):,.2f} "
+                     f"({float(p.get('unrealized_pl') or 0):+,.2f})")
+    since = (now - dt.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    acts = broker._call("GET", "/account/activities", params={"after": since, "direction": "asc", "page_size": 100}) or []
+    lines += ["", f"The account's own record since {since[:10]} ({len(acts)} entries):"]
+    for a in acts:
+        when = str(a.get("transaction_time") or a.get("date") or "")[:16]
+        if a.get("activity_type") == "FILL":
+            lines.append(f"  {when} {a['activity_type']} {a.get('side')} {a.get('qty')} {a.get('symbol')} at "
+                         f"{a.get('price')} ({a.get('order_status')})")
+        else:
+            lines.append(f"  {when} {a.get('activity_type')} {a.get('symbol') or ''} {a.get('net_amount') or a.get('qty') or ''} "
+                         f"{a.get('description') or ''}".rstrip())
+    lines.append("Log: " + (", ".join(f"{r['symbol']} {r.get('ret', 0):+.1%}" for r in state.get("log", [])) or "no trades"))
+
+    symbols = coins(broker, state, now.date())
+    start = (now - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log(f"[crypto] 15-minute bars for {len(symbols)} coins since {start[:10]}...")
+    df = crypto.fetch(data, symbols, start=start)
+    if df.empty:
+        return "\n".join(lines + ["", "No crypto bars came back."])
+    df = df.sort_values(["symbol", "t"]).reset_index(drop=True)
+    recent, rows = [], []
+    for sym, g in df.groupby("symbol", sort=True):
+        g = g.reset_index(drop=True)
+        sig = crypto.signals(g)
+        c, t = g["close"].to_numpy(float), pd.to_datetime(g["t"], utc=True)
+        hour = np.full(len(c), np.nan)
+        hour[4:] = c[4:] / c[:-4] - 1
+        last3 = (t >= pd.Timestamp(now) - pd.Timedelta(days=3)).to_numpy()
+        if last3.any() and np.isfinite(hour[last3]).any():
+            i = int(np.nanargmin(np.where(last3, hour, np.nan)))
+            recent.append((float(hour[i]), sym, t.iloc[i]))
+        for name in ("dip", "dip 3%", "dip 4%", "big dip"):
+            tr = crypto.trades(g, sig[name], crypto.HOLDS["1 day"])
+            rows += [(name, pd.Timestamp(x), r) for x, r in zip(tr["t"], tr["ret"])]
+    lines += ["", f"Biggest one-hour falls in the last 3 days ({len(recent)} coins; the bot buys at -3%):"]
+    lines += [f"  {s.split('/')[0]:<8} {m:+.1%} (at {w:%a %H:%M} UTC)" for m, s, w in sorted(recent)[:12]]
+    tr = pd.DataFrame(rows, columns=["rule", "t", "ret"])
+    if not tr.empty:
+        tr["week"] = pd.to_datetime(tr["t"], utc=True).dt.strftime("%G-W%V")
+        names = {"dip": "2%+", "dip 3%": "3%+", "dip 4%": "4%+", "big dip": "5%+"}
+        lines += ["", f"Dips bought and sold a day later, last {days} days (all coins, one at a time per coin; "
+                      "per trade before fees, fees about 0.3-0.5% a trade):",
+                  "  week      " + "  ".join(f"{names[n]:>15}" for n in names)]
+        for week, w in tr.groupby("week"):
+            cells = []
+            for n in names:
+                r = w.loc[w["rule"] == n, "ret"]
+                cells.append(f"{len(r):>3} {r.mean():+6.2%}" if len(r) else f"{0:>3} {'':>6}")
+            lines.append(f"  {week}  " + "  ".join(f"{x:>15}" for x in cells))
+        for n, label in names.items():
+            r = tr.loc[tr["rule"] == n, "ret"]
+            if len(r):
+                lines.append(f"  all {label}: {len(r)} trades ({len(r) / days:.1f} a day), {r.mean():+.2%} a trade before fees, "
+                             f"right {(r > 0).mean():.0%}")
+    return "\n".join(lines)

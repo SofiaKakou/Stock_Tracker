@@ -307,6 +307,8 @@ def make_parser() -> argparse.ArgumentParser:
     cx.add_argument("--state", default="crypto.json", help="open trades and the trade log")
     cx.add_argument("--summary", action="store_true", help="the evening summary instead of a check")
     cx.add_argument("--discord", action="store_true", help="post trades (and the summary) to Discord")
+    cx.add_argument("--diagnose", action="store_true",
+                    help="nothing traded: the account's own record of the last week, and how many dips came lately")
     cx.set_defaults(func=cmd_crypto)
 
     lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")
