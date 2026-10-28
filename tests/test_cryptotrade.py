@@ -28,6 +28,7 @@ class Broker:
     def __init__(self, positions=None, cash=100.0):
         self.held = {p["symbol"]: p for p in (positions or [])}
         self.cash, self.orders, self.closed, self.cancelled = cash, [], [], []
+        self.book = {}
 
     def positions(self):
         return list(self.held.values())
@@ -44,16 +45,34 @@ class Broker:
 
     def cancel(self, oid):
         self.cancelled.append(oid)
+        if oid in self.book and self.book[oid]["status"] != "filled":
+            self.book[oid]["status"] = "canceled"
 
     def get_order(self, oid):
-        return {"id": oid, "status": "filled", "filled_avg_price": "85"}
+        return self.book.get(oid, {"id": oid, "status": "filled", "filled_avg_price": "85"})
 
-    def buy_limit(self, symbol, qty, limit, tag):
-        self.orders.append(("buy", symbol, qty, limit, tag))
-        price = limit / (1 + ct.SLACK)
-        self.held[symbol.replace("/", "")] = {"symbol": symbol.replace("/", ""), "qty": f"{qty * 0.9985:.8f}",
-                                             "asset_class": "crypto", "current_price": str(price)}
-        return {"id": "b1", "status": "filled", "filled_avg_price": str(price), "filled_qty": str(qty)}
+    def fill(self, oid, price, qty=None):
+        """The market came to a waiting order."""
+        o = self.book[oid]
+        q = qty if qty is not None else o["qty"]
+        o.update(status="filled", filled_avg_price=str(price), filled_qty=str(q), filled_at=NOW.isoformat())
+        sym = o["symbol"].replace("/", "")
+        if o["side"] == "buy":
+            self.held[sym] = {"symbol": sym, "qty": f"{q * 0.9985:.8f}", "asset_class": "crypto", "current_price": str(price)}
+        else:
+            self.held.pop(sym, None)
+
+    def buy_limit(self, symbol, qty, limit, tag, tif="ioc"):
+        self.orders.append(("buy", symbol, qty, limit, tag, tif))
+        oid = f"b-{symbol}"
+        self.book[oid] = {"id": oid, "symbol": symbol, "side": "buy", "qty": qty, "status": "new", "filled_qty": "0"}
+        return self.book[oid]
+
+    def sell_limit(self, symbol, qty, limit, tag):
+        self.orders.append(("sell", symbol, qty, limit, tag))
+        oid = f"s-{symbol}"
+        self.book[oid] = {"id": oid, "symbol": symbol, "side": "sell", "qty": float(qty), "status": "new"}
+        return self.book[oid]
 
     def stop_sell(self, symbol, qty, stop, limit, tag):
         self.orders.append(("stop", symbol, qty, stop, limit, tag))
@@ -73,27 +92,62 @@ def market(monkeypatch):
     return use
 
 
-def test_a_big_dip_is_bought_with_a_safety_stop(market):
-    market({"BTC/USD": -0.01, "SOL/USD": -0.06})
+def quiet(broker, state, now=NOW):
+    return ct.run(broker, Data(None), state, now=now, log=lambda *_: None, sleep=lambda s: None)
+
+
+def test_a_dip_gets_a_buy_that_waits_at_the_bid_and_a_safety_stop_once_filled(market):
+    market({"BTC/USD": -0.01, "SOL/USD": -0.06, "ETH/USD": -0.025})      # 2.5%: the stopped experiment, not bought
     broker, state = Broker(), {}
-    out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
+    assert quiet(broker, state) == []
     buy = [o for o in broker.orders if o[0] == "buy"]
-    assert [o[1] for o in buy] == ["SOL/USD"] and buy[0][2] * 95.0 == pytest.approx(ct.AMOUNT)
-    assert buy[0][3] == pytest.approx(95.0 * (1 + ct.SLACK))                       # at most 0.3% above the ask
+    assert [o[1] for o in buy] == ["SOL/USD"] and buy[0][5] == "gtc"
+    limit = 94.9 * (1 - ct.OFFSET)
+    assert buy[0][3] == pytest.approx(limit) and buy[0][2] * limit == pytest.approx(ct.AMOUNT)   # a little below the bid
+    assert list(state["buying"]) == ["SOLUSD"] and not state["open"]
+    broker.fill("b-SOL/USD", limit)
+    market({})
+    out = quiet(broker, state, NOW + dt.timedelta(minutes=15))
     stop = [o for o in broker.orders if o[0] == "stop"][0]
-    assert stop[3] == pytest.approx(95.0 * 0.85) and stop[2] == state["open"]["SOLUSD"]["qty"]   # the qty after the fee
-    assert "Bought SOL" in out[0]["title"]
+    assert stop[3] == pytest.approx(limit * 0.85) and stop[2] == state["open"]["SOLUSD"]["qty"]   # the qty after the fee
+    assert not state["buying"] and "Bought SOL" in out[0]["title"]
 
 
-def test_held_a_day_it_is_sold_and_logged(market):
+def test_a_buy_the_price_never_came_back_to_is_cancelled_after_its_wait(market):
+    market({"SOL/USD": -0.06})
+    broker, state = Broker(), {}
+    quiet(broker, state)
+    market({})
+    quiet(broker, state, NOW + dt.timedelta(minutes=15))
+    assert state["buying"] and not broker.cancelled                      # still within its wait
+    out = quiet(broker, state, NOW + ct.WAIT_BUY)
+    assert broker.cancelled == ["b-SOL/USD"] and not state["buying"] and not state["open"] and out == []
+
+
+def test_held_a_day_a_sell_waits_at_the_ask_then_the_rest_goes_at_the_market(market):
     market({})
     t0 = NOW - dt.timedelta(days=1, minutes=1)
     broker = Broker([{"symbol": "SOLUSD", "qty": "0.26", "asset_class": "crypto", "current_price": "99"}])
     state = {"open": {"SOLUSD": {"symbol": "SOL/USD", "time": t0.isoformat(), "price": 95.0, "qty": "0.26",
                                  "cost": 24.7, "stop_id": "s1"}}}
-    out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
-    assert broker.cancelled == ["s1"] and broker.closed == ["SOLUSD"] and not state["open"]
+    assert quiet(broker, state) == []
+    assert broker.cancelled == ["s1"] and ("sell", "SOL/USD", "0.26", 95.0, broker.orders[0][4]) == broker.orders[0]
+    out = quiet(broker, state, NOW + ct.WAIT_SELL)                      # nobody paid the ask in 15 minutes
+    assert "s-SOL/USD" in broker.cancelled and broker.closed == ["SOLUSD"] and not state["open"]
     assert state["log"][0]["ret"] == pytest.approx(99 / 95 - 1) and "+4.2%" in out[0]["title"]
+
+
+def test_a_waiting_sell_that_fills_is_recorded_at_its_price(market):
+    market({})
+    t0 = NOW - dt.timedelta(days=1, minutes=1)
+    broker = Broker([{"symbol": "SOLUSD", "qty": "0.26", "asset_class": "crypto", "current_price": "99"}])
+    state = {"open": {"SOLUSD": {"symbol": "SOL/USD", "time": t0.isoformat(), "price": 95.0, "qty": "0.26",
+                                 "cost": 24.7, "stop_id": "s1"}}}
+    quiet(broker, state)
+    broker.fill("s-SOL/USD", 95.0 * 1.05)
+    out = quiet(broker, state, NOW + dt.timedelta(minutes=15))
+    assert not broker.closed and state["log"][0]["ret"] == pytest.approx(0.05) and state["log"][0]["how"] == "day"
+    assert "a day later" in out[0]["title"]
 
 
 def test_not_yet_a_day_it_is_kept_and_a_stopped_one_is_recorded(market):
@@ -103,7 +157,7 @@ def test_not_yet_a_day_it_is_kept_and_a_stopped_one_is_recorded(market):
                                  "price": 2500.0, "qty": "0.01", "cost": 25.0},
                       "SOLUSD": {"symbol": "SOL/USD", "time": (NOW - dt.timedelta(hours=2)).isoformat(),
                                  "price": 100.0, "qty": "0.25", "cost": 25.0, "stop_id": "s2"}}}
-    out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
+    out = quiet(broker, state)
     assert list(state["open"]) == ["ETHUSD"] and not broker.closed
     assert state["log"][0]["how"] == "stop" and state["log"][0]["ret"] == pytest.approx(-0.15)
     assert "safety stop" in out[0]["title"]
@@ -114,30 +168,26 @@ def test_leftover_stocks_are_sold_once_announced(market):
     broker = Broker([{"symbol": "AAPL", "qty": "0.02", "asset_class": "us_equity"},
                      {"symbol": "MSFT", "qty": "0.01", "asset_class": "us_equity"}])
     state = {}
-    out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
+    out = quiet(broker, state)
     assert sorted(broker.closed) == ["AAPL", "MSFT"] and state["stocks_sold"] and "now a crypto account" in out[0]["title"]
 
 
-def test_slots_per_kind_and_a_stale_signal_is_ignored(market):
-    market({**{f"C{i}/USD": -0.06 for i in range(7)}, **{f"F{i}/USD": -0.025 for i in range(6)}})
+def test_at_most_five_coins_held_or_being_bought_and_a_stale_signal_is_ignored(market):
+    market({f"C{i}/USD": -0.06 for i in range(7)})
     broker, state = Broker(cash=1000.0), {}
-    out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
-    kinds = [t["kind"] for t in state["open"].values()]
-    assert kinds.count("big") == ct.KINDS["big"]["slots"] and kinds.count("fast") == ct.KINDS["fast"]["slots"]
-    fast = [o for o in broker.orders if o[0] == "buy" and "cx-fast" in o[4]]
-    assert fast[0][2] * 95.0 == pytest.approx(10.0)                  # $10 each
-    assert len(out) == ct.KINDS["big"]["slots"]                      # only the big dips are announced
+    quiet(broker, state)
+    assert len(state["buying"]) == ct.SLOTS
     late = NOW + dt.timedelta(minutes=40)                       # GitHub started the check 40 minutes late
     assert ct.dips(bars({"X/USD": -0.06}), late) == {}
 
 
-def test_a_fast_trade_is_sold_after_an_hour_quietly(market):
+def test_a_trade_from_the_stopped_fast_experiment_is_still_sold_after_an_hour(market):
     market({})
     broker = Broker([{"symbol": "ETHUSD", "qty": "0.004", "asset_class": "crypto", "current_price": "2480"}])
     state = {"open": {"ETHUSD": {"symbol": "ETH/USD", "time": (NOW - dt.timedelta(minutes=61)).isoformat(),
                                  "price": 2500.0, "qty": "0.004", "cost": 10.0, "kind": "fast"}}}
-    out = ct.run(broker, Data(None), state, now=NOW, log=lambda *_: None, sleep=lambda s: None)
-    assert broker.closed == ["ETHUSD"] and out == [] and state["log"][0]["kind"] == "fast"
+    quiet(broker, state)
+    assert broker.orders[0][0] == "sell"
 
 
 def test_the_evening_summary_reads_well():
@@ -148,8 +198,8 @@ def test_the_evening_summary_reads_well():
                                   "entry": 2500.0, "exit": 2490.0, "how": "hour", "cost": 10.0, "ret": -0.004,
                                   "kind": "fast"}]}
     d = ct.summary(Broker(), state, now=NOW)["description"]
-    assert "$100.50" in d and "SOL +4.2%" in d and "dip 3%+, held a day (tested: passes, thin)**: 1 trades" in d
-    assert "fast experiment" in d and "-0.40%" in d
+    assert "$100.50" in d and "SOL +4.2%" in d and "dip 4%+, held a day**: 1 trades" in d
+    assert "2% experiment (stopped)" in d and "-0.40%" in d
 
 
 def test_all_the_brokers_coins_except_the_stable_ones_read_once_a_day(monkeypatch):

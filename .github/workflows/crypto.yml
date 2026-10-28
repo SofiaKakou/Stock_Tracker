@@ -1,5 +1,5 @@
 # The $100 crypto account (fake money, Alpaca paper account): every 15 minutes it sells the coins held a
-# day and buys coins that fell 3%+ in the last hour (trend_bot/cryptotrade.py). Crypto trades day and
+# day and buys coins that fell 4%+ in the last hour (trend_bot/cryptotrade.py). Crypto trades day and
 # night, every day. GitHub's schedule is best effort, so an outside timer (GUIDE.md, cron-job.org) starts
 # it too; a second start in the same minutes finds nothing new to do.
 # Nothing happens until the ALPACA_SMALL_KEY_ID and ALPACA_SMALL_SECRET_KEY secrets exist.

@@ -2,16 +2,17 @@
 
 From the crypto study (`study crypto --all-coins`, 15-minute prices of Alpaca's 36 coins since 2021): a coin
 that fell sharply in the last hour usually bounces. Bought right after and sold a day later, 3%+ dips made
-+0.34% a trade after limit-order fees (about 3.7 a day over all coins), 4%+ +0.81%, 5%+ +1.57%: smaller
-dips, more trades, less each. The user chose 3%+ for more trades.
++0.34% a trade after limit-order fees, 4%+ +0.81%, 5%+ +1.57%. The 5-minute studies of Oct 28 (`study
+crypto-fast`, `study crypto-maker`, 2024-2026) found 3%+ dips losing since mid-2025 whatever the order, and
+4%+ dips bought with orders that wait in the book still ahead: the account buys those.
 
-Every 15 minutes (GitHub, and the outside timer): coins held their time are sold; then any coin (all of the
-broker's, except the stable ones) whose last complete 15-minute bar closed 3%+ below its price an hour
-earlier is bought for about $16 (up to five at once, one per coin), with a limit order at most 0.3% above
-the asking price that fills now or not at all, and a safety stop at the broker 15% below the fill (coins
-that collapsed, like LUNA in 2022, aren't in the data, so a dip-buy that keeps falling is cut off). Next to
-it, a small experiment: 2%-3% dips sold an hour later (expected to lose to the fees). Each dip trade goes
-to Discord, and the evening run adds a summary.
+Every 15 minutes (GitHub, and the outside timer): any coin (all of the broker's, except the stable ones)
+whose last complete 15-minute bar closed 4%+ below its price an hour earlier gets a buy of about $16 that
+waits 0.25% below the bid for 30 minutes (up to five coins held or being bought at once, one per coin).
+Once it fills, a safety stop goes in at the broker 15% below the fill (coins that collapsed, like LUNA in
+2022, aren't in the data, so a dip-buy that keeps falling is cut off). A day later a sell waits at the
+asking price for 15 minutes, then the rest is sold at the market. Each dip trade goes to Discord, and the
+evening run adds a summary. (A 2%-dip, one-hour experiment ran Oct 27-28; it lost to fees in every test.)
 
 The account used to hold the monthly portfolio at $100; any stocks still in it are sold on the first run.
 Paper money only: the broker address is fixed to Alpaca's paper server (trend_bot.paper).
@@ -33,25 +34,28 @@ from trend_bot.paper import SMALL_KEY_ENV, SMALL_SECRET_ENV, Paper, PaperError
 COINS = crypto.SYMBOLS   # if the broker's list can't be read
 # Coins built not to move (dollar and gold tokens): a "dip" there is a data glitch, never a bounce.
 STABLE = {"USDT", "USDC", "USDG", "PAXG", "DAI", "PYUSD", "TUSD", "USDP", "FDUSD", "XAUT", "USDE"}
-DIP = 0.03               # fell this much in the last hour (4 complete 15-minute bars)
+DIP = 0.04               # fell this much in the last hour (4 complete 15-minute bars); 3% until Oct 28
 HOLD = dt.timedelta(days=1)
 STOP = 0.15              # the safety stop, below the fill
 STOP_LIMIT = 0.20        # ... sold at no less than this far below (a stop on a crashing coin needs room)
-SLACK = 0.003            # buy at most 0.3% above the asking price
 AMOUNT = 16.0            # dollars a trade
-SLOTS = 4
-# Two kinds of trade share the account. The dip (all 36 of Alpaca's coins since 2021, `study crypto
-# --all-coins`): 3%+ in an hour, held a day, +0.34% a trade after limit-order fees, about 3.7 a day; the user
-# chose it over 4%+ (+0.81%, 1.9 a day) and 5%+ (+1.57%, 1.1 a day) for more trades. Our orders take the
-# asking price (the 0.25% fee, not 0.15%), at which the test makes about +0.14% a trade: thin. And an
-# experiment the user asked for: 2%-3% dips sold an hour later, which the test says lose (-0.21% a trade).
-KINDS = {"big": {"dip": DIP, "hold": HOLD, "amount": AMOUNT, "slots": 5, "name": "dip 3%+, held a day (tested: passes, thin)"},
-         "fast": {"dip": 0.02, "hold": dt.timedelta(hours=1), "amount": 10.0, "slots": 2,
-                  "name": "fast experiment: 2% dip, sold an hour later (tested: loses to fees)"}}
+SLOTS = 5                # coins held (or being bought) at once
+# Orders that wait in the book pay Alpaca 0.15% a side instead of 0.25% (`study crypto-maker`, 5-minute bars
+# of 32 coins 2024-2026, a buy counted only if the price later traded through it): the buy waits 0.25% below
+# the bid for 30 minutes (about 3 in 4 dips fill), and a day later the sell waits at the asking price for 15
+# minutes, then whatever is left is sold at the market. For 3%+ dips that made +0.18% a trade after fees
+# (taking the price: +0.04%), but -0.11% in the second half (mid-2025 on); for 4%+ dips +0.77% (+0.18% in
+# the second half). The user chose 4%+ on Oct 28 (about 1.6 trades a day; the only version making money lately).
+OFFSET = 0.0025
+WAIT_BUY = dt.timedelta(minutes=30)
+WAIT_SELL = dt.timedelta(minutes=15)
+HOLDS = {"big": HOLD, "fast": dt.timedelta(hours=1)}   # "fast": the 2% experiment, stopped Oct 28 (lost to fees)
+KINDS = {"big": {"name": "dip 4%+, held a day"}}
 MIN_TRADE = 5.0          # less cash than this: no trade
 FRESH = dt.timedelta(minutes=25)   # a signal from a bar older than this is stale (a run started late)
 QUOTES_URL = "https://data.alpaca.markets/v1beta3/crypto/us/latest/quotes"
-TEST = {"per_trade": 0.0034, "hit": 0.53, "per_day": 3.7}   # the study: 3%+ dips held a day, after limit-order fees
+TEST = {"note": "4%+ dips with waiting orders, 2024-2026: +0.77% a trade after fees, +0.18% since mid-2025, "
+                "about 1.6 a day; not quite past the luck bar (t = 1.9)"}
 
 
 def key(symbol: str) -> str:
@@ -90,11 +94,17 @@ class CryptoBroker(Paper):
                 cache[symbol] = (None, None)
         return cache[symbol]
 
-    def buy_limit(self, symbol: str, qty: float, limit: float, tag: str) -> dict:
+    def buy_limit(self, symbol: str, qty: float, limit: float, tag: str, tif: str = "ioc") -> dict:
         price_step, qty_step = self.steps(symbol)
         return self._call("POST", "/orders", json={"symbol": symbol, "qty": number(qty, qty_step), "side": "buy",
-                                                    "type": "limit", "limit_price": number(limit, price_step, up=True),
-                                                    "time_in_force": "ioc", "client_order_id": tag})
+                                                    "type": "limit", "limit_price": number(limit, price_step, up=(tif == "ioc")),
+                                                    "time_in_force": tif, "client_order_id": tag})
+
+    def sell_limit(self, symbol: str, qty: str, limit: float, tag: str) -> dict:
+        price_step, _ = self.steps(symbol)
+        return self._call("POST", "/orders", json={"symbol": symbol, "qty": qty, "side": "sell", "type": "limit",
+                                                    "limit_price": number(limit, price_step, up=True),
+                                                    "time_in_force": "gtc", "client_order_id": tag})
 
     def stop_sell(self, symbol: str, qty: str, stop: float, limit: float, tag: str) -> dict:
         price_step, _ = self.steps(symbol)
@@ -144,11 +154,12 @@ def dips(bars: pd.DataFrame, now: dt.datetime, threshold: float = DIP) -> dict[s
 
 def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None, log=print,
         sleep=time.sleep) -> list[dict]:
-    """One check: sell what's due, sell leftover stocks, buy new big dips. Returns the Discord embeds."""
+    """One check: settle waiting orders, sell what's due, buy new dips. Returns the Discord embeds."""
     now = now or dt.datetime.now(dt.timezone.utc)
     embeds: list[dict] = []
     held = {key(p["symbol"]): p for p in broker.positions()}
     open_trades = state.setdefault("open", {})
+    waiting = state.setdefault("buying", {})
 
     # Stocks from the account's monthly-portfolio days: sold (orders wait for the open if it's shut).
     stocks = [p for p in held.values() if p.get("asset_class") == "us_equity"]
@@ -163,99 +174,165 @@ def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None,
                        "description": f"Sold its {len(stocks)} stocks (from the monthly portfolio) to trade "
                                       "crypto: it buys coins that fell sharply in an hour and sells them a day later."})
 
+    # Buys waiting in the book: filled (a trade starts), or the wait is over (cancelled; what filled counts).
+    for k, w in list(waiting.items()):
+        try:
+            o = broker.get_order(w["id"])
+        except PaperError as e:
+            log(f"[crypto] {w['symbol']}: waiting buy not readable ({str(e)[:80]})")
+            continue
+        done = o.get("status") in ("filled", "canceled", "expired", "rejected")
+        if not done and now - dt.datetime.fromisoformat(w["time"]) < WAIT_BUY:
+            continue
+        if not done:
+            try:
+                broker.cancel(w["id"])
+                sleep(1)
+                o = broker.get_order(w["id"])
+            except PaperError:
+                pass
+        del waiting[k]
+        if not float(o.get("filled_qty") or 0) or not o.get("filled_avg_price"):
+            log(f"[crypto] {w['symbol']}: the price didn't come back to {w['limit']:,.6g}; not bought")
+            continue
+        price = float(o["filled_avg_price"])
+        pos = next((p for p in broker.positions() if key(p["symbol"]) == k), None)
+        qty = pos["qty"] if pos else str(o["filled_qty"])   # after the fee (paid in the coin)
+        tr = {"symbol": w["symbol"], "time": str(o.get("filled_at") or now.isoformat()), "price": price, "qty": qty,
+              "dip": w["dip"], "cost": float(qty) * price, "kind": "big"}
+        try:
+            stop = broker.stop_sell(w["symbol"], qty, price * (1 - STOP), price * (1 - STOP_LIMIT), f"{w['tag']}-stop")
+            tr["stop_id"] = stop.get("id")
+        except PaperError as e:   # no broker stop: the 15-minute check still sells it at the day's end
+            log(f"[crypto] {w['symbol']}: safety stop refused ({str(e)[:80]})")
+        open_trades[k] = tr
+        held[k] = pos or {"symbol": k, "qty": qty}
+        log(f"[crypto] bought {qty} {w['symbol']} at {price:,.6g} (~${tr['cost']:.2f}) after {w['dip']:+.1%} in an hour")
+        embeds.append({"title": f"🪙 Bought {w['symbol'].split('/')[0]} (dip)", "color": 0x0CA30C,
+                       "description": f"It fell **{w['dip']:.1%}** in an hour; bought ~${tr['cost']:.2f} at "
+                                      f"{price:,.6g}. Sold in 24 hours, or by the safety stop at "
+                                      f"{price * (1 - STOP):,.6g} (15% lower). Fake money ($100 crypto account)."})
+
     # A coin held without a record (the saved state was lost): sold within a day from now, like any trade.
     for k, p in held.items():
-        if p.get("asset_class") == "crypto" and k not in open_trades:
+        if p.get("asset_class") == "crypto" and k not in open_trades and k not in waiting:
             price = float(p.get("avg_entry_price") or 0)
             open_trades[k] = {"symbol": p["symbol"], "time": now.isoformat(), "price": price, "qty": p["qty"],
                               "dip": None, "cost": float(p.get("cost_basis") or 0), "kind": "big"}
             log(f"[crypto] {p['symbol']}: held without a record; sold within a day")
 
-    # Trades that ended: stopped out at the broker, or held their time (a day; an hour for the fast ones).
+    # Trades that ended: stopped out at the broker, or held a day (an hour for the old fast experiment):
+    # a sell waits in the book at the asking price for WAIT_SELL, then the rest is sold at the market.
+    due = [k for k, tr in open_trades.items() if k in held and "sell_id" not in tr
+           and now - dt.datetime.fromisoformat(tr["time"]) >= HOLDS.get(tr.get("kind", "big"), HOLD)]
+    try:
+        asks = latest_quotes(data, [open_trades[k]["symbol"] for k in due]) if due else {}
+    except Exception:  # noqa: BLE001 - no quotes: sold at the market instead
+        asks = {}
     for k, tr in list(open_trades.items()):
         pos = held.get(k)
-        age = now - dt.datetime.fromisoformat(tr["time"])
-        if pos is None:   # the safety stop sold it (or it was sold by hand)
-            price = None
-            if tr.get("stop_id"):
+        kind = tr.get("kind", "big")
+        if pos is None:   # sold: by our waiting sell, or by the safety stop (or by hand)
+            price, how, why = None, "stop", "safety stop"
+            for oid, h, w in ((tr.get("sell_id"), "day", "a day later"), (tr.get("stop_id"), "stop", "safety stop")):
+                if not oid:
+                    continue
                 try:
-                    o = broker.get_order(tr["stop_id"])
-                    price = float(o["filled_avg_price"]) if o.get("filled_avg_price") else None
+                    o = broker.get_order(oid)
                 except PaperError:
-                    pass
-            embeds.append(_closed(tr, price, now, "safety stop"))
-            _log_trade(state, tr, price, now, "stop")
+                    continue
+                if o.get("filled_avg_price"):
+                    price, how, why = float(o["filled_avg_price"]), h, w
+                    break
+            if kind == "big":
+                embeds.append(_closed(tr, price, now, why))
+            _log_trade(state, tr, price, now, how)
             del open_trades[k]
             continue
-        kind = tr.get("kind", "big")
-        if age >= KINDS[kind]["hold"]:
-            if tr.get("stop_id"):
-                try:
-                    broker.cancel(tr["stop_id"])
-                except PaperError:
-                    pass
+        if "sell_id" in tr:   # a waiting sell: still in time, or sold at the market now
+            if now - dt.datetime.fromisoformat(tr["sell_time"]) < WAIT_SELL:
+                continue
+            try:
+                broker.cancel(tr["sell_id"])
+                sleep(1)
+                o = broker.get_order(tr["sell_id"])
+                if o.get("status") == "filled":   # filled just before the cancel; next check records it
+                    continue
+            except PaperError:
+                pass
             try:
                 o = broker.close(pos["symbol"])
             except PaperError as e:
                 log(f"[crypto] {tr['symbol']}: couldn't sell yet ({str(e)[:80]}); next check tries again")
                 continue
             price = _fill(broker, o, sleep) or float(pos.get("current_price") or 0) or None
-            if kind == "big":       # the fast experiment's many trades go in the evening summary only
+            if kind == "big":
                 embeds.append(_closed(tr, price, now, "a day later"))
             _log_trade(state, tr, price, now, "day" if kind == "big" else "hour")
             del open_trades[k]
+            continue
+        if k not in due:
+            continue
+        if tr.get("stop_id"):
+            try:
+                broker.cancel(tr["stop_id"])
+            except PaperError:
+                pass
+        ask = (asks.get(tr["symbol"]) or {}).get("ask")
+        if ask:
+            try:
+                o = broker.sell_limit(tr["symbol"], pos["qty"], ask, f"cx-sell-{now:%Y%m%d%H%M}-{k}")
+                tr["sell_id"], tr["sell_time"] = o.get("id"), now.isoformat()
+                log(f"[crypto] {tr['symbol']}: held its time; a sell waits at {ask:,.6g}")
+                continue
+            except PaperError as e:
+                log(f"[crypto] {tr['symbol']}: waiting sell refused ({str(e)[:80]}); sold at the market")
+        try:
+            o = broker.close(pos["symbol"])
+        except PaperError as e:
+            log(f"[crypto] {tr['symbol']}: couldn't sell yet ({str(e)[:80]}); next check tries again")
+            continue
+        price = _fill(broker, o, sleep) or float(pos.get("current_price") or 0) or None
+        if kind == "big":
+            embeds.append(_closed(tr, price, now, "a day later"))
+        _log_trade(state, tr, price, now, "day" if kind == "big" else "hour")
+        del open_trades[k]
 
-    # New dips: 3%+ is the tested trade, 2%-3% the fast experiment.
+    # New dips: a buy waits in the book a little below the bid, for WAIT_BUY.
     start = (now - dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         found = dips(crypto.fetch(data, coins(broker, state, now.date()), start=start,
-                                  end=now.strftime("%Y-%m-%dT%H:%M:%SZ")), now, KINDS["fast"]["dip"])
+                                  end=now.strftime("%Y-%m-%dT%H:%M:%SZ")), now, DIP)
     except Exception as e:  # noqa: BLE001 - no prices this time: the next check tries again
         log(f"[crypto] no prices ({str(e)[:80]})")
         return embeds
     log(f"[crypto] {now:%Y-%m-%d %H:%M} UTC: dips now: "
         + (", ".join(f"{s} {m:+.1%}" for s, m in found.items()) if found else "none"))
-    todo = [s for s in sorted(found, key=found.get) if key(s) not in open_trades and key(s) not in held]
+    todo = [s for s in sorted(found, key=found.get) if key(s) not in open_trades and key(s) not in held
+            and key(s) not in waiting]
     if not todo:
         return embeds
-    cash = float(broker.account().get("cash") or 0)
+    cash = float(broker.account().get("cash") or 0) - sum(w["amount"] for w in waiting.values())
     quotes = latest_quotes(data, todo)
     for sym in todo:
-        kind = "big" if found[sym] <= -KINDS["big"]["dip"] else "fast"
-        if sum(t.get("kind", "big") == kind for t in open_trades.values()) >= KINDS[kind]["slots"]:
-            continue
-        amount = min(KINDS[kind]["amount"], cash * 0.98)
-        ask = (quotes.get(sym) or {}).get("ask")
-        if amount < MIN_TRADE or not ask:
+        if len(open_trades) + len(waiting) >= SLOTS:
+            break
+        amount = min(AMOUNT, cash * 0.98)
+        bid = (quotes.get(sym) or {}).get("bid")
+        if amount < MIN_TRADE or not bid:
             log(f"[crypto] {sym}: skipped ({'no cash' if amount < MIN_TRADE else 'no price'})")
             continue
-        tag = f"cx-{kind}-{now:%Y%m%d%H%M}-{key(sym)}"
+        limit = bid * (1 - OFFSET)
+        tag = f"cx-big-{now:%Y%m%d%H%M}-{key(sym)}"
         try:
-            o = broker.buy_limit(sym, amount / ask, ask * (1 + SLACK), tag)
+            o = broker.buy_limit(sym, amount / limit, limit, tag, tif="gtc")
         except PaperError as e:
             log(f"[crypto] {sym}: refused ({str(e)[:80]})")
             continue
-        price = _fill(broker, o, sleep)
-        if not price:
-            log(f"[crypto] {sym}: the price ran away; not bought")
-            continue
-        pos = next((p for p in broker.positions() if key(p["symbol"]) == key(sym)), None)
-        qty = pos["qty"] if pos else str(o.get("filled_qty") or "0")   # after the fee (paid in the coin)
-        tr = {"symbol": sym, "time": now.isoformat(), "price": price, "qty": qty, "dip": found[sym],
-              "cost": float(qty) * price, "kind": kind}
-        try:
-            stop = broker.stop_sell(sym, qty, price * (1 - STOP), price * (1 - STOP_LIMIT), f"{tag}-stop")
-            tr["stop_id"] = stop.get("id")
-        except PaperError as e:   # no broker stop: the 15-minute check still sells it at the day's end
-            log(f"[crypto] {sym}: safety stop refused ({str(e)[:80]})")
-        open_trades[key(sym)] = tr
-        cash -= tr["cost"]
-        log(f"[crypto] {kind}: bought {qty} {sym} at {price:,.6g} (~${tr['cost']:.2f}) after {found[sym]:+.1%} in an hour")
-        if kind == "big":
-            embeds.append({"title": f"🪙 Bought {sym.split('/')[0]} (dip)", "color": 0x0CA30C,
-                           "description": f"It fell **{found[sym]:.1%}** in the last hour; bought ~${tr['cost']:.2f} at "
-                                          f"{price:,.6g}. Sold in 24 hours, or by the safety stop at "
-                                          f"{price * (1 - STOP):,.6g} (15% lower). Fake money ($100 crypto account)."})
+        waiting[key(sym)] = {"symbol": sym, "id": o.get("id"), "time": now.isoformat(), "limit": limit,
+                             "dip": found[sym], "amount": amount, "tag": tag}
+        cash -= amount
+        log(f"[crypto] {sym}: {found[sym]:+.1%} in an hour; a buy of ~${amount:.2f} waits at {limit:,.6g}")
     return embeds
 
 
@@ -300,9 +377,8 @@ def summary(broker: CryptoBroker, state: dict, now: dt.datetime | None = None) -
     equity, last = float(acct.get("equity") or 0), float(acct.get("last_equity") or 0)
     log = [r for r in state.get("log", []) if r.get("ret") is not None]
     day = [r for r in log if now - dt.datetime.fromisoformat(r["out"]) <= dt.timedelta(days=1)]
-    lines = [lead("the $100 crypto account (fake money) buys coins that fell 3%+ in an hour and sells them a day "
-                  "later (beat Alpaca's fees in our test, thinly), and, as an experiment, 2% dips sold an hour later "
-                  "(the test says those lose to fees)."), ""]
+    lines = [lead("the $100 crypto account (fake money) buys coins that fell 4%+ in an hour and sells them a day "
+                  "later, with orders that wait in the book (lower fees; a dip that bounces straight away is missed)."), ""]
     lines.append(f"Account **${equity:,.2f}**" + (f" ({equity / last - 1:+.2%} since yesterday)" if last else ""))
     held = state.get("open", {})
     lines.append(f"Holding: {', '.join(t['symbol'] for t in held.values())}" if held else "Holding: nothing (waiting for a dip)")
@@ -310,18 +386,18 @@ def summary(broker: CryptoBroker, state: dict, now: dt.datetime | None = None) -
     if big_day:
         lines.append("Dip trades sold in the last 24 hours: "
                      + ", ".join(f"{r['symbol'].split('/')[0]} {r['ret']:+.1%}" for r in big_day))
-    for kind, k in KINDS.items():
+    names = {**{k: v["name"] for k, v in KINDS.items()}, "fast": "2% experiment (stopped)"}
+    for kind, name in names.items():
         rows = [r for r in log if r.get("kind", "big") == kind]
         today = sum(1 for r in day if r.get("kind", "big") == kind)
         if rows:
             avg = sum(r["ret"] for r in rows) / len(rows)
-            lines.append(f"**{k['name']}**: {len(rows)} trades ({today} today), average {avg:+.2%} before fees "
+            lines.append(f"**{name}**: {len(rows)} trades ({today} today), average {avg:+.2%} before fees "
                          f"(fees ~0.3% a trade), right {sum(r['ret'] > 0 for r in rows) / len(rows):.0%}, "
                          f"${sum(r['ret'] * r['cost'] for r in rows):+.2f} before fees")
-        else:
-            lines.append(f"**{k['name']}**: no finished trades yet")
-    lines.append(f"(The test: 3%+ dips {TEST['per_trade']:+.2%} a trade after limit-order fees, about "
-                 f"{TEST['per_day']:.0f} a day over all coins; the fast experiment about -0.2% a trade.)")
+        elif kind in KINDS:
+            lines.append(f"**{name}**: no finished trades yet")
+    lines.append(f"(The test: {TEST['note']}.)")
     change = equity - last if last else 0
     return {"title": "🪙 $100 crypto account", "description": "\n".join(lines)[:4000],
             "color": GREEN if change > 0 else RED if change < 0 else GOLD}

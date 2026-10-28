@@ -249,22 +249,37 @@ bounces**. Bought right after and sold a day later, after fees:
 
 | Dip in an hour | Trades a day (all coins) | Per trade after fees |
 |---|---|---|
-| 3%+ (**what it trades**, chosen for more trades) | ~3.7 | +0.34% (limit-order fees; ~+0.14% at the fees our orders pay) |
+| 3%+ | ~3.7 | +0.34% (limit-order fees; ~+0.14% at the fees our orders paid) |
 | 4%+ | ~1.9 | +0.81% |
 | 5%+ | ~1.1 | +1.57% |
 
 Anything held only 15 minutes or an hour lost to the fees.
 
+**Rechecked on Oct 28** on 5-minute prices, 2024 to now (`study crypto-fast`, `study crypto-maker`): 3%+
+dips made money until mid-2025 and lost after it, whether checked every 15 or every 5 minutes, and
+whatever the order. Looking for faster falls (3% in 15 or 30 minutes) or smaller ones (2%) didn't help
+either; the busiest rule (2% falls, sold after 4 hours) would make ~21 trades a day and lose 0.38% each.
+Orders that **wait in the book** pay Alpaca 0.15% a side instead of 0.25%, and a buy that waits a little
+below the price gets a better price (it misses about 1 dip in 4 that bounces straight away):
+
+| Rule, bought with a buy waiting 30 min 0.25% below the bid | Trades a day | Per trade after fees | Since mid-2025 |
+|---|---|---|---|
+| 3%+ in an hour | ~3.3 | +0.18% | -0.11% |
+| **4%+ in an hour (what it trades)** | ~1.6 | **+0.77%** | +0.18% |
+
+The 4% rule is just short of our luck bar (t = 1.9; 2 passes), so the live results decide.
+
 Every 15 minutes it checks every coin Alpaca trades (except stablecoins and gold tokens, which aren't
-meant to move): a coin down **3%+** in the last hour is bought for about **$16** (up to 5 at once, one per
-coin, with a limit order at most 0.3% above the asking price), with a **safety stop 15% below** at the
-broker (coins that collapsed, like LUNA in 2022, aren't in the test data), and sold **24 hours later**.
+meant to move): a coin down **4%+** in the last hour gets a buy of about **$16** that waits **0.25% below
+the bid for 30 minutes** (up to 5 coins held or being bought at once, one per coin). Once filled, a
+**safety stop 15% below** goes in at the broker (coins that collapsed, like LUNA in 2022, aren't in the
+test data). **24 hours later** a sell waits at the asking price for 15 minutes, then the rest is sold at
+the market.
 
-**Fast experiment (on request, expected to lose):** coins down **2-3%** in an hour are bought for **$10**
-(up to 2 at once) and sold **an hour later**; the test says about -0.2% a trade after fees. It runs small
-and separate so we can see that live; its trades aren't posted one by one.
+(A **fast experiment**, 2-3% dips sold an hour later, ran Oct 27-28 on request; it lost to fees in every
+test and was stopped.)
 
-Every dip trade goes to Discord ("🪙"), the nightly run adds a summary (both kinds apart), and every
+Every dip trade goes to Discord ("🪙"), the nightly run adds a summary, and every
 finished trade is in SQL (`dw.vCryptoTrades`). Its keys are the secrets `ALPACA_SMALL_KEY_ID` and
 `ALPACA_SMALL_SECRET_KEY`. (It used to hold the monthly portfolio at $100; those stocks were sold when it
 switched to crypto.)

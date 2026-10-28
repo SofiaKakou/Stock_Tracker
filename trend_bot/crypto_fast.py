@@ -201,3 +201,136 @@ def run(data, symbols: list[str], log=print, start: str = START) -> str:
     if not results:
         return "No crypto bars came back from Alpaca."
     return text(results, first, last, n)
+
+
+# --- Orders that wait in the book (0.15% a side instead of 0.25%) ------------------------------------
+# A waiting buy only fills if the price comes down to it; a dip that bounces straight away is missed.
+# Checked as the live account would run (every 15 minutes): when the rule fires, a buy at the last price
+# (or a little below) waits up to `wait` minutes; it fills only if a later bar trades below it. A day
+# after the fill, a sell at that moment's price waits 15 minutes; if the price doesn't trade above it,
+# the coin is sold at the market (0.25%) at the end of the wait.
+MAKER, TAKER = 0.0015, 0.0025
+MAKER_RULES = {"3% in an hour (now)": ([(12, 0.03)], True), "4% in an hour": ([(12, 0.04)], True)}
+OFFSETS = (0.0, 0.0025, 0.005)
+WAITS = {"15 min": 3, "30 min": 6}
+EXIT_WAIT = 3
+TICK = 0.0005           # the price must trade this far through a waiting order to count as filled
+
+
+def maker_trades(t, o, h, lo, c, sig, hold: int, offset: float, wait: int) -> tuple:
+    """(entry times, net returns after fees, fired, filled, missed dips' returns) for one coin."""
+    ins, nets, missed, fired, free = [], [], [], 0, 0
+    for i in np.flatnonzero(sig):
+        if i < free:
+            continue
+        fired += 1
+        limit = c[i] * (1 - offset)
+        j = next((k for k in range(i + 1, min(i + 1 + wait, len(c))) if lo[k] < limit * (1 - TICK)), None)
+        if j is None:                       # never came down to it: no trade (what it would have made, for the record)
+            if i + 1 + hold < len(o):
+                missed.append(o[i + 1 + hold] / o[i + 1] - 1)
+            free = i + 1
+            continue
+        b = j + 1 + hold
+        if b + EXIT_WAIT >= len(o):
+            break
+        ask = o[b]
+        if any(h[k] > ask * (1 + TICK) for k in range(b, b + EXIT_WAIT)):
+            out, fee_out = ask, MAKER
+        else:
+            out, fee_out = c[b + EXIT_WAIT - 1], TAKER
+        ins.append(t[j])
+        nets.append(out / limit - 1 - MAKER - fee_out)
+        free = b
+    return np.array(ins, "datetime64[ns]"), np.array(nets, float), fired, len(nets), np.array(missed, float)
+
+
+def maker_study(frames, log=print) -> tuple[dict, str, str, int]:
+    parts: dict = {}
+    first, last, n = None, None, 0
+    for sym, g in frames:
+        if len(g) < 400:
+            continue
+        n += 1
+        g = g.reset_index(drop=True)
+        t0, t1 = str(g["t"].iloc[0])[:10], str(g["t"].iloc[-1])[:10]
+        first, last = min(first or t0, t0), max(last or t1, t1)
+        t = pd.to_datetime(g["t"], utc=True).dt.tz_localize(None).to_numpy("datetime64[ns]")
+        o, h, lo, c = (g[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+        for name, rule in MAKER_RULES.items():
+            sig = signal(t, c, rule)
+            ins, outs, rets = trades(t, o, sig, HOLDS["1 day"])          # the same rule with our orders today
+            parts.setdefault((name, "taking the price now (today)"), []).append(
+                (ins, rets - FEES["taker"], len(rets), len(rets), np.array([])))
+            for off in OFFSETS:
+                for wl, w in WAITS.items():
+                    label = f"waiting {wl} at {off:.2%} below the last price"
+                    parts.setdefault((name, label), []).append(maker_trades(t, o, h, lo, c, sig, HOLDS["1 day"], off, w))
+        log(f"[crypto-maker] {sym}: {len(g):,} bars")
+    if not parts:
+        return {}, "", "", 0
+    days = max((pd.Timestamp(last) - pd.Timestamp(first)).days, 1)
+    split = pd.Timestamp(first) + (pd.Timestamp(last) - pd.Timestamp(first)) / 2
+    out = {}
+    for k, vs in parts.items():
+        ins = np.concatenate([v[0] for v in vs])
+        net = np.concatenate([v[1] for v in vs])
+        fired, filled = sum(v[2] for v in vs), sum(v[3] for v in vs)
+        missed = np.concatenate([v[4] for v in vs])
+        if not len(net):
+            out[k] = {"trades": 0}
+            continue
+        when = pd.DatetimeIndex(ins)
+        monthly = pd.Series(net).groupby(when.strftime("%Y-%m")).mean()
+        early, late = net[when < split], net[when >= split]
+        out[k] = {"trades": len(net), "per_day": len(net) / days, "fill": filled / max(fired, 1),
+                  "net": float(net.mean()), "early": float(early.mean()) if len(early) else np.nan,
+                  "late": float(late.mean()) if len(late) else np.nan, "hit": float((net > 0).mean()),
+                  "t": float(monthly.mean() / monthly.std(ddof=1) * np.sqrt(len(monthly)))
+                  if len(monthly) > 2 and monthly.std() > 0 else 0.0,
+                  "missed": float(missed.mean()) if len(missed) else None, "dollars_day": float(net.sum() * AMOUNT / days)}
+    return out, first, last, n
+
+
+def maker_passes(r: dict) -> bool:
+    return bool(r.get("trades")) and r["early"] > 0 and r["late"] > 0 and r["t"] > 2
+
+
+def maker_text(results: dict, first: str, last: str, coins: int) -> str:
+    lines = [f"Crypto dips with orders that wait in the book: 5-minute bars {first} to {last}, {coins} coins, sold a "
+             f"day later. Fees: {MAKER:.2%} a side for a waiting order that fills, {TAKER:.2%} for taking the price. "
+             "A waiting buy fills only if the price later trades below it; if it doesn't within the wait, the dip is "
+             "missed. Results are after fees, per trade; every coin held at once (no limit on how many).", ""]
+    for name in MAKER_RULES:
+        lines.append(f"== {name}, looked at every 15 minutes ==")
+        for (n, label), r in results.items():
+            if n != name:
+                continue
+            if not r.get("trades"):
+                lines.append(f"  {label}: no trades")
+                continue
+            miss = f"; the missed dips would have made {r['missed']:+.2%} before fees" if r.get("missed") is not None else ""
+            lines.append(f"  {label}: {r['trades']:,} trades ({r['per_day']:.1f} a day, {r['fill']:.0%} of dips filled{miss})")
+            lines.append(f"    {r['net']:+.3%} a trade (first half {r['early']:+.3%}, second half {r['late']:+.3%}; "
+                         f"t = {r['t']:.1f}), right {r['hit']:.0%}, about ${r['dollars_day']:+.2f} a day at ${AMOUNT:.0f} a trade"
+                         f" → {'PASSES' if maker_passes(r) else 'does not pass'}")
+        lines.append("")
+    passed = [f"{n}: {lb}" for (n, lb), r in results.items() if maker_passes(r)]
+    lines.append("Passed (both halves after fees, t > 2): " + ("; ".join(passed) if passed else "none") + ".")
+    return "\n".join(lines)
+
+
+def run_maker(data, symbols: list[str], log=print, start: str = START) -> str:
+    log(f"[crypto-maker] 5-minute bars for {len(symbols)} coins since {start}, one coin at a time...")
+
+    def frames():
+        for s in symbols:
+            try:
+                g = crypto.fetch(data, [s], start=start, timeframe=TIMEFRAME)
+            except Exception as e:  # noqa: BLE001
+                log(f"[crypto-maker] {s}: no bars ({str(e)[:80]})")
+                continue
+            yield s, g.sort_values("t")
+
+    results, first, last, n = maker_study(frames(), log)
+    return maker_text(results, first, last, n) if results else "No crypto bars came back from Alpaca."
