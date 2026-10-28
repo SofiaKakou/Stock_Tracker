@@ -34,13 +34,13 @@ def test_candidates_are_big_gap_ups_in_tradable_stocks_known_at_the_open():
 def test_a_breakout_above_vwap_hits_its_target_and_a_fade_hits_its_stop():
     closes = 10.0 * 1.01 ** (np.arange(390) // 10)   # a 1% jump every 10 minutes: breakouts above VWAP
     g = scalp.day_bars(minute_bars(closes=closes))["RUN"]
-    times, rets, _ = scalp.day_trades(g, (0.01, 0.005, 30))
+    times, rets, _ = scalp.day_trades(g, ("breakout", 0.01, 0.005, 30))
     assert len(rets) >= 1 and rets.max() > 0
     falling = np.full(390, 10.0)
     falling[10] = 10.2                                 # one jump, then straight down
     falling[11:] = np.linspace(10.1, 9.0, 379)
     g = scalp.day_bars(minute_bars(closes=falling))["RUN"]
-    times, rets, _ = scalp.day_trades(g, (0.01, 0.005, 30))
+    times, rets, _ = scalp.day_trades(g, ("breakout", 0.01, 0.005, 30))
     assert len(rets) == 1 and rets[0] == -0.005
 
 
@@ -48,7 +48,7 @@ def test_nothing_is_held_past_1555():
     closes = np.full(390, 10.0)
     closes[350:] = np.linspace(10.0, 10.02, 40)       # a slow climb late in the day: the time limits end it
     g = scalp.day_bars(minute_bars(closes=closes))["RUN"]
-    times, rets, _ = scalp.day_trades(g, (0.05, 0.05, 60))
+    times, rets, _ = scalp.day_trades(g, ("breakout", 0.05, 0.05, 60))
     assert all(t.time() <= scalp.LAST_ENTRY.replace(minute=31) for t in times)
 
 
@@ -57,7 +57,7 @@ def test_the_study_reads_well():
     days = [(d, scalp.day_bars(minute_bars(closes=closes, date=d))) for d in ["2026-03-02", "2026-03-03", "2026-03-04", "2026-04-01"]]
     res, first, last, n = scalp.study(days, log=lambda *_: None)
     out = scalp.text(res, first, last, n, 4)
-    assert n == 4 and "+1% target, -0.5% stop, 30 min" in out and out.splitlines()[-1].startswith("Passed")
+    assert n == 4 and "breakout: +1% target, -0.5% stop, 30 min" in out and "dip to VWAP" in out and out.splitlines()[-1].startswith("Passed")
 
 
 def test_the_whole_run_from_daily_prices_to_the_text():
@@ -76,3 +76,16 @@ def test_the_whole_run_from_daily_prices_to_the_text():
     out = scalp.run(con, Data(), log=lambda *_: None, start="2026-03-02")
     assert asked == [(["RUN"], "2026-03-02T14:30:00Z", "2026-03-02T21:00:00Z", "1Min")]   # 9:30-16:00 New York
     assert "1 trading days" in out and "Passed" in out
+
+
+def test_the_dips_buy_a_pullback_after_a_run_not_a_stock_that_never_ran():
+    closes = np.r_[np.linspace(10.0, 10.6, 60), np.linspace(10.6, 10.1, 60), np.linspace(10.1, 10.5, 270)]
+    g = scalp.day_bars(minute_bars(closes=closes))["RUN"]
+    under_vwap = scalp.signals(g, "vwap")
+    assert under_vwap.sum() >= 1 and g["close"][under_vwap].iloc[0] < g["vwap"][under_vwap].iloc[0]
+    big = np.r_[np.linspace(10.0, 12.0, 30), np.linspace(12.0, 11.5, 20), np.full(340, 11.5)]   # 4% off a fast high
+    g2 = scalp.day_bars(minute_bars(closes=big))["RUN"]
+    pb = scalp.signals(g2, "pullback")
+    assert pb.sum() == 1 and g2["close"][pb].iloc[0] > g2["vwap"][pb].iloc[0]
+    flat = scalp.day_bars(minute_bars(closes=np.r_[np.full(60, 10.0), np.linspace(10.0, 9.9, 330)]))["RUN"]
+    assert not scalp.signals(flat, "vwap").any()               # never ran 2% above its open: no dip to buy
