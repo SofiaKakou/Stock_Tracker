@@ -48,3 +48,25 @@ def test_the_study_counts_trades_and_reads_well():
     assert r["accounts"]["$100 (5 coins at once, $16 each: now)"]["per_day"] > 0
     out = cf.text(res, first, last, n)
     assert "sold 1 day later" in out and "$500 (30 coins at once" in out and out.splitlines()[-1].startswith("Passed:")
+
+
+def test_a_waiting_buy_fills_only_if_the_price_comes_back_to_it():
+    g = coin(1500, falls=[500])
+    t = pd.to_datetime(g["t"], utc=True).dt.tz_localize(None).to_numpy("datetime64[ns]")
+    o, h, lo, c = (g[k].to_numpy() for k in ("open", "high", "low", "close"))
+    sig = np.zeros(len(c), bool)
+    sig[500] = True
+    lo2 = lo.copy()
+    lo2[501:504] = 95.0                              # it dipped a little further: the buy at 96 fills
+    ins, net, fired, filled, missed = cf.maker_trades(t, o, h, lo2, c, sig, 288, 0.0, 3)
+    assert (fired, filled) == (1, 1) and net[0] > 0.03
+    ins, net, fired, filled, missed = cf.maker_trades(t, o, h, lo, c, sig, 288, 0.0, 3)
+    assert (fired, filled) == (1, 0) and len(missed) == 1     # it bounced straight away: missed
+
+
+def test_the_waiting_order_study_reads_well():
+    frames = [("AAA/USD", coin(4000, falls=[500, 1500, 2500]))]
+    res, first, last, n = cf.maker_study(frames, log=lambda *_: None)
+    out = cf.maker_text(res, first, last, n)
+    assert "taking the price now (today)" in out and "waiting 30 min at 0.50% below" in out
+    assert out.splitlines()[-1].startswith("Passed")
