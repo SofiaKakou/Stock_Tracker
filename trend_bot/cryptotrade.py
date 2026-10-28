@@ -2,16 +2,17 @@
 
 From the crypto study (`study crypto --all-coins`, 15-minute prices of Alpaca's 36 coins since 2021): a coin
 that fell sharply in the last hour usually bounces. Bought right after and sold a day later, 3%+ dips made
-+0.34% a trade after limit-order fees (about 3.7 a day over all coins), 4%+ +0.81%, 5%+ +1.57%: smaller
-dips, more trades, less each. The user chose 3%+ for more trades.
++0.34% a trade after limit-order fees, 4%+ +0.81%, 5%+ +1.57%. The 5-minute studies of Oct 28 (`study
+crypto-fast`, `study crypto-maker`, 2024-2026) found 3%+ dips losing since mid-2025 whatever the order, and
+4%+ dips bought with orders that wait in the book still ahead: the account buys those.
 
-Every 15 minutes (GitHub, and the outside timer): coins held their time are sold; then any coin (all of the
-broker's, except the stable ones) whose last complete 15-minute bar closed 3%+ below its price an hour
-earlier is bought for about $16 (up to five at once, one per coin), with a limit order at most 0.3% above
-the asking price that fills now or not at all, and a safety stop at the broker 15% below the fill (coins
-that collapsed, like LUNA in 2022, aren't in the data, so a dip-buy that keeps falling is cut off). Next to
-it, a small experiment: 2%-3% dips sold an hour later (expected to lose to the fees). Each dip trade goes
-to Discord, and the evening run adds a summary.
+Every 15 minutes (GitHub, and the outside timer): any coin (all of the broker's, except the stable ones)
+whose last complete 15-minute bar closed 4%+ below its price an hour earlier gets a buy of about $16 that
+waits 0.25% below the bid for 30 minutes (up to five coins held or being bought at once, one per coin).
+Once it fills, a safety stop goes in at the broker 15% below the fill (coins that collapsed, like LUNA in
+2022, aren't in the data, so a dip-buy that keeps falling is cut off). A day later a sell waits at the
+asking price for 15 minutes, then the rest is sold at the market. Each dip trade goes to Discord, and the
+evening run adds a summary. (A 2%-dip, one-hour experiment ran Oct 27-28; it lost to fees in every test.)
 
 The account used to hold the monthly portfolio at $100; any stocks still in it are sold on the first run.
 Paper money only: the broker address is fixed to Alpaca's paper server (trend_bot.paper).
@@ -33,7 +34,7 @@ from trend_bot.paper import SMALL_KEY_ENV, SMALL_SECRET_ENV, Paper, PaperError
 COINS = crypto.SYMBOLS   # if the broker's list can't be read
 # Coins built not to move (dollar and gold tokens): a "dip" there is a data glitch, never a bounce.
 STABLE = {"USDT", "USDC", "USDG", "PAXG", "DAI", "PYUSD", "TUSD", "USDP", "FDUSD", "XAUT", "USDE"}
-DIP = 0.03               # fell this much in the last hour (4 complete 15-minute bars)
+DIP = 0.04               # fell this much in the last hour (4 complete 15-minute bars); 3% until Oct 28
 HOLD = dt.timedelta(days=1)
 STOP = 0.15              # the safety stop, below the fill
 STOP_LIMIT = 0.20        # ... sold at no less than this far below (a stop on a crashing coin needs room)
@@ -44,17 +45,17 @@ SLOTS = 5                # coins held (or being bought) at once
 # the bid for 30 minutes (about 3 in 4 dips fill), and a day later the sell waits at the asking price for 15
 # minutes, then whatever is left is sold at the market. For 3%+ dips that made +0.18% a trade after fees
 # (taking the price: +0.04%), but -0.11% in the second half (mid-2025 on); for 4%+ dips +0.77% (+0.18% in
-# the second half).
+# the second half). The user chose 4%+ on Oct 28 (about 1.6 trades a day; the only version making money lately).
 OFFSET = 0.0025
 WAIT_BUY = dt.timedelta(minutes=30)
 WAIT_SELL = dt.timedelta(minutes=15)
 HOLDS = {"big": HOLD, "fast": dt.timedelta(hours=1)}   # "fast": the 2% experiment, stopped Oct 28 (lost to fees)
-KINDS = {"big": {"name": "dip 3%+, held a day"}}
+KINDS = {"big": {"name": "dip 4%+, held a day"}}
 MIN_TRADE = 5.0          # less cash than this: no trade
 FRESH = dt.timedelta(minutes=25)   # a signal from a bar older than this is stale (a run started late)
 QUOTES_URL = "https://data.alpaca.markets/v1beta3/crypto/us/latest/quotes"
-TEST = {"note": "3%+ dips with waiting orders +0.18% a trade after fees since 2024, but -0.11% since mid-2025; "
-                "4%+ dips +0.77%"}
+TEST = {"note": "4%+ dips with waiting orders, 2024-2026: +0.77% a trade after fees, +0.18% since mid-2025, "
+                "about 1.6 a day; not quite past the luck bar (t = 1.9)"}
 
 
 def key(symbol: str) -> str:
@@ -376,7 +377,7 @@ def summary(broker: CryptoBroker, state: dict, now: dt.datetime | None = None) -
     equity, last = float(acct.get("equity") or 0), float(acct.get("last_equity") or 0)
     log = [r for r in state.get("log", []) if r.get("ret") is not None]
     day = [r for r in log if now - dt.datetime.fromisoformat(r["out"]) <= dt.timedelta(days=1)]
-    lines = [lead("the $100 crypto account (fake money) buys coins that fell 3%+ in an hour and sells them a day "
+    lines = [lead("the $100 crypto account (fake money) buys coins that fell 4%+ in an hour and sells them a day "
                   "later, with orders that wait in the book (lower fees; a dip that bounces straight away is missed)."), ""]
     lines.append(f"Account **${equity:,.2f}**" + (f" ({equity / last - 1:+.2%} since yesterday)" if last else ""))
     held = state.get("open", {})

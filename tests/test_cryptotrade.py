@@ -198,7 +198,7 @@ def test_the_evening_summary_reads_well():
                                   "entry": 2500.0, "exit": 2490.0, "how": "hour", "cost": 10.0, "ret": -0.004,
                                   "kind": "fast"}]}
     d = ct.summary(Broker(), state, now=NOW)["description"]
-    assert "$100.50" in d and "SOL +4.2%" in d and "dip 3%+, held a day**: 1 trades" in d
+    assert "$100.50" in d and "SOL +4.2%" in d and "dip 4%+, held a day**: 1 trades" in d
     assert "2% experiment (stopped)" in d and "-0.40%" in d
 
 
