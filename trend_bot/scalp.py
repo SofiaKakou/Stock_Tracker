@@ -21,6 +21,7 @@ the same stocks on the same days, with the same exits.
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -225,7 +226,7 @@ def run(con, data: "intraday.Data", log=print, start: str = START) -> str:
 
     def days():
         for date, g in cands.groupby("date", sort=True):
-            open_ = dt.datetime.combine(dt.date.fromisoformat(date), dt.time(9, 30), intraday.NY)
+            open_ = dt.datetime.combine(dt.date.fromisoformat(date), dt.time(9, 30), ZoneInfo(intraday.NY))
             s = open_.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             e = (open_ + dt.timedelta(hours=6, minutes=30)).astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             try:
