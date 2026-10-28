@@ -7,12 +7,16 @@ a small profit target, a tight stop, or after half an hour at most. Many trades 
 
 Tested on 1-minute bars (Alpaca) of each day's 10 biggest gap-ups since START (from our daily prices: open
 at least 10% above yesterday's close, yesterday's close $2+, $2M+ a day traded over the last 20 days; a
-jump over 100% is usually a split or a data error and is skipped). Rules, on each 1-minute bar's close
-from 9:35 to 15:30:
-- signal: the close is above the highest high of the 5 bars before it, and above the day's VWAP
-- in at the next bar's open; out at the profit target or the stop (if both are touched in the same minute,
-  the stop is counted: the worse case), else after `hold` minutes at that bar's close, and by 15:55
-- one position per stock at a time; after an exit, the next signal can come right away
+jump over 100% is usually a split or a data error and is skipped). Signals, on each 1-minute bar's close
+from 9:35 to 15:30 (SIGNALS):
+- breakout (chasing): the close clears the highest high of the 5 bars before it, above the day's VWAP.
+  Its first run (Oct 28): 45-86 trades a day, all losing, worse than random minutes even before costs.
+- the dips (buying the pullback instead), only once the stock has run 2%+ above its open: the first close
+  below the day's VWAP; the first close 1%+ under it; the first close 3%+ under the day's high so far
+  while still above VWAP
+In at the next bar's open; out at the profit target or the stop (if both are touched in the same minute,
+the stop is counted: the worse case), else after `hold` minutes at that bar's close, and by 15:55. One
+position per stock at a time; after an exit, the next signal can come right away.
 Costs: the 0.17% a side our day-trading account measured, and 0.30% a side (wild stocks have wider gaps
 between buyers and sellers) as a harder check. Luck check: the same number of trades at random minutes in
 the same stocks on the same days, with the same exits.
@@ -37,12 +41,22 @@ FIRST, LAST_ENTRY, FLAT = dt.time(9, 35), dt.time(15, 30), dt.time(15, 55)
 COSTS = {"measured": 0.0017, "wide": 0.0030}   # a side
 POSITION = 5000.0            # dollars a trade (about 1/20 of the day-trading account)
 DRAWS = 30
-# name: (profit target, stop, longest hold in minutes)
-VARIANTS = {"+1% target, -0.5% stop, 30 min": (0.01, 0.005, 30),
-            "+2% target, -1% stop, 30 min": (0.02, 0.01, 30),
-            "+3% target, -1% stop, 30 min": (0.03, 0.01, 30),
-            "+3% target, -1.5% stop, 60 min": (0.03, 0.015, 60),
-            "+5% target, -2% stop, 60 min": (0.05, 0.02, 60)}
+# name: (signal, profit target, stop, longest hold in minutes)
+VARIANTS = {"breakout: +1% target, -0.5% stop, 30 min": ("breakout", 0.01, 0.005, 30),
+            "breakout: +2% target, -1% stop, 30 min": ("breakout", 0.02, 0.01, 30),
+            "breakout: +5% target, -2% stop, 60 min": ("breakout", 0.05, 0.02, 60),
+            "dip to VWAP: +1% target, -1% stop, 30 min": ("vwap", 0.01, 0.01, 30),
+            "dip to VWAP: +2% target, -2% stop, 60 min": ("vwap", 0.02, 0.02, 60),
+            "dip to VWAP: +3% target, -3% stop, 120 min": ("vwap", 0.03, 0.03, 120),
+            "1% under VWAP: +2% target, -2% stop, 60 min": ("under", 0.02, 0.02, 60),
+            "1% under VWAP: +3% target, -3% stop, 120 min": ("under", 0.03, 0.03, 120),
+            "3% off the high: +2% target, -2% stop, 60 min": ("pullback", 0.02, 0.02, 60),
+            "3% off the high: +3% target, -3% stop, 120 min": ("pullback", 0.03, 0.03, 120)}
+SIGNALS = {"breakout": "a 1-minute close clears the last 5 minutes' high, above the day's VWAP",
+           "vwap": "the first close below the day's VWAP after the stock ran 2%+ above its open (it pulls back)",
+           "under": "the first close 1%+ under the day's VWAP after a 2%+ run",
+           "pullback": "the first close 3%+ under the day's high so far, still above VWAP"}
+RUN = 0.02                   # the dips: only after the stock has run this far above its open
 
 
 def candidates(con, start: str = START, top: int = TOP) -> pd.DataFrame:
@@ -79,13 +93,31 @@ def day_bars(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     return out
 
 
-def signals(g: pd.DataFrame) -> np.ndarray:
+def signals(g: pd.DataFrame, kind: str = "breakout") -> np.ndarray:
+    """True on each bar whose close sets the signal off (see SIGNALS); only from 9:35 to 15:30."""
     h, c, v = g["high"].to_numpy(float), g["close"].to_numpy(float), g["vwap"].to_numpy(float)
-    prior = pd.Series(h).rolling(LOOKBACK).max().shift(1).to_numpy()
     tod = g["ny"].dt.time.to_numpy()
     window = np.array([FIRST <= x <= LAST_ENTRY for x in tod])
+    high = np.maximum.accumulate(h)
+    ran = high >= g["open"].iloc[0] * (1 + RUN)
+
+    def first_cross(below: np.ndarray) -> np.ndarray:
+        prev = np.r_[False, below[:-1]]
+        return below & ~prev
+
     with np.errstate(invalid="ignore"):
-        return window & (c > prior) & (c > v)
+        if kind == "breakout":
+            prior = pd.Series(h).rolling(LOOKBACK).max().shift(1).to_numpy()
+            sig = (c > prior) & (c > v)
+        elif kind == "vwap":
+            sig = first_cross(c < v) & ran
+        elif kind == "under":
+            sig = first_cross(c < v * 0.99) & ran
+        elif kind == "pullback":
+            sig = first_cross(c <= high * 0.97) & (c > v) & ran
+        else:
+            raise ValueError(kind)
+    return window & sig
 
 
 def exit_from(g_arrays, a: int, target: float, stop: float, hold: int) -> tuple[int, float]:
@@ -108,7 +140,7 @@ def exit_from(g_arrays, a: int, target: float, stop: float, hold: int) -> tuple[
 
 def day_trades(g: pd.DataFrame, variant: tuple, rng=None) -> tuple[list, np.ndarray, np.ndarray]:
     """(entry times, gross returns) for one stock on one day; plus random-entry means if rng is given."""
-    target, stop, hold = variant
+    kind, target, stop, hold = variant
     o, h, lo, c = (g[k].to_numpy(float) for k in ("open", "high", "low", "close"))
     tod = g["ny"].dt.time.to_numpy()
     flat_idx = [i for i, x in enumerate(tod) if x <= FLAT]
@@ -116,7 +148,7 @@ def day_trades(g: pd.DataFrame, variant: tuple, rng=None) -> tuple[list, np.ndar
         return [], np.zeros(0), np.zeros(0)
     flat = flat_idx[-1]
     arrays = (o, h, lo, c, flat)
-    sig = signals(g)
+    sig = signals(g, kind)
     times, rets, free = [], [], 0
     for i in np.flatnonzero(sig):
         if i < free or i + 1 > flat:
@@ -195,8 +227,9 @@ def study(days_bars, log=print, seed: int = 0) -> tuple[dict, str, str, int]:
 def text(results: dict, first: str, last: str, days: int, stocks: int) -> str:
     lines = [f"Scalping the day's wildest stocks: 1-minute bars {first} to {last}, {days} trading days, the {TOP} "
              f"biggest gap-ups each day ({stocks:,} stock-days; opened {GAP_MIN:.0%}+ above yesterday's close, "
-             f"${MIN_PRICE:.0f}+, ${MIN_DOLLAR_VOL / 1e6:.0f}M+ a day traded). Buy when a 1-minute close clears the "
-             f"last {LOOKBACK} minutes' high above the day's VWAP; out at the target, the stop or the time limit. "
+             f"${MIN_PRICE:.0f}+, ${MIN_DOLLAR_VOL / 1e6:.0f}M+ a day traded). Buy at the next minute's open when: "
+             + "; ".join(f"{k}: {v}" for k, v in SIGNALS.items())
+             + ". Out at the target, the stop or the time limit, and by 15:55. "
              f"Costs a side: {COSTS['measured']:.2%} (what our account measured), {COSTS['wide']:.2%} (a harder "
              f"check). Dollars at ${POSITION:,.0f} a trade.", ""]
     for name, r in results.items():
