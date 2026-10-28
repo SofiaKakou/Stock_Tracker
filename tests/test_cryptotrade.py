@@ -102,13 +102,14 @@ def test_a_dip_gets_a_buy_that_waits_at_the_bid_and_a_safety_stop_once_filled(ma
     assert quiet(broker, state) == []
     buy = [o for o in broker.orders if o[0] == "buy"]
     assert [o[1] for o in buy] == ["SOL/USD"] and buy[0][5] == "gtc"
-    assert buy[0][3] == pytest.approx(94.9) and buy[0][2] * 94.9 == pytest.approx(ct.AMOUNT)   # at the bid
+    limit = 94.9 * (1 - ct.OFFSET)
+    assert buy[0][3] == pytest.approx(limit) and buy[0][2] * limit == pytest.approx(ct.AMOUNT)   # a little below the bid
     assert list(state["buying"]) == ["SOLUSD"] and not state["open"]
-    broker.fill("b-SOL/USD", 94.9)
+    broker.fill("b-SOL/USD", limit)
     market({})
     out = quiet(broker, state, NOW + dt.timedelta(minutes=15))
     stop = [o for o in broker.orders if o[0] == "stop"][0]
-    assert stop[3] == pytest.approx(94.9 * 0.85) and stop[2] == state["open"]["SOLUSD"]["qty"]   # the qty after the fee
+    assert stop[3] == pytest.approx(limit * 0.85) and stop[2] == state["open"]["SOLUSD"]["qty"]   # the qty after the fee
     assert not state["buying"] and "Bought SOL" in out[0]["title"]
 
 

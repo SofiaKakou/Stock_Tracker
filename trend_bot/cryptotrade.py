@@ -39,10 +39,13 @@ STOP = 0.15              # the safety stop, below the fill
 STOP_LIMIT = 0.20        # ... sold at no less than this far below (a stop on a crashing coin needs room)
 AMOUNT = 16.0            # dollars a trade
 SLOTS = 5                # coins held (or being bought) at once
-# Orders that wait in the book pay Alpaca 0.15% a side instead of 0.25% (`study crypto-maker`): the buy
-# waits at the bid (OFFSET below it) for WAIT_BUY and fills only if the price comes back to it; a day later
-# the sell waits at the asking price for WAIT_SELL, then whatever is left is sold at the market.
-OFFSET = 0.0
+# Orders that wait in the book pay Alpaca 0.15% a side instead of 0.25% (`study crypto-maker`, 5-minute bars
+# of 32 coins 2024-2026, a buy counted only if the price later traded through it): the buy waits 0.25% below
+# the bid for 30 minutes (about 3 in 4 dips fill), and a day later the sell waits at the asking price for 15
+# minutes, then whatever is left is sold at the market. For 3%+ dips that made +0.18% a trade after fees
+# (taking the price: +0.04%), but -0.11% in the second half (mid-2025 on); for 4%+ dips +0.77% (+0.18% in
+# the second half).
+OFFSET = 0.0025
 WAIT_BUY = dt.timedelta(minutes=30)
 WAIT_SELL = dt.timedelta(minutes=15)
 HOLDS = {"big": HOLD, "fast": dt.timedelta(hours=1)}   # "fast": the 2% experiment, stopped Oct 28 (lost to fees)
@@ -50,7 +53,8 @@ KINDS = {"big": {"name": "dip 3%+, held a day"}}
 MIN_TRADE = 5.0          # less cash than this: no trade
 FRESH = dt.timedelta(minutes=25)   # a signal from a bar older than this is stale (a run started late)
 QUOTES_URL = "https://data.alpaca.markets/v1beta3/crypto/us/latest/quotes"
-TEST = {"note": "3%+ dips held a day, `study crypto-maker`"}
+TEST = {"note": "3%+ dips with waiting orders +0.18% a trade after fees since 2024, but -0.11% since mid-2025; "
+                "4%+ dips +0.77%"}
 
 
 def key(symbol: str) -> str:
