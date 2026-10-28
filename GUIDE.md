@@ -457,6 +457,12 @@ later as its own step.)
 - **No fading an earnings gap**: before the open the bot asks Yahoo which watched stocks reported
   earnings after yesterday's close or before today's open, and doesn't trade against their gap (10 years:
   fading an earnings gap lost -0.14% a trade, other gaps -0.01%; the news usually keeps moving it).
+- **Opening trades only until 9:45**: the gap fade, gap-up shorts and loser shorts are about the open.
+  If the morning part starts later than 9:45 (GitHub started it at 10:13 on Oct 27), it skips them and
+  only does the breakouts.
+- **One part failing doesn't stop the day**: each pattern (and each breakout check) runs on its own; if
+  one stops with an error, the rest carries on, the report and the status message say which, and the
+  15:50 closing always runs.
 - **Not one big bet on the market**: longs minus shorts at most **50% of the account**. A trade that
   would tilt it further one way is skipped and logged ("too one-sided"); one that evens it out is fine.
 
@@ -493,7 +499,12 @@ nothing the second time, so double starts are harmless.
    | Day trading, morning | `daytrade.yml` | 9:20 | `{"ref":"main","inputs":{"phase":"auto"}}` |
    | Day trading, afternoon (backup) | `daytrade.yml` | 12:05 | `{"ref":"main","inputs":{"phase":"auto"}}` |
    | Safety net | `daytrade-safety.yml` | 9:20, 15:57, 16:06 | `{"ref":"main"}` |
+   | Day trading status | `daytrade-status.yml` | 11:00, 14:00 | `{"ref":"main"}` |
    | Crypto account | `crypto.yml` | every 15 minutes, every day (minutes 2, 17, 32, 47) | `{"ref":"main"}` |
+
+   The status job only reads: what's open per pattern with its gain or loss now, what's already closed,
+   and the account's change today, sent to Discord. Start it by hand any time (Actions → Day trading
+   status → Run workflow).
 
 3. **Test it**: cron-job.org → the job → **Test run**. It should answer **204** (started), and a new run
    appears in GitHub → Actions. 401 or 403 means the token or its permission is wrong; 404 means the URL.

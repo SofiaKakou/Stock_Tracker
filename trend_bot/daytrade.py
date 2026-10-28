@@ -37,7 +37,8 @@ STOCK_SLOTS, ETF_SLOTS = 34, 3   # positions at once: up to 34 stocks (gap fade 
 SIZE_SLOTS = 20       # each position is 1/20 of the account (about $4,900 on $100,000)
 BUYING_POWER = 2.0    # all positions together up to 2x the account: intraday buying power, never overnight
 INVESTED = 0.98
-GAP_LATEST = dt.time(10, 15)          # a late start still fades the gap until 10:15, not after
+GAP_LATEST = dt.time(9, 45)           # the opening trades (tested at 9:31) only until 9:45: on Oct 27 a late
+                                      # start sent them at 10:13, 40 minutes after the moves they bet on
 MORNING_CHECKS = [dt.time(10, 30), dt.time(11, 0), dt.time(11, 30), dt.time(12, 0)]
 AFTERNOON_CHECKS = [dt.time(12, 30), dt.time(13, 0), dt.time(13, 30), dt.time(14, 0), dt.time(14, 30),
                     dt.time(15, 0), dt.time(15, 30)]
@@ -237,6 +238,16 @@ class Session:
         self.halted = False             # the daily loss limit was hit: no more trades today
         self._assets: dict[str, dict] = {}
         self._last_guard = None
+        self.errors: list[str] = []      # parts that failed today (each is skipped; the day goes on)
+
+    def safe(self, name: str, part) -> None:
+        """Run one part of the day; an error is logged and kept for the report, and the day goes on
+        (on Oct 27 one pattern's error stopped the whole morning)."""
+        try:
+            part()
+        except Exception as e:  # noqa: BLE001
+            self.errors.append(f"{name}: {str(e)[:120]}")
+            self.log(f"[day] ⚠️ {name}: stopped with an error, the rest of the day carries on ({str(e)[:120]})")
 
     def at(self, t: dt.time) -> dt.datetime:
         return dt.datetime.combine(self.today, t, NY)
@@ -522,61 +533,73 @@ class Session:
         if not self.guard():
             self.protect()
         early = self.now().time() <= GAP_LATEST
-        found = self.find_losers() if early else []                  # scanned before the open
-        reporting = self.earnings_today() if early else set()
+        found: list = []
+        reporting: set = set()
+        if early:                    # scanned before the open
+            self.safe("loser scan", lambda: found.extend(self.find_losers()))
+            self.safe("earnings dates", lambda: reporting.update(self.earnings_today()))
         for sym in self.stocks:      # sectors looked up before the open (once; remembered between days)
             self.sector(sym)
         self.wait_until(dt.time(9, 31))
         if self.now().time() <= GAP_LATEST:
-            prev = self.prev_closes(self.stocks)
-            first = self._bars(self.stocks, "1Min", self.at(dt.time(9, 30)))
-            opens = {s: b[0]["o"] for s, b in first.items() if b}
-            last = {s: b[-1]["c"] for s, b in first.items() if b}
-            gaps = gap_signals(opens, prev)
-            skipped = [s for s, _ in gaps if s in reporting]
-            if skipped:    # 10 years: fading an earnings gap lost -0.14% a trade, other gaps -0.01%
-                self.log(f"[day] gap: skipped (earnings today, the gap is news): {', '.join(skipped)}")
-            self.enter("gap", [(s, side) for s, side in gaps if s not in reporting], last, STOCK_SLOTS,
-                       {s: opens[s] / prev[s] - 1 for s in opens if prev.get(s)})
-            for name, part in (("gapup", self.gapups), ("loser", lambda: self.losers(found))):
-                try:        # one pattern's problem mustn't stop the others (or the rest of the day)
-                    part()
-                except Exception as e:  # noqa: BLE001
-                    self.log(f"[day] ⚠️ {name}: stopped with an error, the other patterns carry on ({str(e)[:120]})")
+            self.safe("gap", lambda: self.gap_fade(reporting))
+            self.safe("gapup", self.gapups)
+            self.safe("loser", lambda: self.losers(found))
         else:
-            self.log("[day] started too late for the gap fade today")
+            self.log(f"[day] started after {GAP_LATEST:%H:%M}: no opening trades today (gap fade, gap-up and loser "
+                     "shorts are only tested at the open); breakouts only")
         self.breakouts(MORNING_CHECKS)
+
+    def gap_fade(self, reporting: set[str]) -> None:
+        prev = self.prev_closes(self.stocks)
+        first = self._bars(self.stocks, "1Min", self.at(dt.time(9, 30)))
+        opens = {s: b[0]["o"] for s, b in first.items() if b}
+        last = {s: b[-1]["c"] for s, b in first.items() if b}
+        gaps = gap_signals(opens, prev)
+        skipped = [s for s, _ in gaps if s in reporting]
+        if skipped:    # 10 years: fading an earnings gap lost -0.14% a trade, other gaps -0.01%
+            self.log(f"[day] gap: skipped (earnings today, the gap is news): {', '.join(skipped)}")
+        self.enter("gap", [(s, side) for s, side in gaps if s not in reporting], last, STOCK_SLOTS,
+                   {s: opens[s] / prev[s] - 1 for s in opens if prev.get(s)})
 
     def breakouts(self, checks: list[dt.time]) -> None:
         for t in checks:
             if self.now() > self.at(t) + dt.timedelta(minutes=20):
                 continue                                         # missed (late start): skip, don't chase
             self.wait_until((dt.datetime.combine(self.today, t) + dt.timedelta(seconds=45)).time())
-            first = self.first_half_hour(self.stocks)
-            bars = self._bars(self.stocks, "30Min", self.at(dt.time(9, 30)))
-            done_bars = {s: [x for x in b if self._end(x) <= self.now()] for s, b in bars.items()}
-            last = {s: b[-1]["c"] for s, b in done_bars.items() if len(b) >= 2}
-            high0, low0 = {s: b["h"] for s, b in first.items()}, {s: b["l"] for s, b in first.items()}
-            sig = breakout_signals(high0, low0, last, self.traded())
-            beyond = {s: (last[s] / high0[s] - 1) if side > 0 else (last[s] / low0[s] - 1) for s, side in sig}
-            self.enter("breakout", sig, last, STOCK_SLOTS, beyond)
+            self.safe(f"breakout {t:%H:%M}", self.breakout_check)
+
+    def breakout_check(self) -> None:
+        first = self.first_half_hour(self.stocks)
+        bars = self._bars(self.stocks, "30Min", self.at(dt.time(9, 30)))
+        done_bars = {s: [x for x in b if self._end(x) <= self.now()] for s, b in bars.items()}
+        last = {s: b[-1]["c"] for s, b in done_bars.items() if len(b) >= 2}
+        high0, low0 = {s: b["h"] for s, b in first.items()}, {s: b["l"] for s, b in first.items()}
+        sig = breakout_signals(high0, low0, last, self.traded())
+        beyond = {s: (last[s] / high0[s] - 1) if side > 0 else (last[s] / low0[s] - 1) for s, side in sig}
+        self.enter("breakout", sig, last, STOCK_SLOTS, beyond)
 
     def _end(self, bar: dict) -> dt.datetime:
         return dt.datetime.fromisoformat(bar["t"].replace("Z", "+00:00")) + dt.timedelta(minutes=30)
 
     def afternoon(self) -> None:
-        if not self.guard():
-            self.protect()
-        self.breakouts(AFTERNOON_CHECKS[:-1])
-        self.wait_until(dt.time(15, 30, 45))
+        try:
+            if not self.guard():
+                self.protect()
+            self.breakouts(AFTERNOON_CHECKS[:-1])
+            self.wait_until(dt.time(15, 30, 45))
+            self.safe("momentum", self.momentum)
+            self.breakouts(AFTERNOON_CHECKS[-1:])
+        finally:          # whatever failed above, everything is closed before the close
+            self.flatten()
+
+    def momentum(self) -> None:
         prev = self.prev_closes(self.etfs)
         first = self.first_half_hour(self.etfs)
         now_px = {s: b[-1]["c"] for s, b in self._bars(self.etfs, "1Min", self.at(dt.time(15, 25))).items() if b}
         close0 = {s: b["c"] for s, b in first.items()}
         self.enter("momentum", momentum_signals(close0, prev), now_px, ETF_SLOTS,
                    {s: close0[s] / prev[s] - 1 for s in close0 if prev.get(s)})
-        self.breakouts(AFTERNOON_CHECKS[-1:])
-        self.flatten()
 
     def flatten(self) -> None:
         """Out before the close: every position closed with a market order at 15:50, checked, and closed
@@ -831,6 +854,57 @@ def safety_net(broker: DayBroker, now: dt.datetime, log=print) -> dict | None:
                            + " Fake money; the trading job's log on the Actions tab shows what went wrong."}
 
 
+def status(positions: list[dict], orders: list[dict], account: dict, now: dt.datetime,
+           errors: list[str] | None = None) -> dict:
+    """A look at the day so far (no trading): what's open per pattern with its gain or loss now, what's
+    already closed per pattern, and the account's change today. Returns a Discord embed."""
+    from trend_bot.alerts import GOLD, GREEN, RED, lead
+
+    pattern_of: dict[str, str] = {}
+    for o in orders:
+        parts = str(o.get("client_order_id", "")).split("-")
+        if parts[0] == "td" and len(parts) >= 4 and parts[2] != "x":
+            pattern_of.setdefault(o["symbol"], parts[2])
+    closed = pnl(orders)
+    closed.pop("open", None)
+    held: dict[str, list[dict]] = {}
+    for p in positions:
+        held.setdefault(pattern_of.get(p["symbol"], "other"), []).append(p)
+    equity, last = float(account.get("equity") or 0), float(account.get("last_equity") or 0)
+    change = equity - last if last else 0.0
+    lines = [lead(f"a look at the day-trading practice account (fake money) at {now:%H:%M} New York. "
+                  "Nothing is bought or sold by this message."), ""]
+    if not positions and not closed:
+        lines.append("Nothing open and nothing traded yet today.")
+    open_total = 0.0
+    for pat in sorted(set(held) | set(closed)):
+        name = PATTERN_NAME.get(pat, "Other" if pat == "other" else pat)
+        ps = held.get(pat, [])
+        upl = sum(float(p.get("unrealized_pl") or 0) for p in ps)
+        cost = sum(abs(float(p.get("cost_basis") or 0)) for p in ps)
+        open_total += upl
+        bits = []
+        if ps:
+            bits.append(f"{len(ps)} open, **${upl:+,.0f}**" + (f" ({upl / cost:+.2%})" if cost else ""))
+        if pat in closed:
+            c = closed[pat]
+            bits.append(f"{c['trades']} closed ${c['pnl']:+,.0f}")
+        lines.append(f"**{name}**: " + "; ".join(bits))
+    if positions:
+        ranked = sorted(positions, key=lambda p: float(p.get("unrealized_plpc") or 0))
+        fmt = lambda p: (f"{p['symbol']} {'long' if p.get('side') == 'long' else 'short'} "
+                         f"{float(p.get('unrealized_plpc') or 0):+.1%}")
+        lines += ["", "Best now: " + ", ".join(fmt(p) for p in ranked[::-1][:3]),
+                  "Worst now: " + ", ".join(fmt(p) for p in ranked[:3])]
+    closed_total = sum(c["pnl"] for c in closed.values())
+    if errors:
+        lines += ["", "⚠️ Parts that stopped with an error today (the rest carried on): " + "; ".join(errors)]
+    lines += ["", f"Open now ${open_total:+,.0f} · closed ${closed_total:+,.0f} · **account today ${change:+,.0f}** "
+                  f"(${equity:,.0f}). Everything is closed by 15:50."]
+    color = GREEN if change > 0 else RED if change < 0 else GOLD
+    return {"title": f"📊 Day trading so far: {now:%a %b %d %H:%M}", "description": "\n".join(lines)[:4000], "color": color}
+
+
 def settle_carried(state: dict, orders: list[dict], today: dt.date,
                    earlier: list[dict] | None = None) -> tuple[list[dict], list[str], float]:
     """Trades from earlier days still open (held overnight, e.g. closed by the safety net at the next open):
@@ -961,6 +1035,10 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
         lines += ["", f"Closed today, from earlier days (held overnight): {', '.join(carried)}: ${carried_pnl:+,.0f}"]
     if still_open:
         lines += ["", f"⚠️ Not closed yet when this was written (no result counted for them): {', '.join(still_open)}"]
+    errors = state.get("errors", {}).get(today.isoformat())
+    if errors:
+        lines += ["", "⚠️ Parts that stopped with an error today (skipped; the rest of the day carried on): "
+                      + "; ".join(errors)]
     if last_equity and abs((equity - last_equity) - today_total) > max(50.0, 0.0005 * equity):
         lines += ["", f"⚠️ The trades add up to ${today_total:+,.0f} but the account changed "
                       f"${equity - last_equity:+,.0f} today: some fill is missing from the records."]

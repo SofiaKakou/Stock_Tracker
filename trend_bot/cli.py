@@ -294,7 +294,7 @@ def make_parser() -> argparse.ArgumentParser:
     em.set_defaults(func=cmd_send_email)
 
     dtp = sub.add_parser("daytrade", help="day-trading demo account (fake money, its own Alpaca paper account)")
-    dtp.add_argument("--phase", choices=["auto", "morning", "afternoon", "report", "safety"], default="auto",
+    dtp.add_argument("--phase", choices=["auto", "morning", "afternoon", "report", "safety", "status"], default="auto",
                      help="auto: whichever part of the day it is now (for the schedule)")
     dtp.add_argument("--intraday-db", default="intraday.db", help="stocks to watch and the 10-year test results")
     dtp.add_argument("--state", default="daytrade.json", help="running totals since the first day")

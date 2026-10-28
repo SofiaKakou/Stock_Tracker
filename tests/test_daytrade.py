@@ -881,3 +881,53 @@ def test_rows_settled_from_todays_own_orders_before_the_fix_are_put_back():
     state, _ = daytrade.report(orders, 100_000.0, state, today, earlier=earlier)
     old = [r for r in state["log"] if r["date"] == "2026-10-26"][0]
     assert old["exit"] == 382.0 and state["days"]["2026-10-26"]["breakout"] == {"pnl": pytest.approx(24), "trades": 1}
+
+
+def test_a_start_after_945_places_no_opening_trades():
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 50, tzinfo=daytrade.NY))
+    broker, out = FakeBroker(), []
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=out.append,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    tags = [o["client_order_id"] for o in broker.orders]
+    assert not any("-gap-" in t or "-gapup-" in t or "-loser-" in t for t in tags)
+    assert any("no opening trades" in m for m in out)
+
+
+def test_an_afternoon_error_still_closes_everything_at_1550(monkeypatch):
+    clock = Clock(dt.datetime(2026, 10, 26, 12, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    broker.held = {"GAPPY": -10}
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY"], DAY, log=lambda *_: None,
+                         sleep=clock.sleep, now=clock.now)
+
+    def boom():
+        raise RuntimeError("bars down")
+
+    monkeypatch.setattr(s, "momentum", boom)
+    s.afternoon()
+    assert "GAPPY" in broker.closed and not broker.positions()
+    assert s.errors and s.errors[0].startswith("momentum: bars down")
+
+
+def test_the_status_shows_open_and_closed_trades_per_pattern():
+    orders = [{"symbol": "MRNA", "side": "sell", "status": "filled", "filled_qty": "10", "filled_avg_price": "50",
+               "client_order_id": "td-20261026-gap-MRNA"},
+              {"symbol": "BREAKY", "side": "buy", "status": "filled", "filled_qty": "10", "filled_avg_price": "100",
+               "client_order_id": "td-20261026-breakout-BREAKY"},
+              {"symbol": "BREAKY", "side": "sell", "status": "filled", "filled_qty": "10", "filled_avg_price": "103",
+               "client_order_id": "td-20261026-x-BREAKY-exit"}]
+    positions = [{"symbol": "MRNA", "side": "short", "qty": "-10", "cost_basis": "-500", "unrealized_pl": "40",
+                  "unrealized_plpc": "0.08"}]
+    e = daytrade.status(positions, orders, {"equity": "100070", "last_equity": "100000"},
+                        dt.datetime(2026, 10, 26, 11, 0, tzinfo=daytrade.NY), ["gapup: screener down"])
+    d = e["description"]
+    assert "**Fade big opening gaps**: 1 open, **$+40** (+8.00%)" in d
+    assert "**Breakout from the first half hour**: 1 closed $+30" in d
+    assert "MRNA short +8.0%" in d and "account today $+70" in d and "gapup: screener down" in d
+
+
+def test_errors_of_the_day_show_in_the_report():
+    state = {"errors": {DAY.isoformat(): ["gap: 500 from Alpaca"]}}
+    _, e = daytrade.report([], 100_000.0, state, DAY)
+    assert "gap: 500 from Alpaca" in e["description"]
