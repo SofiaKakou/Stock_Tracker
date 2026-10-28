@@ -58,3 +58,21 @@ def test_the_study_reads_well():
     res, first, last, n = scalp.study(days, log=lambda *_: None)
     out = scalp.text(res, first, last, n, 4)
     assert n == 4 and "+1% target, -0.5% stop, 30 min" in out and out.splitlines()[-1].startswith("Passed")
+
+
+def test_the_whole_run_from_daily_prices_to_the_text():
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE prices (ticker TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, adj_close REAL, volume REAL)")
+    days = pd.bdate_range("2026-02-02", "2026-03-02").strftime("%Y-%m-%d")
+    con.executemany("INSERT INTO prices VALUES (?,?,?,?,?,?,?,?)",
+                    [("RUN", d, 12.5 if d == "2026-03-02" else 10.0, 10, 10, 10, 10, 1e6) for d in days])
+    asked = []
+
+    class Data:
+        def bars(self, symbols, start, end, timeframe="30Min"):
+            asked.append((symbols, start, end, timeframe))
+            return minute_bars(closes=10.0 * 1.01 ** (np.arange(390) // 10), date="2026-03-02")
+
+    out = scalp.run(con, Data(), log=lambda *_: None, start="2026-03-02")
+    assert asked == [(["RUN"], "2026-03-02T14:30:00Z", "2026-03-02T21:00:00Z", "1Min")]   # 9:30-16:00 New York
+    assert "1 trading days" in out and "Passed" in out
