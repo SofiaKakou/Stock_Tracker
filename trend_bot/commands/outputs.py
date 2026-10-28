@@ -386,6 +386,16 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
         if alert and args.discord and alerts.load_webhook():
             alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [alert]})
         return 0
+    if phase == "status":   # a look at the day so far: positions and results per pattern, nothing traded
+        start = dt.datetime.combine(now.date(), dt.time(9, 0), daytrade.NY).astimezone(dt.timezone.utc)
+        orders = [o for o in broker.orders_since(start.isoformat())
+                  if str(o.get("client_order_id", "")).startswith(f"td-{now:%Y%m%d}")]
+        errors = daytrade.load_state(args.state).get("errors", {}).get(now.date().isoformat())
+        embed = daytrade.status(broker.positions(), orders, broker.account(), now, errors)
+        print(embed["description"].replace("**", ""))
+        if args.discord and alerts.load_webhook():
+            alerts.send(alerts.load_webhook(), {"username": "Trend Bot", "embeds": [embed]})
+        return 0
     if phase == "auto":   # several schedules per part (summer/winter time, and backups because GitHub
         # sometimes starts a scheduled run late or not at all): the first one in its window runs the part,
         # the others see it already ran today. A late start skips what it missed and doesn't chase it.
@@ -422,6 +432,10 @@ def cmd_daytrade(args: argparse.Namespace) -> int:
             session.afternoon()
     finally:   # what each order expected, for the trade log (kept even if the session stops early)
         state.setdefault("pending", []).extend(session.entries)
+        if session.errors:   # shown in the report and the status messages
+            day_errors = state.setdefault("errors", {}).setdefault(now.date().isoformat(), [])
+            day_errors += session.errors
+            state["errors"] = {k: v for k, v in state["errors"].items() if k >= (now.date() - dt.timedelta(days=14)).isoformat()}
         Path(args.state).write_text(json.dumps(state, indent=1))
     if phase in ("afternoon", "report"):
         if phase == "afternoon":

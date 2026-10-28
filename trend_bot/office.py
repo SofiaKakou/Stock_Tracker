@@ -303,6 +303,7 @@ PLATE = {"boss": "BOSS", "prices": "PRICES", "sec": "SEC", "finra": "FINRA", "ne
          "demo": "DEMO", "daytrade": "DAY TRADE", "safety": "SAFETY", "journal": "JOURNAL", "logbook": "LOGBOOK"}
 # Live: which worker a GitHub Actions workflow belongs to ("steps": the nightly run, read step by step).
 LIVE_WORKFLOWS = {"nightly.yml": "steps", "daytrade.yml": "daytrade", "daytrade-safety.yml": "safety", "crypto.yml": "daytrade",
+                  "daytrade-status.yml": "daytrade",
                   "demo.yml": "demo", "demo-morning.yml": "demo", "research.yml": "ideas", "research-parallel.yml": "ideas",
                   "why.yml": "ideas", "ai.yml": "ideas", "journal.yml": "journal", "market-mirror.yml": "journal",
                   "import-db.yml": "logbook", "tests.yml": "logbook", "office.yml": "logbook"}

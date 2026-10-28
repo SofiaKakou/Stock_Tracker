@@ -1,7 +1,7 @@
 # Day-trading demo account (fake money, its own Alpaca paper account; see trend_bot/daytrade.py).
-# Two parts a day, because a GitHub job may run at most 6 hours. Each part has several schedules
-# (New York summer and winter time, plus backups because GitHub sometimes starts a schedule late or
-# not at all): the first one inside the part's window runs it, the others exit at once.
+# Two parts a day, because a GitHub job may run at most 6 hours. The timer at cron-job.org starts each
+# part (GitHub's own schedules start late or not at all); the schedules below are only backups, for New
+# York summer and winter time: the first start inside a part's window runs it, the others exit at once.
 # Does nothing until the ALPACA_DAY_KEY_ID and ALPACA_DAY_SECRET_KEY secrets exist.
 
 name: Day trading (demo)
@@ -10,10 +10,8 @@ on:
   schedule:
     - cron: "17 13 * * 1-5"   # morning part: 9:17 New York summer time ...
     - cron: "17 14 * * 1-5"   # ... or winter time
-    - cron: "17 15 * * 1-5"   # backup: GitHub sometimes starts a schedule late or skips it
     - cron: "17 16 * * 1-5"   # afternoon part: 12:17 New York summer time ...
     - cron: "17 17 * * 1-5"   # ... or winter time
-    - cron: "17 18 * * 1-5"   # backup (a part that already ran today isn't run again)
   workflow_dispatch:
     inputs:
       phase:

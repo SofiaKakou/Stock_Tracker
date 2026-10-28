@@ -1,0 +1,51 @@
+# Day-trading demo account (fake money): a look at the day so far, sent to Discord. What's open per
+# pattern with its gain or loss now, what's already closed, and the account's change today. It never
+# trades. Started by the timer at cron-job.org (around 11:00 and 14:00 New York) or by hand; the
+# schedules below are backups for New York summer and winter time.
+# Its own concurrency group, so it doesn't wait behind the trading job (which runs for hours).
+
+name: Day trading status (demo)
+
+on:
+  schedule:
+    - cron: "3 15 * * 1-5"    # 11:03 New York summer time (12:03 winter)
+    - cron: "3 18 * * 1-5"    # 14:03 New York summer time (13:03 winter)
+  workflow_dispatch:
+
+concurrency:
+  group: day-trading-status
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ALPACA_DAY_KEY_ID: ${{ secrets.ALPACA_DAY_KEY_ID }}
+      ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      # Read only: which parts stopped with an error today (the trading job saves them).
+      - name: Restore running totals
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: daytrade.json
+          key: daytrade-state-${{ github.run_id }}
+          restore-keys: daytrade-state-
+
+      - name: Status
+        run: python -m trend_bot daytrade --phase status --discord
