@@ -190,3 +190,27 @@ def test_diagnose_lists_the_accounts_record_and_the_recent_dips(monkeypatch):
     assert "equity $100.50, at the last close $100.00" in out
     assert "FILL sell 1 SPY at 580" in out and "CFEE BTC/USD -0.02" in out
     assert "all 3%+: 1 trades" in out and "all 5%+" not in out
+
+
+def test_prices_of_coins_worth_a_fraction_of_a_cent_are_sent_as_plain_digits():
+    assert ct.number(5.92345e-06) == "0.000005923"                       # was '5.92345e-06': refused
+    assert ct.number(5.92345e-06, up=True) == "0.000005924"
+    assert ct.number(5.92345e-06, "0.0000000001", up=True) == "0.0000059235"
+    assert ct.number(67123.456789, "0.01") == "67123.45" and ct.number(1690000.7, "1") == "1690000"
+
+    class B(ct.CryptoBroker):
+        def __init__(self):
+            self.sent = []
+
+        def _call(self, method, path, **kw):
+            if method == "GET":
+                assert path == "/assets/PEPE%2FUSD"
+                return {"price_increment": "0.000000001", "min_trade_increment": "1"}
+            self.sent.append(kw["json"])
+            return {"id": "x"}
+
+    b = B()
+    b.buy_limit("PEPE/USD", 1_690_000.7, 5.92345e-06, "t")
+    b.stop_sell("PEPE/USD", "1690000", 5.0e-06, 4.7e-06, "t-stop")
+    assert b.sent[0]["qty"] == "1690000" and b.sent[0]["limit_price"] == "0.000005924"
+    assert b.sent[1]["stop_price"] == "0.000005000" and b.sent[1]["limit_price"] == "0.000004700"

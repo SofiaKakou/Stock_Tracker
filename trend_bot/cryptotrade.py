@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import time
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -58,20 +59,48 @@ def key(symbol: str) -> str:
     return symbol.replace("/", "")
 
 
+def number(x: float, step: str | None = None, up: bool = False) -> str:
+    """A price or amount as the broker accepts it: plain digits (never 6e-06), a whole number of the coin's
+    `step` (rounded down; up for a buy's limit), or else 6 significant digits, at most 9 decimals. Coins
+    worth a fraction of a cent (PEPE, SHIB) were refused with '.6g' prices: 'exceeds maximum precision'."""
+    d = Decimal(repr(float(x)))
+    if step and Decimal(step) > 0:
+        q = Decimal(step)
+        n = (d / q).to_integral_value(rounding=ROUND_CEILING if up else ROUND_FLOOR) * q
+        return f"{n.quantize(q.normalize() if q.normalize().as_tuple().exponent < 0 else Decimal(1)):f}"
+    if d == 0:
+        return "0"
+    places = min(9, max(2, 5 - d.adjusted()))
+    return f"{d.quantize(Decimal(1).scaleb(-places), rounding=ROUND_CEILING if up else ROUND_FLOOR):f}"
+
+
 class CryptoBroker(Paper):
     @classmethod
     def from_env(cls, key_env: str = SMALL_KEY_ENV, secret_env: str = SMALL_SECRET_ENV) -> "CryptoBroker | None":
         return super().from_env(key_env, secret_env)
 
+    def steps(self, symbol: str) -> tuple[str | None, str | None]:
+        """(price step, amount step) the broker allows for this coin (None if unknown)."""
+        cache = self.__dict__.setdefault("_steps", {})
+        if symbol not in cache:
+            try:
+                a = self._call("GET", f"/assets/{symbol.replace('/', '%2F')}")
+                cache[symbol] = (a.get("price_increment"), a.get("min_trade_increment"))
+            except PaperError:
+                cache[symbol] = (None, None)
+        return cache[symbol]
+
     def buy_limit(self, symbol: str, qty: float, limit: float, tag: str) -> dict:
-        return self._call("POST", "/orders", json={"symbol": symbol, "qty": f"{qty:.8f}", "side": "buy",
-                                                    "type": "limit", "limit_price": f"{limit:.6g}",
+        price_step, qty_step = self.steps(symbol)
+        return self._call("POST", "/orders", json={"symbol": symbol, "qty": number(qty, qty_step), "side": "buy",
+                                                    "type": "limit", "limit_price": number(limit, price_step, up=True),
                                                     "time_in_force": "ioc", "client_order_id": tag})
 
     def stop_sell(self, symbol: str, qty: str, stop: float, limit: float, tag: str) -> dict:
+        price_step, _ = self.steps(symbol)
         return self._call("POST", "/orders", json={"symbol": symbol, "qty": qty, "side": "sell",
-                                                    "type": "stop_limit", "stop_price": f"{stop:.6g}",
-                                                    "limit_price": f"{limit:.6g}", "time_in_force": "gtc",
+                                                    "type": "stop_limit", "stop_price": number(stop, price_step),
+                                                    "limit_price": number(limit, price_step), "time_in_force": "gtc",
                                                     "client_order_id": tag})
 
 
