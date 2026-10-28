@@ -1,0 +1,52 @@
+//@version=6
+// The $100 crypto account's rule (trend_bot/cryptotrade.py), to see on a chart. Fake money only; nothing here
+// trades: TradingView's strategy tester replays it on the chart's coin.
+// - signal: the coin closed 4%+ below its price an hour earlier (use a 15-minute chart, like the bot)
+// - buy: an order that waits 0.25% below that close for 30 minutes; if the price doesn't come back, no trade
+// - sell: 24 hours after the buy, or by the safety stop 15% below the buy price
+// Fees: 0.15% a side (Alpaca's fee for orders that wait in the book). TradingView counts a waiting buy as
+// filled when the price touches it; our own test needed the price to trade through it, so the chart can look
+// a little better than the bot's test.
+strategy("Crypto 4% dip (trend_bot)", overlay = true, initial_capital = 100,
+     default_qty_type = strategy.cash, default_qty_value = 16, pyramiding = 0,
+     commission_type = strategy.commission.percent, commission_value = 0.15)
+
+dipPct    = input.float(4.0, "Dip in an hour (%)", minval = 0.5, step = 0.5)
+offsetPct = input.float(0.25, "Buy this far below the close (%)", minval = 0.0, step = 0.05)
+waitMin   = input.int(30, "Buy waits (minutes)", minval = 1)
+holdHours = input.float(24, "Sell after (hours)", minval = 0.25)
+stopPct   = input.float(15, "Safety stop (%)", minval = 1)
+
+barSec      = timeframe.in_seconds()
+barsPerHour = math.max(1, math.round(3600 / barSec))
+waitBars    = math.max(1, math.round(waitMin * 60 / barSec))
+
+move = close / close[barsPerHour] - 1
+dip  = move <= -dipPct / 100
+
+var int orderBar = na
+
+// A dip and nothing held or waiting: a buy waits below the close.
+if dip and strategy.position_size == 0 and na(orderBar)
+    strategy.entry("Dip", strategy.long, limit = close * (1 - offsetPct / 100))
+    orderBar := bar_index
+
+// The wait is over and it never filled: cancelled (the dip bounced straight away).
+if not na(orderBar) and strategy.position_size == 0 and bar_index - orderBar >= waitBars
+    strategy.cancel("Dip")
+    orderBar := na
+
+// Held: the safety stop, and the sale a day later.
+if strategy.position_size > 0
+    orderBar := na
+    strategy.exit("Stop", "Dip", stop = strategy.position_avg_price * (1 - stopPct / 100))
+    if time - strategy.opentrades.entry_time(0) >= holdHours * 3600000
+        strategy.close("Dip", comment = "a day later")
+
+plotshape(dip, "4% dip", shape.triangleup, location.belowbar, color.orange, size = size.tiny)
+if dip   // for an alert: "Any alert() function call" on this strategy
+    alert(syminfo.ticker + " fell " + str.tostring(-move * 100, "#.#") + "% in an hour", alert.freq_once_per_bar_close)
+
+if barstate.islast and timeframe.isminutes and timeframe.multiplier != 15
+    label.new(bar_index, high, "The bot looks at 15-minute bars:\nswitch the chart to 15m to match it",
+         color = color.new(color.orange, 20), textcolor = color.white, style = label.style_label_down)
