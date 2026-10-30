@@ -209,8 +209,11 @@ It learns from them, slowly on purpose (a few weeks of day trades are mostly luc
   difference is within the normal range or beyond what luck explains.
 - **Real costs**: after 50 trades, the measured cost of getting in replaces the assumed one, in
   the 10-year study too.
-- **Money per pattern**: after 20 live trades a pattern's share of the money moves with its results,
-  blended with its 10-year record (which counts like 100 trades), always between 15% and 60%.
+- **Money per pattern**: once a pattern has 20 live trades over 5 trading days, its share of the money
+  moves with its results, blended with its 10-year record (which counts like 100 trades), always
+  between 15% and 60%. Only patterns with that live record compete; the others keep an equal share
+  until they have one (until Oct 30, the two new short patterns took 40% each on their 10-year
+  results alone, and a rounding bug made the shares add up to 125%).
 - **Automatic pause**: after 40 trades, a pattern doing clearly worse than its history is paused
   (and resumes if it comes back within range). A great streak never gets bigger bets than the cap.
 

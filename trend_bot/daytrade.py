@@ -707,11 +707,14 @@ def measured_cost(log: list[dict]) -> float | None:
 def allocate(cmp: dict[str, dict], cost: float | None) -> tuple[dict[str, float], set[str]]:
     """Each pattern's share of the money, and the paused ones.
 
-    The expected gain per trade is the 10-year forecast blended with the live average (the test
-    weighs like PRIOR_TRADES trades, so a few days barely move it), minus the measured cost if
-    known. Shares follow the expected gains, only for patterns with SHIFT_AFTER+ live trades over
-    SHIFT_DAYS+ trading days, and always stay within MIN_SHARE..MAX_SHARE. A pattern clearly worse live than its history
-    (PAUSE_AFTER+ trades over PAUSE_DAYS+ days, z below -2) is paused. A great streak never pauses or boosts beyond the cap."""
+    Only patterns with live evidence (SHIFT_AFTER+ live trades over SHIFT_DAYS+ trading days) compete for
+    money; every other active pattern keeps an equal share (1/number of active patterns) until it has that
+    evidence. Until Oct 30 a pattern with no live trades competed on its 10-year forecast alone, so the two
+    newest short patterns (forecast +0.35%/+0.39%, no live record) took 40% each from patterns with a real
+    record. Among the ready ones, the expected gain per trade is the 10-year forecast blended with the live
+    average (the test weighs like PRIOR_TRADES trades, so a few days barely move it), minus the measured
+    cost if known, and shares stay within MIN_SHARE..MAX_SHARE of the whole. A pattern clearly worse live
+    than its history (PAUSE_AFTER+ trades over PAUSE_DAYS+ days, z below -2) is paused."""
     def ready(c, trades, days):
         return c["n"] >= trades and c.get("days", days) >= days
 
@@ -719,35 +722,43 @@ def allocate(cmp: dict[str, dict], cost: float | None) -> tuple[dict[str, float]
     active = [p for p in PATTERN_TEST if p not in paused]
     if not active:
         return {}, paused
-    if not any(ready(cmp[p], SHIFT_AFTER, SHIFT_DAYS) for p in active):
-        return {p: 1 / len(active) for p in active}, paused
+    equal = 1 / len(active)
+    shifting = [p for p in active if ready(cmp[p], SHIFT_AFTER, SHIFT_DAYS)]
+    if len(shifting) < 2:                     # nothing to compare against yet
+        return {p: equal for p in active}, paused
     edge = {}
-    for p in active:
+    for p in shifting:
         c = cmp[p]
         prior = c["forecast"] if c["forecast"] is not None else 0.0
-        blended = (PRIOR_TRADES * prior + c["n"] * (c["live"] or 0.0)) / (PRIOR_TRADES + c["n"]) \
-            if ready(c, SHIFT_AFTER, SHIFT_DAYS) else prior
+        blended = (PRIOR_TRADES * prior + c["n"] * (c["live"] or 0.0)) / (PRIOR_TRADES + c["n"])
         edge[p] = blended - (2 * cost if cost is not None else 0.0)
     lo = min(edge.values())
     raw = {p: e - lo + 1e-4 for p, e in edge.items()}            # the weakest gets the least, never nothing
-    return bounded(raw), paused
+    pot = equal * len(shifting)                                   # what the ready patterns share between them
+    split = bounded(raw, MIN_SHARE / pot, MAX_SHARE / pot)
+    return {**{p: equal for p in active if p not in split}, **{p: v * pot for p, v in split.items()}}, paused
 
 
 def bounded(raw: dict[str, float], lo: float = MIN_SHARE, hi: float = MAX_SHARE) -> dict[str, float]:
-    """Shares in proportion to `raw`, adding up to 1, none below `lo` or above `hi`: a share that would
-    cross a limit is held at it, and the rest is split among the others in the same proportions."""
-    lo, hi = min(lo, 1 / len(raw)), max(hi, 1 / len(raw))
-    hi = min(hi, 1 - lo * (len(raw) - 1))   # the others at their minimum must still fit (4 patterns: 55%)
-    fixed: dict[str, float] = {}
-    while True:
-        free = {p: v for p, v in raw.items() if p not in fixed}
-        left = 1 - sum(fixed.values())
-        share = {p: left * v / sum(free.values()) for p, v in free.items()} if free else {}
-        over = {p for p, v in share.items() if v > hi + 1e-12}
-        under = {p for p, v in share.items() if v < lo - 1e-12}
-        if not over and not under:
-            return {**fixed, **share}
-        fixed.update({p: hi for p in over} if over else {p: lo for p in under})
+    """Shares in proportion to `raw`, adding up to 1, none below `lo` or above `hi` (each share is
+    min(hi, max(lo, k * raw)), with k found so they add up to 1). Before Oct 30 the limits were applied
+    one after the other, and capping two shares then raising the rest could add up to more than 1 (125%)."""
+    n = len(raw)
+    lo, hi = min(lo, 1 / n), max(hi, 1 / n)
+    total = sum(raw.values())
+
+    def shares(k: float) -> dict[str, float]:
+        return {p: min(hi, max(lo, k * v)) for p, v in raw.items()}
+
+    a, b = 0.0, 1.0 / max(min(v for v in raw.values() if v > 0), 1e-12) if total > 0 else 1.0
+    while sum(shares(b).values()) < 1:        # make sure the top of the search adds up to 1 or more
+        b *= 2
+    for _ in range(200):
+        m = (a + b) / 2
+        a, b = (m, b) if sum(shares(m).values()) < 1 else (a, m)
+    out = shares(b)
+    scale = sum(out.values())
+    return {p: v / scale for p, v in out.items()}
 
 
 def size_factor(share: dict[str, float], pattern: str) -> float:
