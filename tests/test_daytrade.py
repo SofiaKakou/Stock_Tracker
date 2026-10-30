@@ -255,8 +255,10 @@ def test_money_shifts_slowly_within_limits_and_a_broken_pattern_pauses():
 
     huge = rows("gap", [0.5] * 200) + rows("breakout", [0.0] * 30) + rows("momentum", [0.0] * 30)
     share, _ = daytrade.allocate(daytrade.compare(huge, TESTED), None)
-    cap = min(daytrade.MAX_SHARE, 1 - daytrade.MIN_SHARE * (len(share) - 1))   # the others need their minimum
+    ready, equal = 3, 1 / len(share)            # gapup and loser have no live record: they keep an equal share
+    cap = min(daytrade.MAX_SHARE, ready * equal - daytrade.MIN_SHARE * (ready - 1))   # the other ready ones need their minimum
     assert share["gap"] == pytest.approx(cap) and sum(share.values()) == pytest.approx(1)   # never more than the cap
+    assert share["gapup"] == pytest.approx(equal) and share["loser"] == pytest.approx(equal)
 
     broken = rows("breakout", [-0.01] * 50) + rows("gap", [0.001] * 25)
     share, paused = daytrade.allocate(daytrade.compare(broken, TESTED), None)
@@ -931,3 +933,24 @@ def test_errors_of_the_day_show_in_the_report():
     state = {"errors": {DAY.isoformat(): ["gap: 500 from Alpaca"]}}
     _, e = daytrade.report([], 100_000.0, state, DAY)
     assert "gap: 500 from Alpaca" in e["description"]
+
+
+def test_patterns_without_a_live_record_dont_take_the_money_and_shares_add_up_to_one():
+    # Oct 29: breakouts 119 live trades over 5 days, gap fade 33 over 4, momentum 14, loser shorts 3, gap-up
+    # shorts none. The old rule handed the two new shorts 40% each on their forecasts alone (125% in all).
+    log = (rows("breakout", [0.0016] * 119, per_day=24) + rows("gap", [-0.0032] * 33, per_day=9)
+           + rows("momentum", [0.0005] * 14, per_day=3) + rows("loser", [-0.0265] * 3, per_day=3))
+    tested = {**TESTED, "short_gap_ups": daytrade.GAPUP_TEST, "short_losers": daytrade.LOSER_TEST}
+    share, paused = daytrade.allocate(daytrade.compare(log, tested), 0.0)
+    assert not paused and sum(share.values()) == pytest.approx(1)
+    assert share == pytest.approx({p: 1 / len(daytrade.PATTERN_TEST) for p in daytrade.PATTERN_TEST})   # only 1 ready
+    log += rows("gap", [-0.0032] * 10, per_day=2)                  # gap fade ready too: those two compare
+    share, _ = daytrade.allocate(daytrade.compare(log, tested), 0.0)
+    assert sum(share.values()) == pytest.approx(1) and share["breakout"] > share["gap"]
+    assert share["loser"] == pytest.approx(0.2) and share["gapup"] == pytest.approx(0.2) and share["momentum"] == pytest.approx(0.2)
+    assert all(daytrade.MIN_SHARE - 1e-9 <= v <= daytrade.MAX_SHARE + 1e-9 for v in share.values())
+
+
+def test_bounded_shares_add_up_to_one_even_when_two_hit_the_cap():
+    s = daytrade.bounded({"a": 10, "b": 10, "c": 0.1, "d": 0.1, "e": 0.1}, 0.15, 0.6)
+    assert sum(s.values()) == pytest.approx(1) and s["c"] == pytest.approx(0.15) and s["a"] == pytest.approx(0.275)
