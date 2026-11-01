@@ -216,6 +216,11 @@ It learns from them, slowly on purpose (a few weeks of day trades are mostly luc
   results alone, and a rounding bug made the shares add up to 125%).
 - **Automatic pause**: after 40 trades, a pattern doing clearly worse than its history is paused
   (and resumes if it comes back within range). A great streak never gets bigger bets than the cap.
+- **Paused by hand**: the gap fade, from Nov 1 until the Nov 6 review (-$857 over its first 46 live
+  trades, down on 4 of 5 days; the automatic pause needs 40 trades over 10 days). `MANUAL_PAUSE` in
+  `trend_bot/daytrade.py`; the evening report says so every day.
+- **New patterns at half size**: the gap-up and loser shorts trade at half the normal size until each
+  has 20 live trades over 5 trading days (their first 4 live trades all lost).
 
 Setup: a second paper account in Alpaca, its
 keys as the `ALPACA_DAY_KEY_ID` and `ALPACA_DAY_SECRET_KEY` secrets. The monthly demo account is
@@ -471,7 +476,9 @@ later as its own step.)
 - **Not one bet on an industry**: within one sector (Yahoo's: Technology, Financial Services, ...) longs
   minus shorts at most **15% of the account**, about 3 positions one way. On Oct 27 the gap fade shorted six
   AI-chip and data-centre stocks at once, and the whole group rallied; now a 4th short in one sector is
-  skipped (a trade that balances the sector still goes in).
+  skipped (a trade that balances the sector still goes in). Breakouts (and the index funds) come first:
+  they only count their own positions in a sector, so the other patterns can't use up the room (on
+  Oct 30 the gap fade's shorts filled Technology and Healthcare and five breakouts were skipped).
 - **No fading an earnings gap**: before the open the bot asks Yahoo which watched stocks reported
   earnings after yesterday's close or before today's open, and doesn't trade against their gap (10 years:
   fading an earnings gap lost -0.14% a trade, other gaps -0.01%; the news usually keeps moving it).
@@ -536,7 +543,7 @@ nothing the second time, so double starts are harmless.
    | Crypto account | `crypto.yml` | every 15 minutes, every day (minutes 2, 17, 32, 47) | `{"ref":"main"}` |
 
    The status job only reads: what's open per pattern with its gain or loss now, what's already closed,
-   and the account's change today, sent to Discord. Start it by hand any time (Actions → Day trading
+   and the account's change today, sent to Discord, followed by the $100 crypto account's summary. Start it by hand any time (Actions → Day trading
    status → Run workflow).
 
 3. **Test it**: cron-job.org → the job → **Test run**. It should answer **204** (started), and a new run

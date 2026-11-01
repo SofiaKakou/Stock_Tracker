@@ -10,6 +10,12 @@ DAY = dt.date(2026, 10, 26)   # a Monday, New York winter time not yet (EDT)
 
 
 @pytest.fixture(autouse=True)
+def no_manual_pause(monkeypatch):
+    """The patterns' own behaviour: no pattern paused by hand unless a test says so."""
+    monkeypatch.setattr(daytrade, "MANUAL_PAUSE", {})
+
+
+@pytest.fixture(autouse=True)
 def no_earnings_calendar(monkeypatch):
     """No Yahoo in tests: no stock reports earnings unless a test says so."""
     monkeypatch.setattr(daytrade.intraday, "_yahoo_earnings", lambda symbol, limit=60: [])
@@ -954,3 +960,56 @@ def test_patterns_without_a_live_record_dont_take_the_money_and_shares_add_up_to
 def test_bounded_shares_add_up_to_one_even_when_two_hit_the_cap():
     s = daytrade.bounded({"a": 10, "b": 10, "c": 0.1, "d": 0.1, "e": 0.1}, 0.15, 0.6)
     assert sum(s.values()) == pytest.approx(1) and s["c"] == pytest.approx(0.15) and s["a"] == pytest.approx(0.275)
+
+
+def test_breakouts_arent_crowded_out_of_a_sector_by_the_other_patterns():
+    clock = Clock(dt.datetime(2026, 10, 30, 10, 0, tzinfo=daytrade.NY))
+
+    class Held(FakeBroker):     # the gap fade already shorted three tech stocks (~$14,700)
+        def positions(self):
+            return [{"symbol": s, "qty": "-49", "market_value": "-4900"} for s in ("AAA", "BBB", "CCC")]
+
+        def orders_since(self, after, status="all"):
+            return [{"symbol": s, "client_order_id": f"td-20261030-gap-{s}", "side": "sell"}
+                    for s in ("AAA", "BBB", "CCC")] + self.orders
+
+    sectors = {s: "Technology" for s in ("AAA", "BBB", "CCC", "ORCL", "INTC")}
+    day = dt.date(2026, 10, 30)
+    broker, out = Held(), []
+    s = daytrade.Session(broker, None, ["ORCL", "INTC"], day, log=out.append, now=clock.now, sectors=sectors)
+    s.last_trades = lambda syms: {x: clock.now() for x in syms}
+    s.enter("breakout", [("ORCL", -1)], {"ORCL": 100.0}, 10)
+    assert [o["symbol"] for o in broker.orders] == ["ORCL"]          # the gap fade's shorts don't count against it
+    broker2, out2 = Held(), []
+    s2 = daytrade.Session(broker2, None, ["INTC"], day, log=out2.append, now=clock.now, sectors=sectors)
+    s2.last_trades = lambda syms: {x: clock.now() for x in syms}
+    s2.enter("loser", [("INTC", -1)], {"INTC": 100.0}, 10)
+    assert not broker2.orders and any("too much in Technology" in m for m in out2)   # the others still do
+
+
+def test_new_patterns_trade_at_half_size_until_they_have_a_live_record():
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 31, tzinfo=daytrade.NY))
+    qty = {}
+    for young in (None, set()):
+        broker = FakeBroker()
+        s = daytrade.Session(broker, None, [], DAY, log=lambda *_: None, now=clock.now, young=young)
+        s.last_trades = lambda syms: {x: clock.now() for x in syms}
+        s.enter("loser", [("AAA", -1)], {"AAA": 10.0}, 3)
+        qty[young is None] = broker.orders[0]["qty"]
+    assert qty[True] == pytest.approx(qty[False] / 2, abs=1)
+    state, e = daytrade.report([], 100_000.0, {"log": rows("loser", [0.0] * 25, per_day=5)}, DAY, TESTED)
+    assert state["young"] == ["gapup"] and "Half size until they have 20 live trades over 5 days: gap-up shorts" in e["description"]
+
+
+def test_a_pattern_paused_by_hand_doesnt_trade_and_the_report_says_why(monkeypatch):
+    monkeypatch.setattr(daytrade, "MANUAL_PAUSE", {"gap": "paused by hand until the review"})
+    clock = Clock(dt.datetime(2026, 10, 26, 9, 17, tzinfo=daytrade.NY))
+    broker = FakeBroker()
+    s = daytrade.Session(broker, FakeData(clock), ["SPY", "GAPPY", "BREAKY"], DAY, log=lambda *_: None,
+                         sleep=clock.sleep, now=clock.now)
+    s.morning()
+    tags = [o["client_order_id"] for o in broker.orders]
+    assert not any("-gap-" in t for t in tags) and "td-20261026-breakout-BREAKY" in tags
+    state, e = daytrade.report([], 100_000.0, {"log": rows("breakout", [0.001] * 25)}, DAY, TESTED)
+    assert "gap" in state["paused"] and "gap" not in state["share"] and "paused by hand until the review" in e["description"]
+    assert sum(state["share"].values()) == pytest.approx(1)

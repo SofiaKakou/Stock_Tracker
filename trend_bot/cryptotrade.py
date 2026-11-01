@@ -456,7 +456,7 @@ def diagnose(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = 
         for name in ("dip", "dip 3%", "dip 4%", "big dip"):
             tr = crypto.trades(g, sig[name], crypto.HOLDS["1 day"])
             rows += [(name, pd.Timestamp(x), r) for x, r in zip(tr["t"], tr["ret"])]
-    lines += ["", f"Biggest one-hour falls in the last 3 days ({len(recent)} coins; the bot buys at -3%):"]
+    lines += ["", f"Biggest one-hour falls in the last 3 days ({len(recent)} coins; the bot buys at -{DIP:.0%}):"]
     lines += [f"  {s.split('/')[0]:<8} {m:+.1%} (at {w:%a %H:%M} UTC)" for m, s, w in sorted(recent)[:12]]
     tr = pd.DataFrame(rows, columns=["rule", "t", "ret"])
     if not tr.empty:
