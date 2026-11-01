@@ -1,6 +1,6 @@
 # Day-trading demo account (fake money): a look at the day so far, sent to Discord. What's open per
-# pattern with its gain or loss now, what's already closed, and the account's change today. It never
-# trades. Started by the timer at cron-job.org (around 11:00 and 14:00 New York) or by hand; the
+# pattern with its gain or loss now, what's already closed, and the account's change today; then the
+# $100 crypto account's summary (what it holds, its trades so far). It never trades. Started by the timer at cron-job.org (around 11:00 and 14:00 New York) or by hand; the
 # schedules below are backups for New York summer and winter time.
 # Its own concurrency group, so it doesn't wait behind the trading job (which runs for hours).
 
@@ -26,6 +26,8 @@ jobs:
     env:
       ALPACA_DAY_KEY_ID: ${{ secrets.ALPACA_DAY_KEY_ID }}
       ALPACA_DAY_SECRET_KEY: ${{ secrets.ALPACA_DAY_SECRET_KEY }}
+      ALPACA_SMALL_KEY_ID: ${{ secrets.ALPACA_SMALL_KEY_ID }}
+      ALPACA_SMALL_SECRET_KEY: ${{ secrets.ALPACA_SMALL_SECRET_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       PYTHONUNBUFFERED: "1"
       PYTHONUTF8: "1"
@@ -49,3 +51,14 @@ jobs:
 
       - name: Status
         run: python -m trend_bot daytrade --phase status --discord
+
+      # Read only: the crypto account's open trades and trade log (the 15-minute job saves them).
+      - name: Restore crypto trades
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: crypto.json
+          key: crypto-state-${{ github.run_id }}
+          restore-keys: crypto-state-
+
+      - name: Crypto account
+        run: python -m trend_bot crypto --summary --discord || echo "the crypto summary failed (the day-trading status above still went out)"

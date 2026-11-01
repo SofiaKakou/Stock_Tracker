@@ -48,6 +48,10 @@ LIMIT_SLACK = 0.002     # entries are limit orders at most 0.2% past the quote (
 STALE_ENTRY_MINUTES = 5  # an entry that hasn't filled in 5 minutes is cancelled (the moment has passed)
 NET_LIMIT = 0.5          # longs minus shorts at most 50% of the account: not one big bet on the market's direction
 SECTOR_NET = 0.15        # ... and within one sector at most 15% (about 3 positions) one way: not one bet on an industry
+# Patterns ranked for the sector limit: a breakout only counts breakouts' (and the index funds') own
+# positions in its sector, so the other patterns can't use up the room first (Oct 30: the gap fade's
+# shorts filled Technology and Healthcare, and ORCL, ASML, INTC, STX and MDT breakouts were skipped).
+SECTOR_FIRST = {"breakout", "momentum"}
 # Short the big gap-ups (tested only; the only idea that passed the 20-year swing study after costs):
 # any stock in the market that opens 20%+ above yesterday's close (price $5+, $5M+ traded a day),
 # sold short at the open if the broker can lend it, a 15% stop above, bought back by the close.
@@ -226,10 +230,11 @@ def pnl(orders: list[dict]) -> dict[str, dict]:
 class Session:
     def __init__(self, broker: DayBroker, data: intraday.Data, symbols: list[str], today: dt.date,
                  log=print, sleep=time.sleep, now=lambda: dt.datetime.now(NY), share: dict | None = None,
-                 paused: set | None = None, sectors: dict | None = None):
+                 paused: set | None = None, sectors: dict | None = None, young: set | None = None):
         self.b, self.data, self.log, self.sleep, self.now = broker, data, log, sleep, now
         self.sectors = sectors if sectors is not None else {}   # symbol -> sector (Yahoo), kept between days
-        self.share, self.paused = share or {}, set(paused or ())
+        self.share, self.paused = share or {}, set(paused or ()) | set(MANUAL_PAUSE)
+        self.young = set(NEW_PATTERNS if young is None else young)   # half size until they have a live record
         self.today = today
         self.etfs = [s for s in symbols if s in intraday.ETFS]
         self.stocks = [s for s in symbols if s not in intraday.ETFS]
@@ -330,6 +335,15 @@ class Session:
                 self.sectors[sym] = None
         return self.sectors[sym]
 
+    def patterns_held(self) -> dict[str, str]:
+        """{symbol: pattern} from today's entry tags (td-<yyyymmdd>-<pattern>-<symbol>)."""
+        out = {}
+        for o in self.today_orders():
+            parts = str(o.get("client_order_id", "")).split("-")
+            if parts[0] == "td" and len(parts) >= 4 and parts[1] == f"{self.today:%Y%m%d}" and parts[2] != "x":
+                out.setdefault(o["symbol"], parts[2])
+        return out
+
     def cancel_stale_entries(self) -> int:
         """Entry orders still unfilled after STALE_ENTRY_MINUTES (a limit the price ran away from): cancelled."""
         tag, n = f"td-{self.today:%Y%m%d}-", 0
@@ -369,7 +383,7 @@ class Session:
     def enter(self, pattern: str, signals: list[tuple[str, int]], prices: dict[str, float], slots: int,
               strength: dict[str, float] | None = None) -> int:
         if pattern in self.paused:
-            self.log(f"[day] {pattern}: paused (worse live than its history); no trades")
+            self.log(f"[day] {pattern}: {MANUAL_PAUSE.get(pattern, 'paused (worse live than its history)')}; no trades")
             return 0
         if not signals:
             return 0
@@ -382,7 +396,7 @@ class Session:
                        if str(o.get("client_order_id", "")).startswith(f"td-{self.today:%Y%m%d}-{pattern}-"))
         else:
             used = len(done & set(self.stocks if pattern != "momentum" else self.etfs))
-        each, sent = self.budget() * size_factor(self.share, pattern), 0
+        each, sent = self.budget() * size_factor(self.share, pattern) * (NEW_SIZE if pattern in self.young else 1.0), 0
         account = self.b.account()
         positions = self.b.positions()
         room = float(account["equity"]) * INVESTED * BUYING_POWER - sum(
@@ -390,7 +404,10 @@ class Session:
         net = sum(float(p.get("market_value") or 0) for p in positions)      # shorts count negative
         net_cap = float(account["equity"]) * NET_LIMIT
         by_sector: dict[str, float] = {}
+        own = self.patterns_held() if pattern in SECTOR_FIRST else {}
         for p in positions:
+            if pattern in SECTOR_FIRST and own.get(p["symbol"]) not in SECTOR_FIRST:
+                continue            # the other patterns' positions don't use up a breakout's room
             sec = self.sector(p["symbol"])
             if sec:
                 by_sector[sec] = by_sector.get(sec, 0.0) + float(p.get("market_value") or 0)
@@ -658,6 +675,12 @@ PATTERN_NAME = {"gap": "Fade big opening gaps", "breakout": "Breakout from the f
                 "momentum": "Market's last half hour follows its first",
                 "gapup": "Short the big gap-ups (tested only)",
                 "loser": "Short yesterday's big losers (tested only)"}
+# Paused by hand (the automatic pause needs PAUSE_AFTER trades over PAUSE_DAYS days): {pattern: why}.
+MANUAL_PAUSE = {"gap": "paused by hand on Nov 1 until the Nov 6 review: -$857 over its first 46 live trades, "
+                       "down on 4 of 5 days"}
+# New patterns trade at half size until they have SHIFT_AFTER live trades over SHIFT_DAYS days.
+NEW_PATTERNS = {"gapup", "loser"}
+NEW_SIZE = 0.5
 MIN_SHARE, MAX_SHARE = 0.15, 0.60     # each pattern's share of the money stays between these
 PRIOR_TRADES = 100                    # the 10-year test counts like this many live trades
 SHIFT_AFTER, PAUSE_AFTER, COST_AFTER = 20, 40, 50   # live trades needed before each kind of change
@@ -719,6 +742,7 @@ def allocate(cmp: dict[str, dict], cost: float | None) -> tuple[dict[str, float]
         return c["n"] >= trades and c.get("days", days) >= days
 
     paused = {p for p, c in cmp.items() if ready(c, PAUSE_AFTER, PAUSE_DAYS) and c["z"] is not None and c["z"] < -2}
+    paused |= set(MANUAL_PAUSE) & set(PATTERN_TEST)
     active = [p for p in PATTERN_TEST if p not in paused]
     if not active:
         return {}, paused
@@ -1023,7 +1047,8 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
     cost = measured_cost(state["log"])
     share, paused = allocate(cmp, cost)
     newly = paused - set(state.get("paused", []))
-    state.update(share=share, paused=sorted(paused), measured_cost=cost)
+    young = sorted(p for p in NEW_PATTERNS if not (cmp[p]["n"] >= SHIFT_AFTER and cmp[p].get("days", 0) >= SHIFT_DAYS))
+    state.update(share=share, paused=sorted(paused), measured_cost=cost, young=young)
     lines += ["", "**Forecast vs actual** (10-year test vs live, per trade after costs):"]
     for p, c in cmp.items():
         f = f"{c['forecast']:+.2%}" if c["forecast"] is not None else "–"
@@ -1039,9 +1064,14 @@ def report(orders: list[dict], equity: float, state: dict, today: dt.date, teste
             f"{SHORT_NAME[p]} {v:.0%}" for p, v in share.items())
                      + ("" if any(c["n"] >= SHIFT_AFTER and c.get("days", 0) >= SHIFT_DAYS for c in cmp.values())
                         else f" (equal until a pattern has {SHIFT_AFTER} live trades over {SHIFT_DAYS} trading days)"))
-    for p in sorted(newly):
+    for p in sorted(paused & set(MANUAL_PAUSE)):
+        lines.append(f"⏸️ **{PATTERN_NAME[p]}**: {MANUAL_PAUSE[p]}.")
+    for p in sorted(newly - set(MANUAL_PAUSE)):
         lines.append(f"⏸️ **{PATTERN_NAME[p]} is paused**: after {cmp[p]['n']} live trades it's doing clearly worse "
                      "than its 10-year history. It resumes on its own if its record comes back within range.")
+    if young:
+        lines.append("Half size until they have " f"{SHIFT_AFTER} live trades over {SHIFT_DAYS} days: "
+                     + ", ".join(SHORT_NAME[p] for p in young) + ".")
     if carried:
         lines += ["", f"Closed today, from earlier days (held overnight): {', '.join(carried)}: ${carried_pnl:+,.0f}"]
     if still_open:
