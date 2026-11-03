@@ -159,7 +159,9 @@ Form Type   Company Name                                                  CIK   
     assert n == 1  # the Form 4 listed twice is fetched once; 3 and 4/A ignored
     daily = con.execute("SELECT ticker, insider, code, filed FROM insider_trades WHERE accession LIKE '0000000001-%'").fetchall()
     assert ("FLIP", "Doe Jane", "P", "2026-04-06") in daily
-    assert "2026-04-07" in json.loads(db.get_meta(con, "insider_days_done"))
+    done = json.loads(db.get_meta(con, "insider_days_done"))
+    assert "2026-04-03" in done                  # an older day without an index: a holiday, done
+    assert "2026-04-07" not in done              # yesterday's index not published yet: tried again next run
     # Running again doesn't refetch finished days.
     assert sec_bulk.load_recent_days(con, max_days=30, today=today, fetch=fake_fetch, log=lambda *_: None) == 0
 
@@ -558,3 +560,20 @@ def test_prices_flagged_for_a_retry_when_yahoo_gives_up(con, monkeypatch):
     assert market_data.update_prices(con, downloader=FakeYahoo(), pause=0, log=lambda *_: None)["updated"] == 0
     again = market_data.update_prices(con, downloader=FakeYahoo(), pause=0, log=lambda *_: None, max_age_hours=0.5)
     assert again["updated"] + again["reloaded"] == 7
+
+
+def test_recent_price_holes_are_downloaded_again_once(con):
+    market_data.update_universe(con)
+    yahoo = FakeYahoo()
+    market_data.update_prices(con, downloader=yahoo, pause=0, log=lambda *_: None)
+    hole = DATES[-60:-30].strftime("%Y-%m-%d").tolist()
+    con.executemany("DELETE FROM prices WHERE ticker = 'UPPY' AND date = ?", [(d,) for d in hole])
+    yahoo.calls.clear()
+    assert market_data.repair_gaps(con, downloader=yahoo, log=lambda *_: None) == 1
+    assert yahoo.calls == [(("UPPY",), None, "max")]
+    assert db.status(con)["price_rows"] == 7 * N              # hole filled
+    # A hole Yahoo really doesn't have (a halt) is tried once, not every night.
+    con.executemany("DELETE FROM prices WHERE ticker = 'UPPY' AND date = ?", [(d,) for d in hole])
+    market_data.repair_gaps(con, downloader=lambda *a, **k: {}, log=lambda *_: None)
+    yahoo.calls.clear()
+    assert market_data.repair_gaps(con, downloader=yahoo, log=lambda *_: None) == 0 and not yahoo.calls

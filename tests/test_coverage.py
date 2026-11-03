@@ -52,10 +52,10 @@ def test_audit_finds_planted_problems(tmp_path):
     con.execute("INSERT INTO facts VALUES (1, 'revenue', 0, '2024-01-01', '2024-12-31', '2024-06-30', 5)")
     con.execute("INSERT INTO facts VALUES (1, 'shares', 0, NULL, '2024-07-05', '2024-07-01', 5)")  # cover page: normal
     found = {r["check"]: r for r in coverage.audit(con)}
-    for check in ("Prices dated on a weekend", "Prices dated on a market holiday", "Prices from the future",
-                  "Long gaps inside a price history", "Financials filed before their period ended"):
+    for check in ("Prices dated on a weekend", "Prices dated on a market holiday", "Prices from the future"):
         assert not found[check]["ok"], check
-    for check in ("Impossible prices", "Unexplained one-day jumps"):       # found, but already handled
+    for check in ("Impossible prices", "Unexplained one-day jumps", "Long gaps inside a price history",
+                  "Financials filed before their period ended"):       # found, but already handled
         assert found[check]["found"] and found[check]["ok"] and found[check]["handled"], check
     assert found["Financials filed before their period ended"]["found"] == 1  # the cover-page count isn't
     assert found["Filings from the future"]["ok"]

@@ -79,6 +79,18 @@ def test_as_of_uses_only_filed_numbers_and_finds_prior_year():
     assert fundamentals.as_of(facts, pd.Timestamp("2026-09-30")).empty  # stale numbers are dropped
 
 
+def test_numbers_filed_before_their_period_ended_are_skipped():
+    rows = fundamentals.parse_company(company(1, [2021, 2022], 0.3))
+    # A company's date mix-up: "assets at 2024-12-31", filed in March 2023.
+    rows.append((1, "assets", 0, None, "2024-12-31", "2023-03-10", 1.0))
+    facts = pd.DataFrame(rows, columns=["cik", "item", "priority", "start", "end", "filed", "val"])
+    for c in ("start", "end", "filed"):
+        facts[c] = pd.to_datetime(facts[c])
+    jun = fundamentals.as_of(facts, pd.Timestamp("2023-06-30"))
+    assert jun.loc[1, "assets"] != 1.0                     # the real latest balance sheet, not the bogus one
+    assert jun.loc[1, "shares"] == pytest.approx(1_000_000)  # cover-page shares (dated after filing) still count
+
+
 def test_market_cap_undoes_later_splits():
     close = pd.Series({"ABC": 50.0})            # Yahoo's split-adjusted price
     shares = pd.Series({9: 1_000.0})              # reported before a 2-for-1 split

@@ -166,13 +166,26 @@ def _pick_latest(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop_duplicates("cik", keep="last").set_index("cik")
 
 
+COVER_PAGE_ITEMS = ("shares", "public_float")   # cover-page counts are dated a few days after filing: normal
+
+
+def well_dated(facts: pd.DataFrame) -> pd.DataFrame:
+    """Drop numbers 'filed' before the period they cover ended (besides cover-page counts).
+
+    The SEC data has a few hundred of these: date mix-ups in a company's own tags (a period end typed a
+    year off, or a pro-forma figure). Left in, such a row looks like the newest period and pushes out the
+    real latest numbers until the bogus end date passes, so it is skipped.
+    """
+    return facts[(facts["filed"] >= facts["end"]) | facts["item"].isin(COVER_PAGE_ITEMS)]
+
+
 def as_of(facts: pd.DataFrame, when: pd.Timestamp, max_age_days: int = 550) -> pd.DataFrame:
     """Latest value of every item per company, using only filings made on or before `when`.
 
     Flows are the last full fiscal year; balance-sheet items and shares the latest reported.
     Also returns *_prior: the same item one year earlier (for growth rates).
     """
-    facts = annual_only(facts)
+    facts = well_dated(annual_only(facts))
     known = facts[(facts["filed"] <= when) & (facts["end"] >= when - pd.Timedelta(days=max_age_days))]
     older = facts[facts["filed"] <= when]
     out = {}
