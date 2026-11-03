@@ -11,7 +11,7 @@ from typing import Callable
 import pandas as pd
 
 from trend_bot import insiders
-from trend_bot.db import set_meta
+from trend_bot.db import get_meta, set_meta
 
 UNIVERSE_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
 MAIN_EXCHANGES = ("NYSE", "Nasdaq", "CBOE")
@@ -272,6 +272,48 @@ def _save(con: sqlite3.Connection, ticker: str, df: pd.DataFrame, replace_all: b
            fail_count = 0, updated_at = ? WHERE ticker = ?""",
         (first, last, tail[0][1] if tail else None, dollar_vol, dt.datetime.now().isoformat(timespec="seconds"), ticker),
     )
+
+
+GAP_DAYS = 20       # more than this many calendar days between two prices: a hole in the history
+GAP_LOOKBACK = 180  # only holes this recent are worth re-downloading
+GAP_REPAIRS = 50    # stocks re-downloaded per night
+
+
+def repair_gaps(con: sqlite3.Connection, downloader: Downloader = yahoo_download, limit: int = GAP_REPAIRS,
+                today: dt.date | None = None, log: Callable[[str], None] = print) -> int:
+    """Re-download the full history of stocks with a recent hole in their prices, once per hole.
+
+    A hole shared by several stocks over the same weeks is missing data on our side (a download that came
+    back short), not a trading halt; a fresh full download fills it. A hole Yahoo still lacks after that is
+    a real halt, and is remembered so it isn't downloaded again every night.
+    """
+    since = ((today or dt.date.today()) - dt.timedelta(days=GAP_LOOKBACK)).isoformat()
+    holes = con.execute("""
+        SELECT ticker, prev, date FROM (
+            SELECT ticker, date, LAG(date) OVER (PARTITION BY ticker ORDER BY date) AS prev FROM prices
+            WHERE date >= ?)
+        WHERE prev IS NOT NULL AND julianday(date) - julianday(prev) > ?""", (since, GAP_DAYS)).fetchall()
+    tried = set(json.loads(get_meta(con, "gaps_tried", "[]") or "[]"))
+    todo = sorted({t for t, a, b in holes if f"{t} {a}" not in tried})[:limit]
+    if not todo:
+        return 0
+    log(f"[prices] {len(todo)} stocks have a recent hole in their prices; downloading them again in full")
+    try:
+        got = downloader(todo, period="max")
+    except Exception as e:
+        log(f"[prices] download error: {e}; will try next run")
+        return 0
+    fixed = 0
+    for t in todo:
+        df = got.get(t)
+        if df is not None and not df.dropna(subset=["Close"]).empty:
+            _save(con, t, df.dropna(subset=["Close"]), replace_all=True)
+            fixed += 1
+    tried |= {f"{t} {a}" for t, a, b in holes if t in todo}
+    set_meta(con, "gaps_tried", json.dumps(sorted(tried)[-5000:]))
+    con.commit()
+    log(f"[prices] re-downloaded {fixed} of them; any hole still there is a real trading halt")
+    return fixed
 
 
 def update_prices(

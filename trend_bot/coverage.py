@@ -17,6 +17,7 @@ import sqlite3
 import pandas as pd
 
 from trend_bot.db import get_meta, set_meta
+from trend_bot.fundamentals import COVER_PAGE_ITEMS  # cover-page counts are dated after filing: normal
 
 STALE_DAYS = 10
 
@@ -87,7 +88,6 @@ def why(con: sqlite3.Connection, ticker: str, universe: int = 1000, min_price: f
 HOLIDAYS = ["01-01", "07-04", "12-25"]     # US market closed (when on a weekday)
 
 
-COVER_PAGE_ITEMS = ("shares", "public_float")   # cover-page counts are dated a few days after filing: normal
 
 
 def _rankable(con: sqlite3.Connection) -> str:
@@ -149,13 +149,16 @@ def audit(con: sqlite3.Connection, examples: int = 5) -> list[dict]:
         WHERE prev IS NOT NULL AND julianday(date) - julianday(prev) > 20 LIMIT 1000""").fetchall()
     add("Long gaps inside a price history", len(rows), "More than 20 days with no price while the stock was "
         "listed: trading halts, or missing data that would stretch returns over the gap.",
-        [f"{t} {a}..{b}" for t, a, b in rows])
+        [f"{t} {a}..{b}" for t, a, b in rows],
+        handled="gaps from the last 6 months are re-downloaded in full once; one Yahoo still lacks "
+                "after that is a real trading halt")
     skip = ",".join(f"'{i}'" for i in COVER_PAGE_ITEMS)
     rows = con.execute(f"SELECT cik, item, end, filed FROM facts WHERE filed < end AND item NOT IN ({skip}) "
                        "LIMIT 1000").fetchall()
     add("Financials filed before their period ended", len(rows), "A report can't be filed before the period it "
         "covers ends: a date mix-up that would leak future numbers. (Cover-page share counts, which are dated "
-        "a few days after filing, are normal and not counted.)", [f"cik {c} {i} {e}/{f}" for c, i, e, f in rows])
+        "a few days after filing, are normal and not counted.)", [f"cik {c} {i} {e}/{f}" for c, i, e, f in rows],
+        handled="skipped when financials are looked up (a company's own date mix-up)")
     rows = con.execute("SELECT accession, filed FROM filings WHERE filed > ? UNION ALL "
                        "SELECT accession, filed FROM events WHERE filed > ? LIMIT 1000", (today, today)).fetchall()
     add("Filings from the future", len(rows), "Filing dates after today.", rows)

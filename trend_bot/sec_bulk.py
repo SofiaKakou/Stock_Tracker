@@ -33,6 +33,7 @@ BULK_INDEX_URL = "https://www.sec.gov/data-research/sec-markets-data/insider-tra
 BULK_LINK = re.compile(r"""href=["']([^"']*?(\d{4})[_-]?q([1-4])[^"'/]*\.zip)["']""", re.I)
 DAILY_INDEX_URL = "https://www.sec.gov/Archives/edgar/daily-index/{year}/QTR{q}/form.{ymd}.idx"
 FILING_URL = "https://www.sec.gov/Archives/{path}"
+INDEX_LATE_DAYS = 3   # a missing daily index this recent may just not be published yet: not marked done
 
 Log = Callable[[str], None]
 
@@ -267,6 +268,10 @@ def load_recent_days(con: sqlite3.Connection, max_days: int = 30, today: dt.date
             except requests.HTTPError as e:
                 if e.response is None or e.response.status_code not in (403, 404):
                     raise
+                if day >= today - dt.timedelta(days=INDEX_LATE_DAYS):   # not published yet: the next run tries again
+                    log(f"[insiders] {day}: the SEC hasn't published that day's filing index yet; next run")
+                    day += dt.timedelta(days=1)
+                    continue
                 text = ""  # holiday: no index
             listed = parse_daily_index(text)
             filings = [f for f in listed if not wanted or f[2] & wanted]

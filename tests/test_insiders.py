@@ -204,3 +204,39 @@ def test_sec_rate_limit_waits_then_continues(monkeypatch):
     with pytest.raises(insiders.SECLimited, match=r"very first one \(429, retry after 600s: Request Rate Threshold"):
         insiders._get("u3")
     assert sleeps == []
+
+
+def test_a_file_the_archive_doesnt_have_is_not_a_rate_limit(monkeypatch):
+    """The archive's storage (S3) answers a missing file with 403 AccessDenied: no waiting, no pause."""
+    monkeypatch.setenv("SEC_USER_AGENT", "Test test@example.com")
+    monkeypatch.setattr(insiders, "REQUEST_GAP", 0)
+    sleeps = []
+    monkeypatch.setattr(insiders.time, "sleep", lambda s: sleeps.append(s))
+    s3 = ('<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message>'
+          "<RequestId>K27G0BEB01526670</RequestId><HostId>3GHC9cfrglOw7sLL</HostId></Error>")
+
+    class Resp:
+        def __init__(self, code, text):
+            self.status_code, self.text, self.content, self.headers = code, text, b"ok", {}
+
+        def raise_for_status(self):
+            pass
+
+    answers = iter([Resp(200, "ok"), Resp(403, s3), Resp(200, "ok")])
+    monkeypatch.setattr(insiders.requests, "get", lambda *a, **k: next(answers))
+    monkeypatch.setattr(insiders, "_ok_requests", 0)
+    monkeypatch.setattr(insiders, "_missing_in_a_row", 0)
+    assert insiders._get("u1") == b"ok"
+    with pytest.raises(insiders.requests.HTTPError) as e:
+        insiders._get("form.20261102.idx")
+    assert e.value.response.status_code == 403 and not isinstance(e.value, insiders.SECLimited)
+    assert insiders._get("u3") == b"ok" and sleeps == []
+    # ...but a long run of "not there" is treated as a block after all.
+    monkeypatch.setattr(insiders.requests, "get", lambda *a, **k: Resp(403, s3))
+    with pytest.raises(insiders.SECLimited, match="in a row"):
+        for _ in range(insiders.MISSING_LIMIT):
+            try:
+                insiders._get("missing")
+            except insiders.requests.HTTPError:
+                pass
+    assert insiders.not_there(Resp(403, "<h1>Request Rate Threshold Exceeded</h1>")) is False

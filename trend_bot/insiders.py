@@ -88,6 +88,13 @@ def user_agent(env_file: str | Path = ".env") -> str:
 
 _ok_requests = 0
 RATE_LIMIT_WAITS = (60, 180, 600)  # seconds to back off when the SEC starts refusing
+# The SEC's archive sits on Amazon S3, which answers a file that isn't there (yet) with 403 and an XML
+# "<Code>AccessDenied</Code>", not 404. That isn't a rate limit (the SEC's own refusal is an HTML page,
+# "Request Rate Threshold Exceeded" / "Undeclared Automated Tool"). Until Nov 3 it was read as one: a
+# daily filing index not yet published when the nightly run started stopped the night and paused all SEC
+# downloads for 20 hours, every night from mid-October (financials and industry codes went 25 days stale).
+_missing_in_a_row = 0
+MISSING_LIMIT = 25    # this many "not there" answers in a row: then it really is a block
 
 
 class SECLimited(RuntimeError):
@@ -101,11 +108,19 @@ def _refusal(resp) -> str:
     return f"{resp.status_code}" + (f", retry after {wait}s" if wait else "") + (f": {body}" if body else "")
 
 
+def not_there(resp) -> bool:
+    """A 403 from the archive's file storage (S3) for a file that doesn't exist, not a refusal."""
+    if resp.status_code != 403:
+        return False
+    text = getattr(resp, "text", "") or ""
+    return "<Code>AccessDenied</Code>" in text or (text.lstrip().startswith(("<?xml", "<Error>")) and "AccessDenied" in text)
+
+
 def _get(url: str, gap: float | None = None) -> bytes:
     """GET from the SEC, paced (`gap` seconds apart, REQUEST_GAP by default), waiting it out if the SEC
     rate-limits us part-way through. Refused on the very first request means a block, not a rate
     limit: waiting won't help, so it stops at once."""
-    global _last_request, _ok_requests
+    global _last_request, _ok_requests, _missing_in_a_row
     gap = REQUEST_GAP if gap is None else gap
     for attempt in range(len(RATE_LIMIT_WAITS) + 1):
         wait = gap - (time.time() - _last_request)
@@ -113,9 +128,16 @@ def _get(url: str, gap: float | None = None) -> bytes:
             time.sleep(wait)
         resp = requests.get(url, headers={"User-Agent": user_agent(), "Accept-Encoding": "gzip, deflate"}, timeout=20)
         _last_request = time.time()
+        if not_there(resp):
+            _missing_in_a_row += 1
+            if _missing_in_a_row >= MISSING_LIMIT:
+                raise SECLimited(f"The SEC answered {_missing_in_a_row} requests in a row with 'not there' "
+                                 f"({_refusal(resp)}): treated as a block.")
+            raise requests.HTTPError(f"403 not there (yet): {url}", response=resp)
         if resp.status_code not in (403, 429):
             resp.raise_for_status()
             _ok_requests += 1
+            _missing_in_a_row = 0
             return resp.content
         why = _refusal(resp)
         if _ok_requests == 0:

@@ -74,6 +74,8 @@ def cmd_db(args: argparse.Namespace) -> int:
                 Path(args.flag_incomplete).write_text(why + "\n")
                 print(f"[prices] incomplete: {why}. Flagged for a retry later ({args.flag_incomplete}).")
             market_data.backfill_splits(con, pause=args.pause)
+            if not args.limit:
+                market_data.repair_gaps(con)
         if (everything and not args.no_short) or args.short_only:
             from trend_bot import short_interest
 

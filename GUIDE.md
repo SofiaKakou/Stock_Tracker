@@ -67,7 +67,9 @@ old prices, the SEC asking it to slow down, or a recommended stock whose company
 reported new quarterly figures in 5 months, which makes its earnings scores old). If Yahoo
 refuses prices, the nightly run tries again an hour later. It usually fixes itself; **no message means
 everything is fine**. "✅ all fine again" means it cleared, and **✅ SEC data is back** tells you
-what it caught up on after a break.
+what it caught up on after a break. (A file the SEC simply doesn't have yet, like today's filing
+list, is no longer mistaken for "slow down": until early November that mix-up paused SEC downloads
+every night, so company financials and industry codes went stale for weeks.)
 
 ### Once a month
 
@@ -181,7 +183,9 @@ data from FINRA. All free.
   Every result carries a stamp ("code … · data …") saying which code and data made it.
 - **Data audit**: runs every month (and on demand as a Research run, study *audit*). It checks the
   data of stocks that could be ranked for misdated, impossible or missing prices and misdated
-  filings. Problems the bot already handles (zero prices, one-day blips, unexplained jumps) are
+  filings. Problems the bot already handles (zero prices, one-day blips, unexplained jumps, holes in
+  a price history, which are downloaded again once, and financials "filed" before their period
+  ended, a company's own date mix-up that is skipped when ranking) are
   shown as handled; anything else appears in the ⚠️ Bot health message.
 
 ## Day trading?
