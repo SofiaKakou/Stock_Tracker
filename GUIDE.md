@@ -292,6 +292,55 @@ finished trade is in SQL (`dw.vCryptoTrades`). Its keys are the secrets `ALPACA_
 `ALPACA_SMALL_SECRET_KEY`. (It used to hold the monthly portfolio at $100; those stocks were sold when it
 switched to crypto.)
 
+## The gold trader (IBKR)
+
+A fourth practice account, at **Interactive Brokers** (fake money): it trades **spot gold (XAUUSD)**
+and looks at the price **every 5 seconds**. It runs on **your own computer**, not on GitHub, because
+IBKR only takes orders through its **IB Gateway** program, which has to stay open and logged in.
+
+**The rule** (simple on purpose and *not* tested on history first: the live paper results decide):
+- two averages of gold's price, a fast one (about the last minute) and a slow one (about 5 minutes)
+- the fast one crossing **above** the slow one means gold is starting to rise: **buy ~$10,000 of gold**
+  (whole ounces). With `--short` it also sells short when the fast one crosses below.
+- out at whichever comes first: **0.15% against us** (the safety stop), **0.30% in our favour**, the
+  averages crossing back (after at least a minute), or **30 minutes**
+- the first trade can only happen about 5 minutes after starting (the averages need prices first)
+
+**Safety**
+- **Paper only**: it refuses to start unless the account is a paper account (IDs start with `DU`).
+- **A safety stop at the broker** on every trade, so it's protected even if your computer turns off.
+- **Daily loss limit**: down **$150** on the day → closed, no more trades until the next day.
+- At most **40 trades a day**, 2 minutes' rest after each, no trade when the price is more than 30 seconds
+  old or the gap between buy and sell prices is unusually wide.
+- Gold stops trading **17:00-18:00 New York** (midnight-1am in Greece) every day and over the weekend:
+  no new trades from 16:45, anything open is closed at 16:50.
+- It **starts flat**: anything left open from an earlier run is closed first, and Discord is told.
+
+**Setting it up (once)**
+1. In IBKR (website or app): **Settings → Account Settings → Paper Trading Account** → create it. Note its
+   username. Under **Trading Permissions**, make sure metals (or "Precious metals") are allowed.
+2. Install **IB Gateway** ("stable" version) from the IBKR website, open it, choose **IB API** and
+   **Paper Trading**, and log in with the **paper** username.
+3. In IB Gateway: **Configure → Settings → API → Settings**: tick *Enable ActiveX and Socket Clients*,
+   untick *Read-Only API*, socket port **4002**, and add **127.0.0.1** to *Trusted IPs*. Under **Lock and
+   Exit**, choose *Auto restart* so it doesn't log out every night.
+4. On your computer, in this folder: `pip install -r requirements.txt -r requirements-gold.txt`
+5. For Discord messages, put `DISCORD_WEBHOOK_URL=...` in a `.env` file in this folder (same as the alerts).
+
+**Running it**: with IB Gateway open and logged in, double-click **`run_gold.bat`**. It trades until you
+close the window, and restarts itself if it stops (a dropped connection, IB Gateway restarting). Each
+finished trade goes to Discord ("🥇") and to `gold_trades.csv` (open it in Excel); the window and
+`gold.log` show everything else.
+
+- **Try it without orders first**: `python -m trend_bot gold --dry-run --minutes 30` uses real prices and
+  pretends to trade.
+- **Other settings**: `--amount 5000` (dollars a trade), `--every 10` (seconds), `--daily-loss 100`,
+  `--short`. `python -m trend_bot gold --help` lists them all.
+- **No prices?** Paper accounts use the market data of your real account. If nothing arrives, IBKR may
+  want a (usually free) market-data subscription for metals: **Settings → Market Data Subscriptions**.
+- **Costs**: IBKR charges a small commission on each gold trade, and the gap between the buy and sell
+  price costs a little more. Both are counted in the results, so a "+$" in Discord is after costs.
+
 ## The demo accounts week by week
 
 Every **Friday night** (after the close) "📅 The week" shows the demo accounts (monthly, day trading and

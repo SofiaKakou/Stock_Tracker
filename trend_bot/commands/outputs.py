@@ -336,6 +336,39 @@ MORNING_WINDOW = (_dt.time(9, 0), _dt.time(11, 40))       # New York time a part
 AFTERNOON_WINDOW = (_dt.time(12, 0), _dt.time(15, 40))    # (a later start would miss its own trades)
 
 
+def cmd_gold(args: argparse.Namespace) -> int:
+    """The gold trader: runs until Ctrl+C (or --minutes), on the computer where IB Gateway is open."""
+    from trend_bot import alerts, goldtrade
+
+    webhook = alerts.load_webhook() if args.discord else None
+
+    def notify(embed: dict) -> None:
+        if webhook:
+            try:
+                alerts.send(webhook, {"username": "Trend Bot", "embeds": [embed]})
+            except Exception as e:   # Discord being down never stops the trading
+                print(f"Discord message not sent: {e}")
+
+    rules = goldtrade.Rules(every=args.every, amount=args.amount, daily_loss=args.daily_loss, short=args.short)
+    try:
+        broker = goldtrade.IBGold(args.host, args.port, args.client_id, args.symbol)
+    except goldtrade.GoldError as e:
+        print(f"Gold trader not started: {e}")
+        return 1
+    runner = goldtrade.Runner(broker, goldtrade.Brain(rules), args.log_csv, notify, dry_run=args.dry_run)
+    notify(goldtrade.note_embed(f"Started on paper account {broker.account}"
+                                + (" (dry run: no orders)" if args.dry_run else "") + "."))
+    try:
+        runner.run(args.minutes)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        notify(runner.summary())
+        print(runner.summary()["description"])
+        broker.close()
+    return 0
+
+
 def cmd_crypto(args: argparse.Namespace) -> int:
     """The $100 crypto account (fake money): one 15-minute check, or the evening summary."""
     import json

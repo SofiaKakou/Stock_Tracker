@@ -14,3 +14,5 @@ market.db-*
 reports/
 update.log
 update_errors.log
+gold.log
+gold_trades.csv

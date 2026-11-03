@@ -1,0 +1,4 @@
+# Only for the computer that runs the gold trader (python -m trend_bot gold); GitHub doesn't need these.
+# Install once: pip install -r requirements.txt -r requirements-gold.txt
+ib_async==2.1.0
+tzdata==2026.6

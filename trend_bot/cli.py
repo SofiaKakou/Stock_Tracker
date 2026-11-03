@@ -30,6 +30,7 @@ from trend_bot.commands.studies import cmd_study
 from trend_bot.commands.ai import cmd_ai
 from trend_bot.commands.outputs import (
     cmd_crypto,
+    cmd_gold,
     cmd_daytrade,
     cmd_lookahead_combine,
     cmd_accounts,
@@ -310,6 +311,21 @@ def make_parser() -> argparse.ArgumentParser:
     cx.add_argument("--diagnose", action="store_true",
                     help="nothing traded: the account's own record of the last week, and how many dips came lately")
     cx.set_defaults(func=cmd_crypto)
+
+    gd = sub.add_parser("gold", help="the gold trader (IBKR paper account, on your own computer): checks every few seconds")
+    gd.add_argument("--host", default="127.0.0.1", help="where IB Gateway runs (default: this computer)")
+    gd.add_argument("--port", type=int, default=4002, help="IB Gateway paper port 4002 (TWS paper: 7497)")
+    gd.add_argument("--client-id", type=int, default=17)
+    gd.add_argument("--symbol", default="XAUUSD", help="spot gold at IBKR")
+    gd.add_argument("--amount", type=float, default=10_000, help="dollars of gold a trade (fake money)")
+    gd.add_argument("--every", type=float, default=5, help="seconds between checks")
+    gd.add_argument("--daily-loss", type=float, default=150, help="stop for the day after losing this many dollars")
+    gd.add_argument("--short", action="store_true", help="also sell short when gold starts falling")
+    gd.add_argument("--dry-run", action="store_true", help="real prices, pretend trades: no orders sent")
+    gd.add_argument("--minutes", type=float, help="stop after this many minutes (default: run until Ctrl+C)")
+    gd.add_argument("--log-csv", default="gold_trades.csv", help="every finished trade")
+    gd.add_argument("--discord", action="store_true", help="post each trade to Discord")
+    gd.set_defaults(func=cmd_gold)
 
     lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")
     lc.add_argument("files", nargs="+", help="JSON files from study lookahead --json")
