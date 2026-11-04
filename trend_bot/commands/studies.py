@@ -666,7 +666,7 @@ def cmd_study(args: argparse.Namespace) -> int:
                 return 1
             print(scalp.run(con, data))
             return 0
-        if args.signal in ("crypto-fast", "crypto-maker"):
+        if args.signal in ("crypto-fast", "crypto-maker", "crypto-market"):
             from trend_bot import crypto, crypto_fast, cryptotrade, intraday
             from trend_bot.paper import Paper
 
@@ -677,7 +677,8 @@ def cmd_study(args: argparse.Namespace) -> int:
             broker = Paper.from_env()
             coins = [s for s in (crypto.all_coins(broker) if broker else crypto.SYMBOLS)
                      if s.split("/")[0] not in cryptotrade.STABLE]
-            print((crypto_fast.run_maker if args.signal == "crypto-maker" else crypto_fast.run)(data, coins))
+            run = {"crypto-maker": crypto_fast.run_maker, "crypto-market": crypto_fast.run_market}
+            print(run.get(args.signal, crypto_fast.run)(data, coins))
             return 0
         if args.signal == "session":
             from trend_bot import intraday, session_momentum

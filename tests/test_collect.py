@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 
 from trend_bot import collect, db, mirror
 
@@ -54,7 +55,15 @@ def test_followed_stocks(tmp_path, monkeypatch):
     con = db.connect(tmp_path / "m.db")
     con.execute("INSERT INTO ideas_holdings(ticker, rank) VALUES ('BRK-B', 1)")
     (tmp_path / "watchlist.txt").write_text("nvda\n# a comment\n")
-    assert collect.followed(con) == ["BRK.B", "NVDA"]
+    got = collect.followed(con)
+    assert {"BRK.B", "NVDA", "BTCUSD", "ETHUSD"} <= set(got) and "BTC/USD" not in got   # coins as the news feed names them
+    # The stocks the day account really traded this week, and the coins the crypto account held, too.
+    today = dt.date.today().isoformat()
+    (tmp_path / "daytrade.json").write_text(json.dumps({"log": [{"date": today, "symbol": "PLTR"},
+                                                                {"date": "2020-01-01", "symbol": "OLD"}]}))
+    (tmp_path / "crypto.json").write_text(json.dumps({"open": {"TRUMPUSD": {"symbol": "TRUMP/USD"}}, "log": []}))
+    got = collect.followed(con)
+    assert "PLTR" in got and "TRUMPUSD" in got and "OLD" not in got
 
 
 class Cursor:

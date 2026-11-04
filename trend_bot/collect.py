@@ -1,8 +1,8 @@
 """Extra data collected every night, for the record and for later research (nothing here changes how
 the bot trades; a new signal would first have to pass the usual 10-year tests, with your OK).
 
-- news: headlines for the stocks the bot follows (both portfolios, the day-trading list, the
-  watchlist), from Alpaca's free news feed (same keys as the demo account), with a simple tone
+- news: headlines for the stocks and coins the bot follows (both portfolios, the day-trading list and
+  the stocks it traded this week, the watchlist, the coins), from Alpaca's free news feed (same keys as the demo account), with a simple tone
   score from the financial word lists the bot already uses for company reports.
 - macro: the economy and market mood from FRED (the St. Louis Fed's free data; needs a free key,
   FRED_API_KEY): interest rates, the yield curve, inflation, jobs, credit spreads and the VIX.
@@ -44,9 +44,14 @@ def tone(text: str) -> float | None:
     return (c.get("positive", 0) - c.get("negative", 0)) / len(ws)
 
 
-def followed(con: sqlite3.Connection) -> list[str]:
-    """Stocks worth collecting news for: both portfolios, the day-trading list, the watchlist."""
+def followed(con: sqlite3.Connection, day_state: str = "daytrade.json", crypto_state: str = "crypto.json",
+             days: int = 7) -> list[str]:
+    """Stocks and coins worth collecting news for: both portfolios, the day-trading list and the stocks the
+    day account really traded this week, the watchlist, and the coins (the big ones and any the crypto
+    account traded; named like BTCUSD in the news feed)."""
     from pathlib import Path
+
+    from trend_bot import crypto
 
     syms = {t for (t,) in con.execute("SELECT ticker FROM ideas_holdings")}
     raw = con.execute("SELECT value FROM meta WHERE key = 'mix_ranking'").fetchone()
@@ -62,7 +67,16 @@ def followed(con: sqlite3.Connection) -> list[str]:
         from trend_bot.data import read_watchlist
 
         syms |= set(read_watchlist("watchlist.txt"))
-    return sorted(s.replace("-", ".") for s in syms)
+    since = (dt.date.today() - dt.timedelta(days=days)).isoformat()
+    for path, field in ((day_state, "date"), (crypto_state, "out")):
+        try:
+            state = json.loads(Path(path).read_text())
+        except (OSError, ValueError):
+            continue
+        syms |= {r["symbol"] for r in state.get("log", []) if str(r.get(field, ""))[:10] >= since}
+        syms |= {t["symbol"] for t in (state.get("open") or {}).values() if isinstance(t, dict) and "symbol" in t}
+    syms |= set(crypto.SYMBOLS)
+    return sorted(s.replace("/", "") if "/" in s else s.replace("-", ".") for s in syms)
 
 
 def news(con: sqlite3.Connection, symbols: list[str], session, since: dt.date, log=print, pause: float = 0.35) -> int:
@@ -92,7 +106,7 @@ def news(con: sqlite3.Connection, symbols: list[str], session, since: dt.date, l
                 break
             time.sleep(pause)
     con.commit()
-    log(f"[news] {added:,} new headline(s) for {len(symbols)} stocks since {since}")
+    log(f"[news] {added:,} new headline(s) for {len(symbols)} stocks and coins since {since}")
     return added
 
 

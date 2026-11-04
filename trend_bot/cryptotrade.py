@@ -33,6 +33,9 @@ from trend_bot.paper import SMALL_KEY_ENV, SMALL_SECRET_ENV, Paper, PaperError
 
 COINS = crypto.SYMBOLS   # if the broker's list can't be read
 # Coins built not to move (dollar and gold tokens): a "dip" there is a data glitch, never a bounce.
+# Coins never bought: their price moves on headlines by design, so a sharp drop is usually news, not a
+# bargain. TRUMP was bought on Nov 4 as it fell on the midterm results (the user's call: "0 reason to buy").
+EXCLUDE = {"TRUMP"}
 STABLE = {"USDT", "USDC", "USDG", "PAXG", "DAI", "PYUSD", "TUSD", "USDP", "FDUSD", "XAUT", "USDE"}
 DIP = 0.04               # fell this much in the last hour (4 complete 15-minute bars); 3% until Oct 28
 HOLD = dt.timedelta(days=1)
@@ -115,14 +118,17 @@ class CryptoBroker(Paper):
 
 
 def coins(broker, state: dict, today: dt.date) -> list[str]:
-    """Every coin the broker trades against the dollar, except the stable ones; read once a day."""
+    """Every coin the broker trades against the dollar, except the stable and the excluded ones; read once a day."""
+    def keep(syms):
+        return [s for s in syms if s.split("/")[0] not in STABLE | EXCLUDE]
+
     have = state.get("coins") or {}
     if have.get("date") == today.isoformat() and have.get("list"):
-        return have["list"]
+        return keep(have["list"])
     try:
-        found = [s for s in crypto.all_coins(broker) if s.split("/")[0] not in STABLE]
+        found = keep(crypto.all_coins(broker))
     except Exception:  # noqa: BLE001 - the broker's list can't be read: the big ones
-        return have.get("list") or COINS
+        return keep(have.get("list") or COINS)
     state["coins"] = {"date": today.isoformat(), "list": found}
     return found or COINS
 
@@ -131,6 +137,41 @@ def latest_quotes(data, symbols: list[str]) -> dict[str, dict]:
     resp = data.http.get(QUOTES_URL, params={"symbols": ",".join(symbols)}, timeout=30)
     resp.raise_for_status()
     return {s: {"bid": q.get("bp"), "ask": q.get("ap")} for s, q in (resp.json().get("quotes") or {}).items()}
+
+
+NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
+NEWS_HOURS = 3
+
+
+def coin_news(data, symbols: list[str], now: dt.datetime, hours: int = NEWS_HOURS) -> dict[str, list[dict]]:
+    """{coin: recent headlines} from Alpaca's news feed (coins are named like BTCUSD there), plus the
+    headlines on crypto as a whole. For the record and the Discord message: the rule doesn't use them yet
+    (a news rule would first have to pass a test, with your OK). Empty if the feed can't be read."""
+    from trend_bot.collect import tone
+
+    names = {s.replace("/", ""): s for s in symbols}
+    start = (now - dt.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        resp = data.http.get(NEWS_URL, params={"symbols": ",".join([*names, "BTCUSD"]), "start": start,
+                                               "limit": 50, "sort": "desc"}, timeout=20)
+        resp.raise_for_status()
+        items = resp.json().get("news") or []
+    except Exception:  # noqa: BLE001 - no news this time: the trade goes on as before
+        return {}
+    out: dict[str, list[dict]] = {}
+    for n in items:
+        h = {"time": str(n.get("created_at", ""))[:16], "headline": n.get("headline") or "",
+             "source": n.get("source") or "", "tone": tone(f"{n.get('headline', '')} {n.get('summary', '')}")}
+        for sym in n.get("symbols") or []:
+            if sym in names:
+                out.setdefault(names[sym], []).append(h)
+            elif sym == "BTCUSD":
+                out.setdefault("market", []).append(h)
+    return out
+
+
+def news_line(heads: list[dict], n: int = 2) -> str:
+    return " | ".join(f"{h['headline'][:110]} ({h['source']})" for h in heads[:n])
 
 
 def dips(bars: pd.DataFrame, now: dt.datetime, threshold: float = DIP) -> dict[str, float]:
@@ -199,7 +240,8 @@ def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None,
         pos = next((p for p in broker.positions() if key(p["symbol"]) == k), None)
         qty = pos["qty"] if pos else str(o["filled_qty"])   # after the fee (paid in the coin)
         tr = {"symbol": w["symbol"], "time": str(o.get("filled_at") or now.isoformat()), "price": price, "qty": qty,
-              "dip": w["dip"], "cost": float(qty) * price, "kind": "big"}
+              "dip": w["dip"], "cost": float(qty) * price, "kind": "big",
+              "news": w.get("news") or [], "market_news": w.get("market_news") or []}
         try:
             stop = broker.stop_sell(w["symbol"], qty, price * (1 - STOP), price * (1 - STOP_LIMIT), f"{w['tag']}-stop")
             tr["stop_id"] = stop.get("id")
@@ -211,7 +253,8 @@ def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None,
         embeds.append({"title": f"🪙 Bought {w['symbol'].split('/')[0]} (dip)", "color": 0x0CA30C,
                        "description": f"It fell **{w['dip']:.1%}** in an hour; bought ~${tr['cost']:.2f} at "
                                       f"{price:,.6g}. Sold in 24 hours, or by the safety stop at "
-                                      f"{price * (1 - STOP):,.6g} (15% lower). Fake money ($100 crypto account)."})
+                                      f"{price * (1 - STOP):,.6g} (15% lower). Fake money ($100 crypto account)."
+                                      + _news_text(tr)})
 
     # A coin held without a record (the saved state was lost): sold within a day from now, like any trade.
     for k, p in held.items():
@@ -314,6 +357,12 @@ def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None,
         return embeds
     cash = float(broker.account().get("cash") or 0) - sum(w["amount"] for w in waiting.values())
     quotes = latest_quotes(data, todo)
+    heads = coin_news(data, todo, now)
+    for sym in todo:
+        if heads.get(sym):
+            log(f"[crypto] {sym} news: {news_line(heads[sym], 3)}")
+    if heads.get("market"):
+        log(f"[crypto] crypto news: {news_line(heads['market'], 3)}")
     for sym in todo:
         if len(open_trades) + len(waiting) >= SLOTS:
             break
@@ -330,9 +379,55 @@ def run(broker: CryptoBroker, data, state: dict, now: dt.datetime | None = None,
             log(f"[crypto] {sym}: refused ({str(e)[:80]})")
             continue
         waiting[key(sym)] = {"symbol": sym, "id": o.get("id"), "time": now.isoformat(), "limit": limit,
-                             "dip": found[sym], "amount": amount, "tag": tag}
+                             "dip": found[sym], "amount": amount, "tag": tag,
+                             "news": (heads.get(sym) or [])[:3], "market_news": (heads.get("market") or [])[:3]}
         cash -= amount
         log(f"[crypto] {sym}: {found[sym]:+.1%} in an hour; a buy of ~${amount:.2f} waits at {limit:,.6g}")
+    return embeds
+
+
+def _news_text(tr: dict) -> str:
+    if tr.get("news"):
+        return f"\nNews on it: {news_line(tr['news'])}"
+    if tr.get("market_news"):
+        return f"\nNo news on this coin; on crypto: {news_line(tr['market_news'], 1)}"
+    return ""
+
+
+def sell_now(broker: CryptoBroker, state: dict, which: str, now: dt.datetime | None = None, log=print,
+             sleep=time.sleep) -> list[dict]:
+    """Sell a held coin now, by hand ('TRUMP', 'TRUMP/USD' or 'all'): its broker orders are cancelled first,
+    then it's sold at the market and logged like any trade ("by hand"). Returns the Discord embeds."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    want = which.upper().replace("/", "").removesuffix("USD") if which.lower() != "all" else None
+    open_trades = state.setdefault("open", {})
+    embeds = []
+    for p in broker.positions():
+        k = key(p["symbol"])
+        if p.get("asset_class") != "crypto" or (want and k.removesuffix("USD") != want):
+            continue
+        tr = open_trades.get(k) or {"symbol": p["symbol"], "time": now.isoformat(),
+                                    "price": float(p.get("avg_entry_price") or 0), "qty": p["qty"], "dip": None,
+                                    "cost": float(p.get("cost_basis") or 0), "kind": "big"}
+        for oid in (tr.get("stop_id"), tr.get("sell_id")):
+            if oid:
+                try:
+                    broker.cancel(oid)
+                except PaperError:
+                    pass
+        sleep(1)
+        try:
+            o = broker.close(p["symbol"])
+        except PaperError as e:
+            log(f"[crypto] {p['symbol']}: couldn't sell ({str(e)[:80]})")
+            continue
+        price = _fill(broker, o, sleep) or float(p.get("current_price") or 0) or None
+        embeds.append(_closed(tr, price, now, "sold by hand"))
+        _log_trade(state, tr, price, now, "hand")
+        open_trades.pop(k, None)
+        log(f"[crypto] {p['symbol']}: sold by hand at {price or 0:,.6g}")
+    if not embeds:
+        log(f"[crypto] nothing held matching {which!r}; nothing sold")
     return embeds
 
 
