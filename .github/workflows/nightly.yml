@@ -149,6 +149,14 @@ jobs:
           ALPACA_SMALL_SECRET_KEY: ${{ secrets.ALPACA_SMALL_SECRET_KEY }}
         run: python -m trend_bot accounts --weekly --discord || echo "the demo accounts' history failed" >> reports/problems.txt
 
+      # Before the news: its list of day-trading stocks is part of what the news is collected for.
+      - name: Restore day-trading study
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: intraday.db
+          key: intraday-db-${{ github.run_id }}
+          restore-keys: intraday-db-
+
       # Extra data for the record (nothing here changes how the bot trades): news headlines for the
       # stocks it follows, the economy from FRED, and after Friday's close the whole ranking as a snapshot.
       - name: Collect news, the economy and the ranking
@@ -167,13 +175,6 @@ jobs:
 
       # Optional: the trading journal in SQL Server (Azure SQL, open it in SSMS). Does nothing until the
       # AZURE_SQL_* secrets exist (GUIDE.md, "The trading journal in SSMS").
-      - name: Restore day-trading study
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: intraday.db
-          key: intraday-db-${{ github.run_id }}
-          restore-keys: intraday-db-
-
       - name: Trading journal
         env:
           AZURE_SQL_SERVER: ${{ secrets.AZURE_SQL_SERVER }}

@@ -334,3 +334,116 @@ def run_maker(data, symbols: list[str], log=print, start: str = START) -> str:
 
     results, first, last, n = maker_study(frames(), log)
     return maker_text(results, first, last, n) if results else "No crypto bars came back from Alpaca."
+
+
+# --- Skip the dip when the whole market falls (asked Nov 4, after the midterm-results drop) --------------
+# A coin that fell 4% while Bitcoin fell too is probably reacting to news that hits everything (an
+# election, a hack, a rate scare), not overreacting on its own. Tested with the live orders (a buy waiting
+# 0.25% below the price for 30 minutes, sold a day later): every 4% dip, then only those where Bitcoin's
+# own last hour was calmer than each line below. Bitcoin itself is judged by Ethereum.
+
+MARKET_LINES = (None, -0.01, -0.02, -0.03)
+LIVE_OFFSET, LIVE_WAIT = 0.0025, WAITS["30 min"]
+
+
+def hour_moves(g: pd.DataFrame) -> pd.Series:
+    """Last hour's move at each 5-minute bar's close, by bar time (NaN across a gap in the bars)."""
+    t = pd.to_datetime(g["t"], utc=True).dt.tz_localize(None)
+    c = pd.Series(g["close"].to_numpy(float), index=t)
+    move = c / c.shift(12) - 1
+    ok = (t - t.shift(12)).to_numpy() == np.timedelta64(60, "m")
+    return move.where(ok)
+
+
+def market_study(frames, market: pd.Series, backup: pd.Series, log=print) -> tuple[dict, str, str, int]:
+    parts: dict = {}
+    first, last, n = None, None, 0
+    for sym, g in frames:
+        if len(g) < 400:
+            continue
+        n += 1
+        g = g.reset_index(drop=True)
+        t0, t1 = str(g["t"].iloc[0])[:10], str(g["t"].iloc[-1])[:10]
+        first, last = min(first or t0, t0), max(last or t1, t1)
+        t = pd.to_datetime(g["t"], utc=True).dt.tz_localize(None).to_numpy("datetime64[ns]")
+        o, h, lo, c = (g[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+        sig = signal(t, c, MAKER_RULES["4% in an hour"])
+        mkt = (backup if sym.startswith("BTC/") else market).reindex(pd.DatetimeIndex(t)).to_numpy(float)
+        for line in MARKET_LINES:
+            s = sig if line is None else sig & ~(mkt <= line)   # no market price that bar: kept
+            label = "every 4% dip (now)" if line is None else f"only when Bitcoin's hour was above {line:.0%}"
+            res = maker_trades(t, o, h, lo, c, s, HOLDS["1 day"], LIVE_OFFSET, LIVE_WAIT)
+            parts.setdefault(("all coins", label), []).append(res)
+            if not sym.startswith("TRUMP/"):
+                parts.setdefault(("without TRUMP", label), []).append(res)
+        # The dips the filter would skip, on their own: did they do worse?
+        for line in MARKET_LINES[1:]:
+            s = sig & (mkt <= line)
+            parts.setdefault(("skipped dips only", f"Bitcoin's hour at {line:.0%} or worse"), []).append(
+                maker_trades(t, o, h, lo, c, s, HOLDS["1 day"], LIVE_OFFSET, LIVE_WAIT))
+        log(f"[crypto-market] {sym}: {len(g):,} bars")
+    if not parts:
+        return {}, "", "", 0
+    days = max((pd.Timestamp(last) - pd.Timestamp(first)).days, 1)
+    split = pd.Timestamp(first) + (pd.Timestamp(last) - pd.Timestamp(first)) / 2
+    out = {}
+    for k, vs in parts.items():
+        ins = np.concatenate([v[0] for v in vs])
+        net = np.concatenate([v[1] for v in vs])
+        if not len(net):
+            out[k] = {"trades": 0}
+            continue
+        when = pd.DatetimeIndex(ins)
+        monthly = pd.Series(net).groupby(when.strftime("%Y-%m")).mean()
+        early, late = net[when < split], net[when >= split]
+        out[k] = {"trades": len(net), "per_day": len(net) / days, "net": float(net.mean()),
+                  "early": float(early.mean()) if len(early) else np.nan,
+                  "late": float(late.mean()) if len(late) else np.nan, "hit": float((net > 0).mean()),
+                  "t": float(monthly.mean() / monthly.std(ddof=1) * np.sqrt(len(monthly)))
+                  if len(monthly) > 2 and monthly.std() > 0 else 0.0,
+                  "dollars_day": float(net.sum() * AMOUNT / days)}
+    return out, first, last, n
+
+
+def market_text(results: dict, first: str, last: str, coins: int) -> str:
+    lines = [f"Skipping crypto dips when the whole market falls: 5-minute bars {first} to {last}, {coins} coins. "
+             "The live rule: a 4% fall in an hour, a buy waiting 0.25% below for 30 minutes, sold a day later, "
+             f"after fees ({MAKER:.2%} a side waiting, {TAKER:.2%} taking the price). 'Bitcoin's hour' is Bitcoin's "
+             "own move over the same hour (for Bitcoin itself, Ethereum's).", ""]
+    for group in ("all coins", "without TRUMP", "skipped dips only"):
+        lines.append(f"== {group} ==")
+        for (g, label), r in results.items():
+            if g != group:
+                continue
+            if not r.get("trades"):
+                lines.append(f"  {label}: no trades")
+                continue
+            lines.append(f"  {label}: {r['trades']:,} trades ({r['per_day']:.1f} a day), {r['net']:+.3%} a trade "
+                         f"(first half {r['early']:+.3%}, second half {r['late']:+.3%}; t = {r['t']:.1f}), "
+                         f"right {r['hit']:.0%}, about ${r['dollars_day']:+.2f} a day")
+        lines.append("")
+    lines.append("A filter is worth it if it keeps (or raises) the per-trade result in BOTH halves, and the "
+                 "'skipped dips only' lines did clearly worse than every dip. Nothing changes live without your OK.")
+    return "\n".join(lines)
+
+
+def run_market(data, symbols: list[str], log=print, start: str = START) -> str:
+    log(f"[crypto-market] 5-minute bars for {len(symbols)} coins since {start}, one coin at a time...")
+
+    def bars(s):
+        return crypto.fetch(data, [s], start=start, timeframe=TIMEFRAME).sort_values("t")
+
+    try:
+        market, backup = hour_moves(bars("BTC/USD")), hour_moves(bars("ETH/USD"))
+    except Exception as e:  # noqa: BLE001
+        return f"No Bitcoin/Ethereum bars came back from Alpaca ({str(e)[:80]})."
+
+    def frames():
+        for s in symbols:
+            try:
+                yield s, bars(s)
+            except Exception as e:  # noqa: BLE001
+                log(f"[crypto-market] {s}: no bars ({str(e)[:80]})")
+
+    results, first, last, n = market_study(frames(), market, backup, log)
+    return market_text(results, first, last, n) if results else "No crypto bars came back from Alpaca."

@@ -352,7 +352,12 @@ def cmd_crypto(args: argparse.Namespace) -> int:
     if args.diagnose:
         print(cryptotrade.diagnose(broker, data, state))
         return 0
-    if args.summary:
+    if getattr(args, "sell", None):
+        try:
+            embeds = cryptotrade.sell_now(broker, state, args.sell)
+        finally:
+            Path(args.state).write_text(json.dumps(state, indent=1))
+    elif args.summary:
         embeds = [cryptotrade.summary(broker, state)]
     else:
         try:

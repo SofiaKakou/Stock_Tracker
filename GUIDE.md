@@ -171,7 +171,8 @@ The **🧠 AI report reader** only runs if started by hand (it costs money).
 ## Where the data comes from
 
 Prices from Yahoo Finance (if Yahoo stops answering, the bot-health message tells you the
-prices are getting old; the next run catches up). Company reports, insider trades and warning signs from the SEC. Short-selling
+prices are getting old; the next run catches up). News headlines (Alpaca's feed) for both portfolios, the
+day-trading list, the stocks the day account traded this week, the watchlist and the coins, every night. Company reports, insider trades and warning signs from the SEC. Short-selling
 data from FINRA. All free.
 
 ## Checking things yourself
@@ -290,6 +291,18 @@ the market.
 
 (A **fast experiment**, 2-3% dips sold an hour later, ran Oct 27-28 on request; it lost to fees in every
 test and was stopped.)
+
+**News and coins it skips (Nov 4).** On election night it bought **TRUMP** as the meme coin fell on the
+midterm results. A drop with a real reason behind it isn't a bargain, so:
+- **TRUMP is never bought** (`EXCLUDE` in `trend_bot/cryptotrade.py`): its price moves on headlines by design.
+- **Each dip's news is looked up** (Alpaca's news feed, the last 3 hours, for the coin and for crypto as a
+  whole) and shown in the Discord "Bought" message and the log. The rule doesn't act on it yet: a news rule
+  would first have to pass a test, with your OK. The headlines are kept with each trade so we can check later.
+- **Skip the dip when the whole market falls?** Tested in `study crypto-market` (Research run): every 4% dip
+  vs only those where Bitcoin's own hour was calmer than -1%, -2% or -3%, and the dips that would be skipped
+  on their own. Nothing changes live without your OK.
+- **Sell a coin by hand:** Actions → Crypto account → Run workflow → mode **sell**, coin e.g. `TRUMP` (or
+  `all`). It cancels the coin's stop, sells at the market and logs it as "by hand".
 
 Every dip trade goes to Discord ("🪙"), the nightly run adds a summary, and every
 finished trade is in SQL (`dw.vCryptoTrades`). Its keys are the secrets `ALPACA_SMALL_KEY_ID` and

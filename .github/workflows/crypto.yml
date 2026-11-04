@@ -12,10 +12,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "check = the usual 15-minute check; diagnose = nothing traded, the account's record and the recent dips"
+        description: "check = the usual 15-minute check; diagnose = nothing traded, the account's record and the recent dips; sell = sell the coin below now, by hand"
         type: choice
         default: check
-        options: [check, diagnose]
+        options: [check, diagnose, sell]
+      coin:
+        description: "sell only: the coin to sell now (e.g. TRUMP), or all"
+        type: string
+        default: ""
 
 concurrency:
   group: crypto-account
@@ -52,9 +56,14 @@ jobs:
           restore-keys: crypto-state-
 
       - name: Check for big dips
+        env:
+          COIN: ${{ inputs.coin }}
         run: |
           if [ "${{ inputs.mode }}" = "diagnose" ]; then
             python -m trend_bot crypto --diagnose
+          elif [ "${{ inputs.mode }}" = "sell" ]; then
+            if [ -z "$COIN" ]; then echo "Say which coin to sell (or all)."; exit 1; fi
+            python -m trend_bot crypto --sell "$COIN" --discord
           else
             python -m trend_bot crypto --discord
           fi

@@ -191,7 +191,7 @@ def make_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("study", parents=[common, market], help="test a signal on the whole market's history")
     st.add_argument("signal", choices=["insiders", "trend", "both", "momentum", "model", "forecast", "factors", "ml",
                                        "ideas", "candidates", "lookahead", "mllab", "audit", "intraday", "swing",
-                                       "session", "crypto", "crypto-fast", "crypto-maker", "scalp"])
+                                       "session", "crypto", "crypto-fast", "crypto-maker", "crypto-market", "scalp"])
     st.add_argument("--split-year", type=int, default=2018, help="factors: compare before/after this year")
     st.add_argument("--months", help="lookahead: month-ends to check, e.g. 2012-06-30,2021-06-30, or 'yearly' (one per year)")
     st.add_argument("--intraday-db", default="intraday.db", help="intraday: the half-hour bars database")
@@ -309,6 +309,7 @@ def make_parser() -> argparse.ArgumentParser:
     cx.add_argument("--discord", action="store_true", help="post trades (and the summary) to Discord")
     cx.add_argument("--diagnose", action="store_true",
                     help="nothing traded: the account's own record of the last week, and how many dips came lately")
+    cx.add_argument("--sell", metavar="COIN", help="sell a held coin now, by hand (e.g. TRUMP), or 'all'")
     cx.set_defaults(func=cmd_crypto)
 
     lc = sub.add_parser("lookahead-combine", help="combine look-ahead results saved by parallel runs (--json)")

@@ -70,3 +70,19 @@ def test_the_waiting_order_study_reads_well():
     out = cf.maker_text(res, first, last, n)
     assert "taking the price now (today)" in out and "waiting 30 min at 0.50% below" in out
     assert out.splitlines()[-1].startswith("Passed")
+
+
+def test_dips_while_bitcoin_falls_too_can_be_skipped():
+    falls = [500, 1502, 2501]                           # bars that end on the quarter hour
+    a = coin(4000, falls=falls)
+    a.loc[falls, "close"] = 95.5                        # clearly 4%+ below the hour before
+    a["low"] = a["close"] * 0.99                       # the waiting buy fills
+    t = pd.to_datetime(a["t"], utc=True).dt.tz_localize(None)
+    btc = pd.Series(0.0, index=t)
+    btc.iloc[1502] = -0.03                              # the second dip came with the whole market falling
+    res, first, last, n = cf.market_study([("AAA/USD", a)], btc, btc, log=lambda *_: None)
+    assert res[("all coins", "every 4% dip (now)")]["trades"] == 3
+    assert res[("all coins", "only when Bitcoin's hour was above -2%")]["trades"] == 2
+    assert res[("skipped dips only", "Bitcoin's hour at -2% or worse")]["trades"] == 1
+    out = cf.market_text(res, first, last, n)
+    assert "without TRUMP" in out and "skipped dips only" in out

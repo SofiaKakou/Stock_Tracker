@@ -264,3 +264,53 @@ def test_prices_of_coins_worth_a_fraction_of_a_cent_are_sent_as_plain_digits():
     b.stop_sell("PEPE/USD", "1690000", 5.0e-06, 4.7e-06, "t-stop")
     assert b.sent[0]["qty"] == "1690000" and b.sent[0]["limit_price"] == "0.000005924"
     assert b.sent[1]["stop_price"] == "0.000005000" and b.sent[1]["limit_price"] == "0.000004700"
+
+
+def test_excluded_coins_are_never_bought(monkeypatch):
+    monkeypatch.setattr(ct.crypto, "all_coins", lambda broker: ["BTC/USD", "TRUMP/USD", "USDT/USD"])
+    assert ct.coins(None, {}, NOW.date()) == ["BTC/USD"]
+    cached = {"coins": {"date": NOW.date().isoformat(), "list": ["BTC/USD", "TRUMP/USD"]}}   # read before the change
+    assert ct.coins(None, cached, NOW.date()) == ["BTC/USD"]
+
+
+class NewsData:
+    class http:
+        @staticmethod
+        def get(url, params, timeout):
+            class R:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"news": [{"created_at": "2026-10-27T14:40:00Z", "symbols": ["SOLUSD"], "source": "wire",
+                                      "headline": "Solana network halts after outage", "summary": ""},
+                                     {"created_at": "2026-10-27T14:30:00Z", "symbols": ["BTCUSD"], "source": "wire",
+                                      "headline": "Crypto falls as results come in", "summary": ""}]}
+            assert "SOLUSD" in params["symbols"] and "BTCUSD" in params["symbols"]
+            return R()
+
+
+def test_a_dips_news_is_looked_up_and_shown_with_the_buy(market):
+    market({"SOL/USD": -0.06})
+    broker, state = Broker(), {}
+    lines = []
+    ct.run(broker, NewsData(), state, now=NOW, log=lines.append, sleep=lambda s: None)
+    assert any("Solana network halts" in x for x in lines) and any("crypto news" in x for x in lines)
+    assert state["buying"]["SOLUSD"]["news"][0]["headline"].startswith("Solana")
+    broker.fill("b-SOL/USD", 94.0)
+    market({})
+    out = ct.run(broker, Data(None), state, now=NOW + dt.timedelta(minutes=15), log=lambda *_: None,
+                 sleep=lambda s: None)
+    assert "News on it: Solana network halts" in out[0]["description"]
+
+
+def test_a_coin_can_be_sold_by_hand_now():
+    broker = Broker([{"symbol": "TRUMPUSD", "qty": "2", "asset_class": "crypto", "current_price": "7.5"},
+                     {"symbol": "SOLUSD", "qty": "0.2", "asset_class": "crypto", "current_price": "99"}])
+    state = {"open": {"TRUMPUSD": {"symbol": "TRUMP/USD", "time": NOW.isoformat(), "price": 8.0, "qty": "2",
+                                   "dip": -0.05, "cost": 16.0, "kind": "big", "stop_id": "stop-TRUMP"}}}
+    out = ct.sell_now(broker, state, "trump", now=NOW, log=lambda *_: None, sleep=lambda s: None)
+    assert broker.closed == ["TRUMPUSD"] and "stop-TRUMP" in broker.cancelled
+    assert "SOLUSD" in broker.held and not state["open"]
+    assert state["log"][-1]["how"] == "hand" and "sold by hand" in out[0]["title"]
+    assert ct.sell_now(broker, state, "DOGE", now=NOW, log=lambda *_: None, sleep=lambda s: None) == []
