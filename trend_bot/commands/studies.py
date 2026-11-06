@@ -657,6 +657,11 @@ def cmd_study(args: argparse.Namespace) -> int:
                 coins = crypto.all_coins(broker) if broker else None
             print(crypto.run(data, symbols=coins))
             return 0
+        if args.signal == "day-review":
+            from trend_bot import day_review, intraday
+
+            print(day_review.run(intraday.Data.from_env()))
+            return 0
         if args.signal == "scalp":
             from trend_bot import intraday, scalp
 
